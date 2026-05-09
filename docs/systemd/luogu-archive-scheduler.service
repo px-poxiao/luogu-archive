@@ -1,0 +1,23 @@
+# 定时调度器（APScheduler）独立进程。
+# /etc/systemd/system/luogu-archive-scheduler.service
+
+[Unit]
+Description=luogu-archive scheduler (APScheduler)
+After=network.target redis.service mysql.service luogu-archive-web.service
+
+[Service]
+Type=simple
+User=luogu
+Group=luogu
+WorkingDirectory=/srv/luogu-archive/backend
+EnvironmentFile=/srv/luogu-archive/backend/.env
+ExecStart=/srv/luogu-archive/backend/.venv/bin/python -m app.scheduler
+Restart=always
+RestartSec=5
+ReadWritePaths=/srv/luogu-archive/backend
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

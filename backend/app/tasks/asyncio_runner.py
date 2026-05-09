@@ -1,0 +1,57 @@
+"""在同步 Dramatiq actor 里运行 async 代码的桥接。
+
+Dramatiq 自身是同步 API，我们的爬虫和数据库层是 async。方案：
+- 每个 worker 进程启动时创建一个 event loop（驻留）
+- actor 被调度时，把 async 协程 `run_coroutine_threadsafe` 到那个 loop
+- 等结果返回
+
+比起每次 `asyncio.run()` 好处是：不反复关闭 httpx client、MySQL 连接池等。
+"""
+from __future__ import annotations
+
+import asyncio
+import atexit
+import threading
+from collections.abc import Coroutine
+from typing import TypeVar
+
+T = TypeVar("T")
+
+_loop: asyncio.AbstractEventLoop | None = None
+_thread: threading.Thread | None = None
+_lock = threading.Lock()
+
+
+def _ensure_loop() -> asyncio.AbstractEventLoop:
+    """懒初始化后台 event loop 线程。"""
+    global _loop, _thread
+    with _lock:
+        if _loop is not None and _loop.is_running():
+            return _loop
+
+        _loop = asyncio.new_event_loop()
+
+        def _runner() -> None:
+            asyncio.set_event_loop(_loop)
+            _loop.run_forever()
+
+        _thread = threading.Thread(target=_runner, name="async-bridge", daemon=True)
+        _thread.start()
+        atexit.register(_shutdown)
+        return _loop
+
+
+def _shutdown() -> None:
+    """进程退出时关停 loop。"""
+    global _loop, _thread
+    if _loop is not None and _loop.is_running():
+        _loop.call_soon_threadsafe(_loop.stop)
+    if _thread is not None:
+        _thread.join(timeout=5)
+
+
+def run_async(coro: Coroutine[None, None, T], *, timeout: float | None = 60.0) -> T:
+    """在后台 loop 上执行协程，阻塞当前（worker）线程等待结果。"""
+    loop = _ensure_loop()
+    fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    return fut.result(timeout=timeout)

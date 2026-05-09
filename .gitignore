@@ -1,0 +1,45 @@
+# === luogu-archive 顶层配置 ===
+
+# 后端 Python 构建产物
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.egg-info/
+backend/.pytest_cache/
+backend/.venv/
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# 前端
+frontend/node_modules/
+frontend/.nuxt/
+frontend/.output/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 日志 / 运行时
+logs/
+*.log
+backend/data/
+backend/tmp/
+
+# 敏感文件
+*.key
+*.pem
+secrets/
+
+# 临时文件
+tmp_*
+*.tmp

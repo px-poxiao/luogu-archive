@@ -1,0 +1,102 @@
+# ======================================================================
+# luogu-archive · Nginx 配置示例
+# 生产环境：放在 /etc/nginx/sites-available/luogu-archive，然后
+#   ln -s /etc/nginx/sites-available/luogu-archive /etc/nginx/sites-enabled/
+#   nginx -t && systemctl reload nginx
+#
+# 假设：
+#   - 域名  archive.example.com
+#   - 后端 FastAPI 监听 127.0.0.1:8000
+#   - Nuxt  SSR 监听 127.0.0.1:3000
+#   - 镜像图片本地目录 /var/www/luogu-archive/image_mirror
+#   - TLS 证书由 certbot 自动签发
+# ======================================================================
+
+# 关闭 nginx 自带的 server 名字
+server_tokens off;
+
+# 限流区：简单的保护，详细限流已在应用层
+limit_req_zone $binary_remote_addr zone=general_limit:10m rate=30r/s;
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name archive.example.com;
+    # HTTP → HTTPS
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name archive.example.com;
+
+    # TLS（certbot 会替换这两行）
+    ssl_certificate     /etc/letsencrypt/live/archive.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/archive.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # 安全头
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # 防搜索引擎收录的双保险（前端 meta 已有，这里是 HTTP 头）
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+
+    # 最大请求体 20MB（覆盖侵权附件等）
+    client_max_body_size 20m;
+    # 日志
+    access_log /var/log/nginx/luogu-archive.access.log;
+    error_log  /var/log/nginx/luogu-archive.error.log;
+
+    # robots.txt 直接返回（前端的 public/ 里也有同名；这里优先级更高）
+    location = /robots.txt {
+        add_header Content-Type text/plain;
+        return 200 "User-agent: *\nDisallow: /\n";
+    }
+
+    # 镜像图片：直接由 nginx 发，不走应用
+    location /static/img/ {
+        alias /var/www/luogu-archive/image_mirror/;
+        expires 30d;
+        access_log off;
+        add_header Cache-Control "public, max-age=2592000";
+        try_files $uri =404;
+    }
+
+    # 后端 API
+    location /api/ {
+        limit_req zone=api_limit burst=30 nodelay;
+        proxy_pass         http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   Connection        "";
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    # 健康检查 bypass 限流
+    location = /healthz {
+        proxy_pass http://127.0.0.1:8000/healthz;
+        access_log off;
+    }
+
+    # 前端 Nuxt SSR
+    location / {
+        limit_req zone=general_limit burst=50 nodelay;
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   Upgrade           $http_upgrade;
+        proxy_set_header   Connection        "upgrade";
+        proxy_read_timeout 60s;
+    }
+}

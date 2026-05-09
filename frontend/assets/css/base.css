@@ -1,0 +1,160 @@
+/* 基础样式 + 洛谷用户名颜色 + Dark Mode 变量 */
+
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --text: #1f2328;
+  --text-muted: #57606a;
+  --border: #d0d7de;
+  --link: #0969da;
+  --hover: #f3f4f6;
+  --banner-bg: #fff8e1;
+  --banner-border: #f0c040;
+
+  /* 洛谷难度 / 用户颜色（沿用官方色值） */
+  --lg-gray: #bfbfbf;
+  --lg-blue: #0e90d2;
+  --lg-green: #5eb95e;
+  --lg-orange: #e67e22;
+  --lg-red: #e74c3c;
+  --lg-purple: #9b59b6;
+  --lg-cyan: #3498db;
+  --lg-black: #0a0a0a;
+  --lg-cheater: #8b5a2b;          /* 棕名 */
+}
+
+.dark {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --border: #30363d;
+  --link: #58a6ff;
+  --hover: #1f2937;
+  --banner-bg: #3b2f00;
+  --banner-border: #8b6e00;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  transition: background 0.2s, color 0.2s;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+.container {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+/* 洛谷用户名显示 */
+.lg-name[data-color="Gray"] { color: var(--lg-gray); }
+.lg-name[data-color="Blue"] { color: var(--lg-blue); }
+.lg-name[data-color="Green"] { color: var(--lg-green); }
+.lg-name[data-color="Orange"] { color: var(--lg-orange); }
+.lg-name[data-color="Red"] { color: var(--lg-red); }
+.lg-name[data-color="Purple"] { color: var(--lg-purple); }
+.lg-name[data-color="Cyan"] { color: var(--lg-cyan); }
+.lg-name[data-color="Black"] { color: var(--lg-black); font-weight: 700; }
+.lg-name[data-color="Cheater"] { color: var(--lg-cheater); font-style: italic; }
+
+.lg-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  margin-left: 4px;
+  background: var(--surface);
+  border: 1px solid currentColor;
+}
+
+/* 提及链接统一样式 */
+.lg-user-mention {
+  font-weight: 500;
+}
+
+/* 原文归属横幅 */
+.origin-banner {
+  background: var(--banner-bg);
+  border: 1px solid var(--banner-border);
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  margin-bottom: 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* 保存按钮 */
+.save-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s;
+}
+.save-btn:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--link);
+}
+.save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.save-btn.success { color: var(--lg-green); border-color: var(--lg-green); }
+.save-btn.error { color: var(--lg-red); border-color: var(--lg-red); }
+.save-btn.cooldown { color: var(--lg-orange); border-color: var(--lg-orange); }
+
+/* Markdown 渲染区 */
+.lg-content {
+  word-wrap: break-word;
+}
+.lg-content pre {
+  background: var(--hover);
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.lg-content blockquote {
+  border-left: 4px solid var(--border);
+  margin: 0;
+  padding: 4px 12px;
+  color: var(--text-muted);
+}
+.lg-content .lg-quote-reply {
+  border-left-color: var(--link);
+  background: var(--hover);
+  border-radius: 4px;
+}
+.lg-content img {
+  max-width: 100%;
+  height: auto;
+}
+.lg-content table {
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+.lg-content table td,
+.lg-content table th {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+}

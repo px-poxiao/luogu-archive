@@ -1,0 +1,82 @@
+[project]
+name = "luogu-archive-backend"
+version = "0.1.0"
+description = "洛谷内容爬虫与保存站 —— 后端"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    # Web 框架
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+
+    # 数据库
+    "sqlalchemy[asyncio]>=2.0.35",
+    "aiomysql>=0.2.0",                  # MySQL 异步驱动
+    "pymysql>=1.1.0",                   # 同步兜底
+    "alembic>=1.14.0",                  # 数据库迁移
+
+    # Redis / 缓存 / 限流
+    "redis[hiredis]>=5.2.0",
+
+    # 任务队列
+    "dramatiq[redis,watch]>=1.17.0",
+    "apscheduler>=3.10.4",              # 定时调度
+
+    # HTTP 客户端（爬虫）
+    "httpx[http2]>=0.27.0",
+    "selectolax>=0.3.25",               # 快速 HTML 解析
+    "tenacity>=9.0.0",                  # 重试
+
+    # Markdown / LaTeX 渲染
+    "markdown-it-py[plugins]>=3.0.0",
+    "mdit-py-plugins>=0.4.2",
+    "linkify-it-py>=2.0.3",
+    "pygments>=2.18.0",                 # 代码高亮（供 markdown-it 用）
+
+    # 认证 / 加密
+    "argon2-cffi>=23.1.0",              # 密码哈希
+    "pyotp>=2.9.0",                     # TOTP 2FA
+    "python-jose[cryptography]>=3.3.0", # JWT
+    "cryptography>=43.0.0",             # 加密 TOTP secret
+
+    # 邮件
+    "aiosmtplib>=3.0.2",
+
+    # 工具
+    "python-multipart>=0.0.12",         # FastAPI 文件上传
+    "python-dateutil>=2.9.0",
+    "orjson>=3.10.0",                   # 更快的 JSON
+    "structlog>=24.4.0",                # 结构化日志
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.27.0",
+    "mypy>=1.13.0",
+    "ruff>=0.8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "ASYNC"]
+ignore = ["E501"]                         # 行长度由 ruff format 管
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

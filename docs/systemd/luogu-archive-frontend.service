@@ -1,0 +1,27 @@
+# Nuxt 前端。与 Web 后端同结构。
+# /etc/systemd/system/luogu-archive-frontend.service
+
+[Unit]
+Description=luogu-archive frontend (Nuxt 3)
+After=network.target
+
+[Service]
+Type=simple
+User=luogu
+Group=luogu
+WorkingDirectory=/srv/luogu-archive/frontend
+EnvironmentFile=/srv/luogu-archive/frontend/.env
+# 运行 Nuxt build 后的 node 服务
+ExecStart=/usr/bin/node /srv/luogu-archive/frontend/.output/server/index.mjs
+Environment=PORT=3000
+Environment=HOST=127.0.0.1
+Restart=always
+RestartSec=5
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
