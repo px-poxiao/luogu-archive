@@ -85,7 +85,9 @@ async def _crawl_inner(*, trigger: str) -> None:
 
 
 async def _insert_judgements(session: AsyncSession, logs: list) -> int:
-    """批量 INSERT IGNORE，UNIQUE(uid,time,reason) 自动去重。"""
+    """批量 INSERT IGNORE，UNIQUE(uid,time,reason_hash) 自动去重。"""
+    import hashlib
+
     rows = []
     for log_item in logs:
         if not isinstance(log_item, dict):
@@ -97,11 +99,14 @@ async def _insert_judgements(session: AsyncSession, logs: list) -> int:
         t = log_item.get("time")
         if t is None:
             continue
+        reason = log_item.get("reason") or ""
+        reason_hash = hashlib.sha256(reason.encode("utf-8")).hexdigest()[:32]
         rows.append(
             {
                 "uid": uid,
                 "username_snapshot": user.get("name") or f"UID_{uid}",
-                "reason": log_item.get("reason") or "",
+                "reason": reason,
+                "reason_hash": reason_hash,
                 "revoked_permission": int(log_item.get("revokedPermission") or 0),
                 "added_permission": int(log_item.get("addedPermission") or 0),
                 "time": datetime.fromtimestamp(int(t), tz=timezone.utc),

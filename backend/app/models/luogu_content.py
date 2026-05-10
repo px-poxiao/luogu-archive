@@ -161,13 +161,13 @@ class Feed(Base):
 class Judgement(Base):
     """陶片放逐记录。每条追加式存储，从不更新。
 
-    UNIQUE (uid, time, reason)：同用户+同时间+同原因视作重复。
-    洛谷原接口不给 id，所以自增 id 作为主键，并用组合 UK 防重。
+    防重用 reason_hash（sha256 截前 16 字节 hex = 32 字符）做 UNIQUE(uid, time, reason_hash)。
+    MySQL 不支持在 TEXT 列直接建唯一索引，所以原文保留在 reason 里，索引走 hash。
     """
 
     __tablename__ = "judgements"
     __table_args__ = (
-        UniqueConstraint("uid", "time", "reason", name="uq_judgement_key"),
+        UniqueConstraint("uid", "time", "reason_hash", name="uq_judgement_key"),
         Index("ix_judgement_time", "time"),
         Index("ix_judgement_uid_time", "uid", "time"),
     )
@@ -177,6 +177,8 @@ class Judgement(Base):
     # 当时的用户名快照（即使后续改名也能追溯）
     username_snapshot: Mapped[str] = mapped_column(String(128), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+    # reason 的 sha256 前 32 位，用于防重
+    reason_hash: Mapped[str] = mapped_column(String(32), nullable=False)
     revoked_permission: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     added_permission: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
