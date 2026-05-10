@@ -35,7 +35,7 @@ class CrawlTask(Base):
         Index("ix_ct_node_time", "node_id", "started_at"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     task_type: Mapped[str] = mapped_column(String(32), nullable=False)
     # "article" / "paste" / "feed" / "user" / "judgement" / "problem_list" / "problem_solution"
 
@@ -74,7 +74,7 @@ class SaveRequest(Base):
         Index("ix_sr_target", "target_type", "target_id"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     ip: Mapped[str] = mapped_column(String(64), nullable=False)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     target_type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -96,7 +96,7 @@ class TakedownRequest(Base, TimestampMixin):
         Index("ix_tr_status_time", "status", "created_at"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     requester_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     requester_contact: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # 支持的目标类型：article/paste/feed/user/judgement/image

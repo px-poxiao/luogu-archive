@@ -31,7 +31,7 @@ class SiteUser(Base, TimestampMixin):
 
     __tablename__ = "site_users"
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     email: Mapped[str] = mapped_column(String(254), nullable=False, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
@@ -77,7 +77,7 @@ class SiteUserFollow(Base):
         Index("ix_sf_target", "target_luogu_uid"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     site_user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("site_users.id", ondelete="CASCADE"), nullable=False
     )
@@ -97,7 +97,7 @@ class SiteSession(Base):
         Index("ix_ss_user_expires", "site_user_id", "expires_at"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     site_user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("site_users.id", ondelete="CASCADE"), nullable=False
     )

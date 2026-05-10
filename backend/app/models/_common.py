@@ -87,16 +87,12 @@ class TimestampMixin:
     )
 
 
-# 全站 id 主键统一用 BIGINT，避免超 21 亿
-BigPKColumn = mapped_column(
-    BigInteger,
-    primary_key=True,
-    autoincrement=True,
-)
+# 全站 id 主键统一用 BIGINT，避免超 21 亿。
+# 注意：必须是**工厂函数**而不是模块级单例，否则同一个 mapped_column
+# 对象会被多个 model 共用，SQLAlchemy 会抛 "Column already assigned to Table"。
+def BigPKColumn() -> Mapped[int]:  # type: ignore[misc]
+    return mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
-# 小表可用 INT
-IntPKColumn = mapped_column(
-    Integer,
-    primary_key=True,
-    autoincrement=True,
-)
+
+def IntPKColumn() -> Mapped[int]:  # type: ignore[misc]
+    return mapped_column(Integer, primary_key=True, autoincrement=True)

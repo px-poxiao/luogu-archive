@@ -24,7 +24,7 @@ class Admin(Base, TimestampMixin):
 
     __tablename__ = "admins"
 
-    id: Mapped[int] = IntPKColumn
+    id: Mapped[int] = IntPKColumn()
     username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     # Fernet 加密后的 TOTP secret（不存明文）
@@ -47,7 +47,7 @@ class AdminAuditLog(Base):
         Index("ix_aal_target", "target_type", "target_id"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     admin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     admin_username: Mapped[str] = mapped_column(String(64), nullable=False)
 
@@ -74,7 +74,7 @@ class CrawlerAccount(Base, TimestampMixin):
 
     __tablename__ = "crawler_accounts"
 
-    id: Mapped[int] = IntPKColumn
+    id: Mapped[int] = IntPKColumn()
     label: Mapped[str] = mapped_column(String(64), nullable=False)
     luogu_uid: Mapped[int] = mapped_column(BigInteger, nullable=False)
 

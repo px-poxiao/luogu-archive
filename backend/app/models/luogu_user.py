@@ -128,7 +128,7 @@ class UserNameVersion(Base):
         Index("ix_unv_uid_first_seen", "uid", "first_seen_at"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     uid: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("luogu_users.uid", ondelete="CASCADE"), nullable=False
     )
@@ -150,7 +150,7 @@ class UserIntroVersion(Base):
         Index("ix_uiv_uid_crawled", "uid", "crawled_at"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     uid: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("luogu_users.uid", ondelete="CASCADE"), nullable=False
     )
@@ -174,7 +174,7 @@ class UserPrize(Base):
         Index("ix_up_uid", "uid"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     uid: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("luogu_users.uid", ondelete="CASCADE"), nullable=False
     )
@@ -196,7 +196,7 @@ class UserEloHistory(Base):
         Index("ix_ueh_uid_time", "uid", "time"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     uid: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("luogu_users.uid", ondelete="CASCADE"), nullable=False
     )
@@ -217,7 +217,7 @@ class UserGuHistory(Base):
         Index("ix_ugh_uid_time", "uid", "time"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     uid: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("luogu_users.uid", ondelete="CASCADE"), nullable=False
     )
@@ -240,7 +240,7 @@ class UserDailyActivity(Base):
         UniqueConstraint("uid", "date", name="uq_uda_uid_date"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     uid: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("luogu_users.uid", ondelete="CASCADE"), nullable=False
     )
@@ -261,7 +261,7 @@ class UserNumericSnapshot(Base):
         Index("ix_uns_uid_field_time", "uid", "field_name", "snapped_at"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     uid: Mapped[int] = mapped_column(BigInteger, nullable=False)
     field_name: Mapped[str] = mapped_column(String(64), nullable=False)
     value: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -282,7 +282,7 @@ class UserNameViolation(Base):
         Index("ix_unvio_uid_triggered", "uid", "triggered_at"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     uid: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("luogu_users.uid", ondelete="CASCADE"), nullable=False
     )

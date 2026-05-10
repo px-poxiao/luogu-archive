@@ -66,7 +66,7 @@ class ArticleVersion(Base):
         UniqueConstraint("article_id", "content_hash", name="uq_av_article_hash"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     article_id: Mapped[str] = mapped_column(
         String(16),
         ForeignKey("articles.article_id", ondelete="CASCADE"),
@@ -117,7 +117,7 @@ class PasteVersion(Base):
         UniqueConstraint("paste_id", "content_hash", name="uq_pv_paste_hash"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     paste_id: Mapped[str] = mapped_column(
         String(16), ForeignKey("pastes.paste_id", ondelete="CASCADE"), nullable=False
     )
@@ -172,7 +172,7 @@ class Judgement(Base):
         Index("ix_judgement_uid_time", "uid", "time"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     uid: Mapped[int] = mapped_column(BigInteger, nullable=False)
     # 当时的用户名快照（即使后续改名也能追溯）
     username_snapshot: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -221,7 +221,7 @@ class ProblemSolutionHistory(Base):
         Index("ix_psh_pid_time", "pid", "changed_at"),
     )
 
-    id: Mapped[int] = BigPKColumn
+    id: Mapped[int] = BigPKColumn()
     pid: Mapped[str] = mapped_column(
         String(32), ForeignKey("problems.pid", ondelete="CASCADE"), nullable=False
     )

@@ -241,7 +241,19 @@ EOF
 echo ">>> 创建 Python 虚拟环境（backend/.venv）"
 cd "$BACKEND"
 if [ ! -d .venv ]; then
-    "$PYBIN" -m venv .venv
+    if ! "$PYBIN" -m venv .venv 2>&1; then
+        echo ""
+        echo "!! 创建 venv 失败。Ubuntu 24+ 需要先装 venv 包："
+        echo "   sudo apt install -y python3.12-venv python3.12-dev build-essential"
+        echo "   然后 rm -rf backend/.venv，重跑 ./install.sh"
+        exit 1
+    fi
+fi
+if [ ! -f .venv/bin/activate ]; then
+    echo "!! .venv/bin/activate 不存在，venv 创建不完整。"
+    echo "   sudo apt install -y python3.12-venv python3.12-dev build-essential"
+    echo "   然后 rm -rf backend/.venv，重跑 ./install.sh"
+    exit 1
 fi
 . .venv/bin/activate
 pip install -U pip wheel setuptools >/dev/null
