@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const api = useApi()
+const { smart } = useTime()
 
 interface FeedItem {
   id: number
@@ -35,6 +36,9 @@ async function loadMore() {
 const { render } = useMarkdown()
 function feedHtml(c: string) { return render(c) }
 
+const listRef = ref<HTMLElement | null>(null)
+useCopyCode(listRef)
+
 onMounted(() => loadMore())
 </script>
 
@@ -43,11 +47,11 @@ onMounted(() => loadMore())
     <h1>伪全网犇</h1>
     <p class="note">这里汇总本站爬到的所有用户的犇犇，按时间倒序。</p>
 
-    <ul class="feed-list">
+    <ul ref="listRef" class="feed-list">
       <li v-for="f in items" :key="f.id">
         <div class="head">
           <LuoguUserName :user="f.user" show-badge />
-          <span class="time">{{ f.time }}</span>
+          <span class="time">{{ smart(f.time) }}</span>
         </div>
         <div class="lg-content" v-html="feedHtml(f.content_md)" />
       </li>

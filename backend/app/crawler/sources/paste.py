@@ -1,4 +1,8 @@
-"""剪贴板爬虫。结构与文章基本一致，字段更少。"""
+"""剪贴板爬虫。
+
+**洛谷剪贴板用的是老版前端**，数据在 `window._feInjection` 里，
+不是 `<script id="lentille-context">`。用 extract_page_data 自动识别两种结构。
+"""
 from __future__ import annotations
 
 import time as _t
@@ -12,7 +16,11 @@ from app.core.exceptions import CrawlerError
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.crawler.http import fetch_anon
-from app.crawler.lentille import data_from_lentille
+from app.crawler.lentille import (
+    current_data_from_injection,
+    data_from_lentille,
+    extract_page_data,
+)
 from app.crawler.nodes import NodeKind, get_default_node
 from app.crawler.sources.base import (
     record_task_done,
@@ -35,9 +43,29 @@ async def crawl_one(paste_id: str, *, trigger: str = "manual") -> None:
         await _crawl_inner(paste_id, trigger=trigger)
 
 
-def _extract_paste_fields(data: dict) -> dict[str, Any]:
-    """防御式提取 data.paste / data.post / data 本身。"""
-    for candidate in (data.get("paste"), data.get("post"), data):
+def _extract_paste_fields(kind: str, data: dict) -> dict[str, Any]:
+    """从两种 SSR 结构里取字段。
+
+    - kind="injection"（老版，剪贴板实际走这个）：
+        currentData.paste = { id, user, data, time, public }
+    - kind="lentille"（新版，暂未观察到但留兜底）：
+        data.paste = { ..., content/data/contentMd }
+    """
+    if kind == "injection":
+        current = current_data_from_injection(data)
+        paste = current.get("paste") if isinstance(current.get("paste"), dict) else None
+        if not paste:
+            raise CrawlerError(f"injection.currentData 里无 paste: keys={list(current.keys())}")
+        content = paste.get("data") or paste.get("content") or paste.get("contentMd") or ""
+        user = paste.get("user") if isinstance(paste.get("user"), dict) else {}
+        return {
+            "content_md": str(content),
+            "author_uid": int(user.get("uid")) if user.get("uid") else None,
+        }
+
+    # kind == "lentille"：按常见位置遍历
+    inner = data_from_lentille(data)
+    for candidate in (inner.get("paste"), inner.get("post"), inner):
         if not isinstance(candidate, dict):
             continue
         content = candidate.get("data") or candidate.get("content") or candidate.get("contentMd")
@@ -49,7 +77,7 @@ def _extract_paste_fields(data: dict) -> dict[str, Any]:
             "content_md": str(content),
             "author_uid": int(author_uid) if author_uid else None,
         }
-    raise CrawlerError(f"无法从 data 中提取剪贴板字段，可见 keys: {list(data.keys())}")
+    raise CrawlerError(f"无法从 data 中提取剪贴板字段，可见 keys: {list(inner.keys())}")
 
 
 async def _crawl_inner(paste_id: str, *, trigger: str) -> None:
@@ -61,11 +89,10 @@ async def _crawl_inner(paste_id: str, *, trigger: str) -> None:
     )
     start = _t.monotonic()
     try:
-        result = await fetch_anon(url_path, node=node, redis=redis)
-        if result.data is None:
-            raise CrawlerError("剪贴板页无 lentille-context")
-        data = data_from_lentille(result.data)
-        fields = _extract_paste_fields(data)
+        # 不依赖 fetch_anon 自动 lentille 解析，手动处理
+        result = await fetch_anon(url_path, node=node, redis=redis, parse="html")
+        kind, page_data = extract_page_data(result.body_text)
+        fields = _extract_paste_fields(kind, page_data)
 
         async with db_session() as session:
             await _upsert_paste(session, paste_id, fields, node_id=node.node_id)

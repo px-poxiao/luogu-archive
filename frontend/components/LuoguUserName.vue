@@ -4,6 +4,8 @@
   props:
     user: { uid, name, color, badge, avatar }
     hidden: boolean   后端指示"当前名被隐藏"时为 true
+    showBadge: boolean
+    noLink: boolean   为 true 时不包链接（避免在用户主页自己链自己）
 -->
 <script setup lang="ts">
 interface LuoguUserBrief {
@@ -13,6 +15,7 @@ interface LuoguUserBrief {
   badge: string | null
   avatar: string | null
 }
+
 const props = defineProps<{
   user: LuoguUserBrief | null | undefined
   hidden?: boolean
@@ -27,15 +30,14 @@ const displayName = computed(() => {
 </script>
 
 <template>
-  <span v-if="user">
-    <component
-      :is="noLink ? 'span' : NuxtLink"
+  <span v-if="user" class="lg-user-wrap">
+    <NuxtLink
       v-if="!noLink"
       :to="`/user/${user.uid}`"
       class="lg-name"
       :data-color="user.color"
       :data-hidden="hidden ? '1' : undefined"
-    >{{ displayName }}</component>
+    >{{ displayName }}</NuxtLink>
     <span
       v-else
       class="lg-name"
@@ -50,3 +52,11 @@ const displayName = computed(() => {
     >{{ user.badge }}</span>
   </span>
 </template>
+
+<style scoped>
+.lg-user-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+</style>

@@ -97,7 +97,11 @@ async def _crawl_inner(uid: int, page: int, *, trigger: str) -> None:
                         u = await session.get(LuoguUser, uid)
                         if u is not None:
                             new_dt = datetime.fromtimestamp(latest_time, tz=timezone.utc)
-                            if u.last_active_feed_at is None or u.last_active_feed_at < new_dt:
+                            # MySQL 拿出来是 naive，强制补 UTC 再比较
+                            cur = u.last_active_feed_at
+                            if cur is not None and cur.tzinfo is None:
+                                cur = cur.replace(tzinfo=timezone.utc)
+                            if cur is None or cur < new_dt:
                                 u.last_active_feed_at = new_dt
                 await session.commit()
 

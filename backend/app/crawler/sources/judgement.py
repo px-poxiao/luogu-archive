@@ -124,15 +124,19 @@ async def _sync_users_from_judgement(session: AsyncSession, logs: list) -> None:
     """陶片返回里带完整 user 对象，顺便 upsert luogu_users 主表最新信息。
 
     不走完整的 user.crawl_one（会再发一次请求），仅做最精简的"已知字段"更新。
+    注意：同一批 logs 里同一个 uid 可能出现多次，用 seen set 去重，
+    避免"第一次 session.get 未命中 → add 未 flush → 第二次再 add → 主键冲突"。
     """
     from app.models._common import LuoguColor
 
     now = utcnow()
+    seen: set[int] = set()
     for log_item in logs:
         user = log_item.get("user") or {}
         uid = int(user.get("uid") or 0)
-        if uid == 0:
+        if uid == 0 or uid in seen:
             continue
+        seen.add(uid)
         name = user.get("name") or f"UID_{uid}"
         try:
             color = LuoguColor(user.get("color") or "Gray")

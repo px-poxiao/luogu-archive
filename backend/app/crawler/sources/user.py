@@ -60,6 +60,66 @@ _VIOLATION_NAME_PATS: list[re.Pattern[str]] = [
 ]
 
 
+async def _enqueue_user_cascades(uid: int) -> None:
+    """用户保存按钮 / 首次入库时附带派发：
+       1) 当前用户犇犇第一页爬取（带 Cookie）
+       2) 库里已记录的、属于该用户的全部文章 + 剪贴板，错峰派发
+    """
+    from app.models.luogu_content import Article, Paste
+    from app.tasks.actors.crawl import (
+        crawl_article,
+        crawl_paste,
+        crawl_user_feeds,
+    )
+
+    # 限速参数：避免一次性投出几十条任务把节点打 403/429 → 熔断
+    PER_TASK_DELAY_MS = 2000      # 任务之间相隔 2 秒
+    MAX_TASKS_PER_TYPE = 30       # 文章 + 剪贴板各最多派 30 条；超量留给下一次保存按钮
+
+    try:
+        crawl_user_feeds.send(uid, 1, "cascaded_from_user")
+    except Exception as e:
+        log.warning("crawl_user.cascade_feed_failed", uid=uid, error=str(e))
+
+    try:
+        async with db_session() as session:
+            arts = (await session.execute(
+                select(Article.article_id).where(Article.author_uid == uid)
+                .limit(MAX_TASKS_PER_TYPE)
+            )).scalars().all()
+            pastes = (await session.execute(
+                select(Paste.paste_id).where(Paste.author_uid == uid)
+                .limit(MAX_TASKS_PER_TYPE)
+            )).scalars().all()
+        for i, aid in enumerate(arts):
+            try:
+                # delay 单位毫秒；让任务在未来错峰执行
+                crawl_article.send_with_options(
+                    args=(aid, "cascaded_from_user"),
+                    delay=i * PER_TASK_DELAY_MS,
+                )
+            except Exception as e:
+                log.warning("crawl_user.cascade_article_failed", aid=aid, error=str(e))
+        for i, pid in enumerate(pastes):
+            try:
+                crawl_paste.send_with_options(
+                    args=(pid, "cascaded_from_user"),
+                    # 把剪贴板排在文章之后，整体错峰串行
+                    delay=(len(arts) + i) * PER_TASK_DELAY_MS,
+                )
+            except Exception as e:
+                log.warning("crawl_user.cascade_paste_failed", pid=pid, error=str(e))
+        log.info(
+            "crawl_user.cascade_dispatched",
+            uid=uid,
+            articles=len(arts),
+            pastes=len(pastes),
+            interval_ms=PER_TASK_DELAY_MS,
+        )
+    except Exception as e:
+        log.warning("crawl_user.cascade_query_failed", uid=uid, error=str(e))
+
+
 def _is_violation_name(name: str) -> bool:
     return any(p.match(name) for p in _VIOLATION_NAME_PATS)
 
@@ -97,6 +157,10 @@ async def _crawl_one_inner(uid: int, *, trigger: str) -> None:
         "user", url_path, trigger=trigger_from(trigger), node_id=node.node_id
     )
 
+    # 进入 fetch 前先看一下用户是否已入库 —— 用于决定是否级联派 feed
+    async with db_session() as session:
+        was_first_time = (await session.get(LuoguUser, uid)) is None
+
     start = _t.monotonic()
     try:
         result = await fetch_anon(url_path, node=node, redis=redis)
@@ -118,6 +182,13 @@ async def _crawl_one_inner(uid: int, *, trigger: str) -> None:
             http_status=result.status,
             duration_ms=dur,
         )
+
+        # 级联派发 feed/article/paste 的两个时机：
+        #   1. trigger=manual：用户显式点保存
+        #   2. was_first_time：陌生用户首次入库（passive 触发也算）
+        # 已收录用户的纯定时/被动刷新不级联，保护 cookie 池。
+        if trigger == "manual" or was_first_time:
+            await _enqueue_user_cascades(uid)
     except Exception as e:
         dur = int((_t.monotonic() - start) * 1000)
         await record_task_done(

@@ -75,8 +75,27 @@ start_one() {
     fi
 }
 
+# ---------- 端口占用检测 ----------
+# 返回 0 = 占用 / 返回 1 = 空闲
+port_in_use() {
+    local port="$1"
+    ss -tln 2>/dev/null | awk '{print $4}' | grep -Eq ":${port}\$"
+}
+
+check_port_free() {
+    local name="$1" port="$2"
+    if port_in_use "$port"; then
+        echo "  [$name] ✗ 端口 $port 已被占用"
+        ss -tlnp 2>/dev/null | awk -v p=":$port" '$4 ~ p {print "         占用进程: "$0}'
+        echo "         用 'kill <pid>' 杀掉旧进程，或改 .env 的端口号"
+        return 1
+    fi
+    return 0
+}
+
 # ---------- 各服务启动命令 ----------
 start_backend() {
+    check_port_free backend "$BACKEND_PORT" || return 1
     cd "$BACKEND"
     start_one backend "$UVICORN" app.main:app \
         --host 127.0.0.1 --port "$BACKEND_PORT" --workers 2
@@ -96,6 +115,7 @@ start_scheduler() {
 }
 
 start_frontend() {
+    check_port_free frontend "$FRONTEND_PORT" || return 1
     cd "$FRONTEND"
     # 读前端 .env 作为环境
     set -a; source "$FRONTEND/.env"; set +a

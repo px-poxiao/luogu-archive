@@ -92,6 +92,12 @@ class CrawlerError(AppError):
     error_code = "crawler_error"
 
 
+class CrawlerNotFound(CrawlerError):
+    """目标内容不存在（HTTP 404）。不应触发熔断，也不该重试。"""
+
+    error_code = "crawler_not_found"
+
+
 class CrawlerBlockedError(CrawlerError):
     """被目标站点阻止（403/429）。触发节点熔断。"""
 

@@ -6,6 +6,9 @@ const { data } = await useAsyncData('problem-list', () =>
     '/problem/list',
   ),
 )
+const { data: lastCrawled } = await useAsyncData('problem-list-last-crawled', () =>
+  api<{ last_crawled_at: string | null }>('/last-crawled?type=problem_list'),
+)
 
 // 按洛谷难度顺序排序
 const diffOrder = [
@@ -40,6 +43,7 @@ const diffColor: Record<string, string> = {
   <div>
     <OriginBanner
       origin-url="https://www.luogu.com.cn/problem/list"
+      :crawled-at="lastCrawled?.last_crawled_at"
       content-type="problem"
       content-id="list"
     />

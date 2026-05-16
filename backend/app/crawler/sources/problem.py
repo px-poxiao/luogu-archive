@@ -1,14 +1,9 @@
 """题目爬虫：列表页 + 题解开放状态。
 
-- 列表页 /problem/list?page=N
+- 列表页 /problem/list?page=N   → 老版 SSR（_feInjection）
   用于发现最新题号 + 获取难度
-- 题解状态 /problem/solution/<pid>
-  判断"是否允许提交题解"。允许则 solution_open=True。
-  页面上有"提交题解"按钮时允许，页面显示"该题目不允许提交题解"时禁止。
-
-两种方式：
-- 列表页拿 lentille-context，data.problems 或类似字段
-- 题解状态页：看 lentille 里的 solution 相关字段或页面文案关键字
+- 题解状态 /problem/solution/<pid>   → 新版 SSR 或 HTML 兜底
+  判断"是否允许提交题解"
 """
 from __future__ import annotations
 
@@ -21,7 +16,11 @@ from app.core.exceptions import CrawlerError
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.crawler.http import fetch_anon
-from app.crawler.lentille import data_from_lentille
+from app.crawler.lentille import (
+    current_data_from_injection,
+    data_from_lentille,
+    extract_page_data,
+)
 from app.crawler.nodes import NodeKind, get_default_node
 from app.crawler.sources.base import (
     record_task_done,
@@ -44,6 +43,31 @@ async def crawl_list_page(page: int, *, trigger: str = "scheduled") -> None:
         await _crawl_list_inner(page, trigger=trigger)
 
 
+def _extract_problem_items(kind: str, data: dict) -> list[dict]:
+    """从两种 SSR 结构中取题目列表。
+
+    - injection（老版）：currentData.problems = { result: [...], perPage, count }
+    - lentille（新版）：data.problems 同样位置，兜底也看 data.result
+    """
+    if kind == "injection":
+        current = current_data_from_injection(data)
+        pr = current.get("problems")
+        if isinstance(pr, dict) and isinstance(pr.get("result"), list):
+            return pr["result"]
+        if isinstance(pr, list):
+            return pr
+        raise CrawlerError(f"injection.currentData 里无 problems: keys={list(current.keys())}")
+
+    inner = data_from_lentille(data)
+    for key in ("problems", "result"):
+        v = inner.get(key)
+        if isinstance(v, dict) and isinstance(v.get("result"), list):
+            return v["result"]
+        if isinstance(v, list):
+            return v
+    raise CrawlerError(f"lentille.data 里无 problems: keys={list(inner.keys())}")
+
+
 async def _crawl_list_inner(page: int, *, trigger: str) -> None:
     node = get_default_node(NodeKind.ANON)
     redis = get_redis()
@@ -57,24 +81,10 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
     start = _t.monotonic()
     try:
         result = await fetch_anon(
-            url_path, node=node, redis=redis, params={"page": page}
+            url_path, node=node, redis=redis, params={"page": page}, parse="html"
         )
-        if result.data is None:
-            raise CrawlerError("题目列表页无 lentille-context")
-        data = data_from_lentille(result.data)
-
-        # 洛谷返回结构：data.problems.result 或 data.result（猜测）
-        items = None
-        for node_k in ("problems", "result"):
-            v = data.get(node_k)
-            if isinstance(v, dict) and isinstance(v.get("result"), list):
-                items = v["result"]
-                break
-            if isinstance(v, list):
-                items = v
-                break
-        if items is None:
-            raise CrawlerError(f"题目列表 data keys={list(data.keys())}")
+        kind, page_data = extract_page_data(result.body_text)
+        items = _extract_problem_items(kind, page_data)
 
         rows = []
         for item in items:
@@ -86,7 +96,7 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
             rows.append(
                 {
                     "pid": str(pid),
-                    "title": item.get("title") or "",
+                    "title": (item.get("title") or "")[:500],
                     "difficulty": _diff_text(item.get("difficulty")),
                     "solution_open": bool(item.get("showSolution", False)),
                     "first_seen_at": utcnow(),
@@ -96,13 +106,30 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
         if rows:
             async with db_session() as session:
                 stmt = mysql_insert(Problem).values(rows)
-                # 已存在的题目更新标题和难度，但 solution_open 不从列表接口确定（列表可能不给）
+                # 已存在的题目更新标题和难度，但 solution_open 不从列表接口确定
                 stmt = stmt.on_duplicate_key_update(
                     title=stmt.inserted.title,
                     difficulty=stmt.inserted.difficulty,
                 )
                 await session.execute(stmt)
                 await session.commit()
+
+        # 列表页只能拿到标题/难度；solution_open 必须靠 /problem/solution/<pid> 判断。
+        # 这里对本页所有题目派发 crawl_problem_solution，错峰避免打爆节点。
+        # manual 触发才派；scheduled 巡检由 scheduler 单独管理（避免每次轮询雪崩）。
+        if trigger == "manual" and rows:
+            from app.tasks.actors.crawl import crawl_problem_solution
+            for i, r in enumerate(rows):
+                try:
+                    crawl_problem_solution.send_with_options(
+                        args=(r["pid"], "cascaded_from_problem_list"),
+                        delay=i * 3000,   # 每 3 秒一题
+                    )
+                except Exception as e:
+                    log.warning(
+                        "crawl_problem_list.cascade_solution_failed",
+                        pid=r["pid"], error=str(e),
+                    )
 
         dur = int((_t.monotonic() - start) * 1000)
         await record_task_done(
@@ -111,7 +138,7 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
             http_status=result.status,
             duration_ms=dur,
         )
-        log.info("crawl_problem_list.done", page=page, count=len(rows))
+        log.info("crawl_problem_list.done", page=page, count=len(rows), kind=kind)
     except Exception as e:
         dur = int((_t.monotonic() - start) * 1000)
         await record_task_done(
@@ -168,17 +195,14 @@ async def _crawl_solution_inner(pid: str, *, trigger: str) -> None:
     )
     start = _t.monotonic()
     try:
-        result = await fetch_anon(url_path, node=node, redis=redis)
-        # 判断 solution_open
-        # 策略：先看 lentille 数据里是否有 canSubmitSolution / isAllowed 字段
-        # 再回退到页面文本关键字
-        solution_open = _detect_solution_open(result.body_text, result.data)
+        result = await fetch_anon(url_path, node=node, redis=redis, parse="html")
+        # 判断 solution_open：先尝试解析结构化数据，失败回退到文本匹配
+        solution_open = _detect_solution_open(result.body_text)
 
         async with db_session() as session:
             existing = await session.get(Problem, pid)
             now = utcnow()
             if existing is None:
-                # 列表爬虫还没发现这题，先占位建一行（避免 FK 爆炸）
                 session.add(
                     Problem(
                         pid=pid,
@@ -228,17 +252,26 @@ _DENY_KEYWORDS = (
 )
 
 
-def _detect_solution_open(body_text: str, data: dict | None) -> bool:
-    # 优先结构化字段（实测可能的位置）
-    if isinstance(data, dict):
-        inner = data_from_lentille(data)
-        for key in ("canSubmitSolution", "solutionOpen", "acceptingSolutions"):
-            v = inner.get(key)
-            if isinstance(v, bool):
-                return v
-    # 回退：文本关键字
+def _detect_solution_open(body_text: str) -> bool:
+    # 先尝试结构化
+    try:
+        kind, page_data = extract_page_data(body_text)
+        if kind == "injection":
+            current = current_data_from_injection(page_data)
+            for key in ("canSubmitSolution", "solutionOpen", "acceptingSolutions"):
+                v = current.get(key)
+                if isinstance(v, bool):
+                    return v
+        else:
+            inner = data_from_lentille(page_data)
+            for key in ("canSubmitSolution", "solutionOpen", "acceptingSolutions"):
+                v = inner.get(key)
+                if isinstance(v, bool):
+                    return v
+    except Exception:
+        pass
+    # 文本兜底
     for kw in _DENY_KEYWORDS:
         if kw in body_text:
             return False
-    # 既没结构化字段也没负面关键字 → 默认认为开放（宁松勿严）
     return True

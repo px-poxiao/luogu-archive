@@ -356,6 +356,72 @@ async def enable_account(
 
 
 # ============================================================
+# 题库全量刷新
+# ============================================================
+
+class ProblemRefreshReq(BaseModel):
+    """全量刷新题库的范围。两个前缀的范围独立指定。
+
+    - 已知 P 题号范围 1000~目前最大（约 P16500），B 题号 2001~目前最大（约 B4500）
+    - 题号区间内不会连续断号超过 10 个，因此 sentinel=10
+    - 我们一次性派 (max-min+1) 个任务，错峰 delay 防止节点被打 403
+    """
+
+    p_min: int = Field(1000, ge=1)
+    p_max: int = Field(16501, ge=1)
+    b_min: int = Field(2001, ge=1)
+    b_max: int = Field(4528, ge=1)
+    delay_ms: int = Field(3000, ge=500, le=30000,
+                           description="任务之间的间隔，越小越快但越容易被洛谷拦")
+
+
+@router.post("/problems/full-refresh")
+async def full_refresh_problems(
+    body: ProblemRefreshReq,
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """全量刷新题库：对 P[p_min..p_max] / B[b_min..b_max] 每个 pid 派一条
+    crawl_problem_solution 任务，错峰执行。
+
+    任务自身能识别 404（CrawlerNotFound throws）→ 不重试、不熔断。
+    断号在范围内只表现为 404，不影响整体进度。
+    """
+    from app.tasks.actors.crawl import crawl_problem_solution
+
+    pids: list[str] = []
+    pids.extend(f"P{n}" for n in range(body.p_min, body.p_max + 1))
+    pids.extend(f"B{n}" for n in range(body.b_min, body.b_max + 1))
+
+    for i, pid in enumerate(pids):
+        crawl_problem_solution.send_with_options(
+            args=(pid, "manual_full_refresh"),
+            delay=i * body.delay_ms,
+        )
+
+    await _audit(
+        db, admin, request, "problem_full_refresh",
+        target_type="problem", target_id="all",
+        params={
+            "p_range": [body.p_min, body.p_max],
+            "b_range": [body.b_min, body.b_max],
+            "count": len(pids),
+            "delay_ms": body.delay_ms,
+        },
+    )
+    await db.commit()
+
+    # 估算总耗时
+    eta_sec = (len(pids) * body.delay_ms) // 1000
+    return {
+        "message": "已派发",
+        "count": len(pids),
+        "eta_sec": eta_sec,
+    }
+
+
+# ============================================================
 # 爬虫监控
 # ============================================================
 

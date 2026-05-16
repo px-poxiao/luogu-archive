@@ -16,6 +16,7 @@ function logout() {
           <NuxtLink to="/admin">仪表盘</NuxtLink>
           <NuxtLink to="/admin/takedowns">删除申请</NuxtLink>
           <NuxtLink to="/admin/accounts">爬取账号</NuxtLink>
+          <NuxtLink to="/admin/problems">题库刷新</NuxtLink>
           <NuxtLink to="/admin/audit">审计日志</NuxtLink>
         </nav>
         <div v-if="admin.isLoggedIn" class="right">

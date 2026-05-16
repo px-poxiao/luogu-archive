@@ -147,28 +147,34 @@ async def _try_merge_or_enqueue(
         return old, True
 
     # 派发
-    if content_type == "article":
-        msg = crawl_article.send(ident, "manual")
-    elif content_type == "paste":
-        msg = crawl_paste.send(ident, "manual")
-    elif content_type == "user":
-        msg = crawl_user.send(int(ident), "manual")
-    elif content_type == "feed":
-        # feed 的 ident 格式 "<uid>" 或 "<uid>:<page>"
-        if ":" in ident:
-            uid_str, page_str = ident.split(":", 1)
-            uid, page = int(uid_str), int(page_str)
+    try:
+        if content_type == "article":
+            msg = crawl_article.send(ident, "manual")
+        elif content_type == "paste":
+            msg = crawl_paste.send(ident, "manual")
+        elif content_type == "user":
+            msg = crawl_user.send(int(ident), "manual")
+        elif content_type == "feed":
+            # feed 的 ident 格式 "<uid>" 或 "<uid>:<page>"
+            if ":" in ident:
+                uid_str, page_str = ident.split(":", 1)
+                uid, page = int(uid_str), int(page_str)
+            else:
+                uid, page = int(ident), 1
+            msg = crawl_user_feeds.send(uid, page, "manual")
+        elif content_type == "judgement":
+            # ident 任意值都忽略
+            msg = crawl_judgement.send("manual")
+        elif content_type == "problem":
+            # 列表页点保存：ident 是 "list" → 扫第 1 页；否则数字当页码
+            page = 1 if ident == "list" else int(ident)
+            msg = crawl_problem_list_page.send(page, "manual")
+        elif content_type == "problem_solution":
+            msg = crawl_problem_solution.send(ident, "manual")
         else:
-            uid, page = int(ident), 1
-        msg = crawl_user_feeds.send(uid, page, "manual")
-    elif content_type == "judgement":
-        msg = crawl_judgement.send("manual")
-    elif content_type == "problem":
-        msg = crawl_problem_list_page.send(int(ident), "manual")
-    elif content_type == "problem_solution":
-        msg = crawl_problem_solution.send(ident, "manual")
-    else:
-        raise ValidationError("未知的 content_type")
+            raise ValidationError("未知的 content_type")
+    except ValueError as e:
+        raise ValidationError(f"无效的 id: {ident}") from e
 
     task_id = msg.message_id
     # 挂 pending 标记，TTL 5 分钟（爬完没这么久，但防止卡死）

@@ -49,7 +49,7 @@ async def crawl_one(article_id: str, *, trigger: str = "manual") -> None:
 
 
 def _extract_article_fields(data: dict) -> dict[str, Any]:
-    """从 lentille data 字段里找 title/content/author_uid。
+    """从 lentille data 字段里找 title/content/author(dict)/author_uid。
 
     防御式：洛谷字段命名偶尔变动，这里多猜几个位置。
     """
@@ -66,12 +66,13 @@ def _extract_article_fields(data: dict) -> dict[str, Any]:
         content = node.get("content") or node.get("contentMd") or node.get("markdown")
         title = node.get("title")
         if content is not None and title is not None:
-            author = node.get("author") if isinstance(node.get("author"), dict) else {}
-            author_uid = author.get("uid") if author else node.get("authorUid")
+            author_raw = node.get("author") if isinstance(node.get("author"), dict) else None
+            author_uid = (author_raw.get("uid") if author_raw else None) or node.get("authorUid")
             return {
                 "title": str(title),
                 "content_md": str(content),
                 "author_uid": int(author_uid) if author_uid else None,
+                "author_raw": author_raw,
             }
     # 未能识别，抛错并带上 key 列表供排查
     raise CrawlerError(
@@ -96,7 +97,17 @@ async def _crawl_inner(article_id: str, *, trigger: str) -> None:
 
         async with db_session() as session:
             await _upsert_article(session, article_id, fields, node_id=node.node_id)
+            await _upsert_author_brief(session, fields.get("author_raw"))
             await session.commit()
+
+        # 作者用户若 author_raw 里信息不全（比如缺 slogan/introduction），
+        # 额外派一次完整用户爬取（带去重锁，不会重复）
+        if fields.get("author_uid"):
+            try:
+                from app.tasks.actors.crawl import crawl_user
+                crawl_user.send(fields["author_uid"], "cascaded_from_article")
+            except Exception as e:
+                log.warning("crawl_article.cascade_user_failed", error=str(e))
 
         dur = int((_t.monotonic() - start) * 1000)
         await record_task_done(
@@ -177,3 +188,49 @@ async def _upsert_article(
     existing.author_uid = fields.get("author_uid") or existing.author_uid
     existing.current_version_id = v.id
     existing.last_crawled_at = now
+
+
+async def _upsert_author_brief(session: AsyncSession, author: dict | None) -> None:
+    """文章 lentille 里的 author 对象通常含 {uid, name, color, badge, avatar, ...}，
+    顺手在 luogu_users 表里做一次 upsert，避免前端"作者未收录"。
+    """
+    if not isinstance(author, dict):
+        return
+    from app.models._common import LuoguColor
+    from app.models.luogu_user import LuoguUser
+
+    uid_raw = author.get("uid")
+    if not uid_raw:
+        return
+    uid = int(uid_raw)
+    name = author.get("name") or f"UID_{uid}"
+    try:
+        color = LuoguColor(author.get("color") or "Gray")
+    except ValueError:
+        color = LuoguColor.Gray
+
+    now = utcnow()
+    existing = await session.get(LuoguUser, uid)
+    if existing is None:
+        session.add(
+            LuoguUser(
+                uid=uid,
+                name=name,
+                avatar=author.get("avatar"),
+                background=author.get("background"),
+                slogan=author.get("slogan"),
+                badge=author.get("badge"),
+                color=color,
+                is_admin=bool(author.get("isAdmin")),
+                is_banned=bool(author.get("isBanned")),
+                ccf_level=int(author.get("ccfLevel") or 0),
+                xcpc_level=int(author.get("xcpcLevel") or 0),
+                first_crawled_at=now,
+                last_crawled_at=now,
+            )
+        )
+    else:
+        existing.avatar = author.get("avatar") or existing.avatar
+        existing.badge = author.get("badge") or existing.badge
+        existing.color = color
+        existing.last_crawled_at = now

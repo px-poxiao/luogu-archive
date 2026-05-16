@@ -3,12 +3,7 @@
   所有内容详情页（文章/剪贴板/用户/陶片等）顶部挂一个。
 -->
 <script setup lang="ts">
-import dayjs from 'dayjs'
-import 'dayjs/locale/zh-cn'
-import relativeTime from 'dayjs/plugin/relativeTime'
-
-dayjs.extend(relativeTime)
-dayjs.locale('zh-cn')
+const { fromNow } = useTime()
 
 const props = defineProps<{
   originUrl: string           // 对应洛谷原站 URL
@@ -67,7 +62,7 @@ async function save() {
 }
 
 const relTime = computed(() =>
-  props.crawledAt ? dayjs(props.crawledAt).fromNow() : '未知',
+  props.crawledAt ? fromNow(props.crawledAt) : '未知',
 )
 </script>
 

@@ -10,6 +10,8 @@
   --hover: #f3f4f6;
   --banner-bg: #fff8e1;
   --banner-border: #f0c040;
+  /* 文章头 banner（浅色渐变 → 深色渐变） */
+  --article-banner-bg: linear-gradient(135deg, #eaf4ff 0%, #f3f4f6 100%);
 
   /* 洛谷难度 / 用户颜色（沿用官方色值） */
   --lg-gray: #bfbfbf;
@@ -33,6 +35,7 @@
   --hover: #1f2937;
   --banner-bg: #3b2f00;
   --banner-border: #8b6e00;
+  --article-banner-bg: linear-gradient(135deg, #1a2a44 0%, #1c2128 100%);
 }
 
 html,
@@ -57,9 +60,15 @@ a:hover {
 }
 
 .container {
-  max-width: 1080px;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 0 16px;
+  padding: 0 24px;
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 0 14px;
+  }
 }
 
 /* 洛谷用户名显示 */
@@ -133,7 +142,29 @@ a:hover {
   padding: 12px;
   border-radius: 6px;
   overflow-x: auto;
+  position: relative;
 }
+
+/* 代码框一键复制按钮（由 useCopyCode 注入） */
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.lg-content pre:hover .code-copy-btn,
+.code-copy-btn:focus { opacity: 1; }
+.code-copy-btn:hover { color: var(--link); border-color: var(--link); }
+.code-copy-btn.ok { color: var(--lg-green); border-color: var(--lg-green); opacity: 1; }
+.code-copy-btn.err { color: var(--lg-red); border-color: var(--lg-red); opacity: 1; }
 .lg-content blockquote {
   border-left: 4px solid var(--border);
   margin: 0;
@@ -158,3 +189,85 @@ a:hover {
   border: 1px solid var(--border);
   padding: 6px 10px;
 }
+
+/* 洛谷折叠框 / 告示框 —— :::info / :::warning / :::success / :::spoiler */
+.lg-callout {
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--text-muted);
+  border-radius: 6px;
+  padding: 0;
+  background: var(--surface);
+  overflow: hidden;
+}
+.lg-callout > summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 10px 14px;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lg-callout > summary::-webkit-details-marker { display: none; }
+.lg-callout > summary::before {
+  content: "▶";
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+.lg-callout[open] > summary::before { transform: rotate(90deg); }
+.lg-callout > :not(summary) {
+  padding: 0 16px;
+}
+.lg-callout > :last-child { padding-bottom: 12px; }
+.lg-callout > summary + * { padding-top: 8px; }
+
+/* 四种语义色 */
+.lg-callout-info {
+  border-left-color: var(--link);
+}
+.lg-callout-info > summary { background: color-mix(in srgb, var(--link) 10%, transparent); }
+
+.lg-callout-warning {
+  border-left-color: var(--lg-orange);
+}
+.lg-callout-warning > summary { background: color-mix(in srgb, var(--lg-orange) 12%, transparent); }
+
+.lg-callout-success {
+  border-left-color: var(--lg-green);
+}
+.lg-callout-success > summary { background: color-mix(in srgb, var(--lg-green) 12%, transparent); }
+
+.lg-callout-spoiler {
+  border-left-color: var(--lg-purple);
+}
+.lg-callout-spoiler > summary { background: color-mix(in srgb, var(--lg-purple) 10%, transparent); }
+
+.lg-callout-error {
+  border-left-color: var(--lg-red);
+}
+.lg-callout-error > summary { background: color-mix(in srgb, var(--lg-red) 12%, transparent); }
+
+/* 对齐块：:::align{center|right} */
+.lg-align { margin: 10px 0; }
+
+/* 题记 / 引文：右对齐 + 斜体 + 署名破折号 */
+.lg-epigraph {
+  margin: 14px 0;
+  padding: 4px 0;
+  text-align: right;
+  font-style: italic;
+  color: var(--text-muted);
+  border-right: 3px solid var(--border);
+  padding-right: 14px;
+}
+.lg-epigraph[data-source]::after {
+  content: "—— " attr(data-source);
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  color: var(--text);
+}
+.lg-epigraph p { margin: 0; }

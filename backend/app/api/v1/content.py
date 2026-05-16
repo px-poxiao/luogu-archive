@@ -320,3 +320,30 @@ async def problem_list_by_difficulty(
             )
         )
     return dict(out)
+
+
+# ============================================================
+# 通用：最近一次成功爬取时间（list 页 OriginBanner 显示"上次更新"）
+# ============================================================
+
+@router.get("/last-crawled")
+async def last_crawled(
+    type: str = Query(..., description="task_type: judgement / problem_list / ..."),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """返回某类爬取任务最近一次 success 的 started_at（UTC ISO 字符串）。"""
+    from app.models._common import CrawlTaskStatus
+    from app.models.task import CrawlTask
+
+    q = (
+        select(CrawlTask.started_at)
+        .where(
+            CrawlTask.task_type == type,
+            CrawlTask.status == CrawlTaskStatus.success,
+        )
+        .order_by(CrawlTask.started_at.desc())
+        .limit(1)
+    )
+    row = (await db.execute(q)).scalar_one_or_none()
+    return {"last_crawled_at": row.isoformat() if row else None}
+

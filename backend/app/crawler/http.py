@@ -26,6 +26,7 @@ from app.core.exceptions import (
     CrawlerAccountInvalid,
     CrawlerBlockedError,
     CrawlerError,
+    CrawlerNotFound,
     CrawlerTimeoutError,
 )
 from app.core.logging import get_logger
@@ -88,19 +89,52 @@ class FetchResult:
 
 
 def _detect_blocked(status: int, body: str) -> bool:
-    """把服务器返回识别为"被拦/被封"信号。"""
-    if status in (403, 429):
+    """把服务器返回识别为"节点级被拦"信号 —— 触发熔断时调用。
+
+    重要：只把"我们被洛谷整体拦截"识别为 blocked。
+    单个目标用户/页面被洛谷 403（封号、锁主页、隐私设置等）**不算**节点被拦。
+    误判会导致一个封号用户拖瘫全站匿名爬虫 5 分钟（节点冷却期）。
+
+    判别规则：
+      - 429（频率限制）：明确节点级，必拦
+      - 403 + body 含 Cloudflare / 通用 nginx forbidden 标志：节点级
+      - 其他 403：当成内容级（404 类）处理，不熔断
+    """
+    if status == 429:
         return True
-    # 洛谷的 403 body 会含这句（当无 Cookie 访问需要登录的接口也会，调用方分辨）
-    if status == 403 and ("用户尚未登录" in body or "Forbidden" in body):
-        return True
+    if status == 403:
+        b = body.lower()
+        cf_signals = (
+            "cloudflare",
+            "attention required",
+            "checking your browser",
+            "<title>403 forbidden</title>",  # nginx 默认 403 页
+            "请求过于频繁",
+            "ip 地址不在白名单",
+        )
+        if any(s in b for s in cf_signals):
+            return True
     return False
 
 
-def _detect_account_invalid(status: int, body: str) -> bool:
-    """Cookie 账号失效的特征：明确 401/403 + 包含"用户尚未登录"。"""
-    if status in (401, 403) and "用户尚未登录" in body:
+def _detect_account_invalid(status: int, body: str, cookies_present: bool) -> bool:
+    """Cookie 账号失效的特征：
+
+    - 401 直接判失效
+    - 403 + body 含"用户尚未登录"
+    - 403 + 我们带了 cookie 请求（理论上不该 403）+ body 是 API JSON 错误（短）
+      （洛谷 API 401 风格：返回 403 + JSON 错误体；body 长度 < 1KB）
+    """
+    if not cookies_present:
+        return False  # 匿名请求的 401/403 不算账号失效，是节点级问题
+    if status == 401:
         return True
+    if status == 403:
+        if "用户尚未登录" in body:
+            return True
+        # 短 body + JSON 关键字 = 多半是 API 鉴权失败而非 Cloudflare 拦截
+        if len(body) < 1024 and (body.lstrip().startswith("{") or "errorMessage" in body):
+            return True
     return False
 
 
@@ -172,13 +206,17 @@ async def _do_request(
     ct = resp.headers.get("content-type", "")
 
     # 识别异常
-    if _detect_account_invalid(status, body):
+    if _detect_account_invalid(status, body, cookies_present=cookies is not None):
         raise CrawlerAccountInvalid(f"Cookie 账号无效：{url}")
     if _detect_blocked(status, body):
         await node.trip_breaker(redis, reason=f"status={status}")
         raise CrawlerBlockedError(f"被目标站点拦截: status={status} url={url}")
 
-    # 成功，但若 HTTP 非 2xx 仍当错误处理（404 等）
+    # 404 / 内容级 403（用户被封号/隐私页/不存在）：不熔断、不重试
+    if status == 404 or status == 403:
+        raise CrawlerNotFound(f"内容不可访问: status={status} url={url}")
+
+    # 其他 4xx/5xx 当作可重试错误
     if status >= 400:
         raise CrawlerError(f"HTTP {status}: {url} body(前200)={body[:200]}")
 
@@ -274,9 +312,22 @@ async def fetch_authed(
 
 
 def _resolve_url(path_or_url: str) -> str:
-    """拼完整 URL。若已是 http:// / https:// 则直接返回。"""
+    """拼完整 URL。若已是 http:// / https:// 则直接返回。
+
+    按内容类型分派域名：
+    - 走主站 www.luogu.com.cn 的路径（更稳定、陶片/题目/犇犇）：
+        /judgement, /problem/..., /api/feed/...
+    - 其他路径（文章、剪贴板、用户主页、入口发现）走 CRAWLER_BASE_URL（默认海外镜像）。
+
+    目的：海外镜像对某些 API 会 503 或返回 HTML，这些特定内容强制走主站。
+    """
     if path_or_url.startswith(("http://", "https://")):
         return path_or_url
-    base = settings.CRAWLER_BASE_URL.rstrip("/")
     path = path_or_url if path_or_url.startswith("/") else f"/{path_or_url}"
+    # 主站强制路径（最稳定）
+    cn_prefixes = ("/judgement", "/problem", "/api/feed")
+    if any(path.startswith(p) for p in cn_prefixes):
+        base = "https://www.luogu.com.cn"
+    else:
+        base = settings.CRAWLER_BASE_URL.rstrip("/")
     return f"{base}{path}"

@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     CRAWLER_TASK_LOCK_TTL_SEC: int = 30
     CRAWLER_REQUEST_TIMEOUT_SEC: int = 15
 
+    # ---------- 节点身份（多 worker 部署） ----------
+    # 当前 worker 的节点 ID。同一个进程的所有匿名爬取 / 认证爬取共享同一个 ID。
+    # 单机部署可不填，使用默认 "local-anon-01" / "local-authed-01"。
+    # 多机部署时每台 worker 必须填唯一值，例如 NODE_ID=worker-tencent-sh-01
+    # 这样限流 / 熔断 / 审计才能区分各机器。
+    NODE_ID: str = ""
+
     # ---------- 陶片 ----------
     JUDGEMENT_GROUP_TIME_WINDOW_SEC: int = 1800
 

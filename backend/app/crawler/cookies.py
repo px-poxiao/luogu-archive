@@ -82,7 +82,9 @@ async def pick_account(session: AsyncSession) -> AccountCookies | None:
     q = (
         select(CrawlerAccount)
         .where(CrawlerAccount.enabled.is_(True))
-        .order_by(CrawlerAccount.last_used_at.asc().nulls_first())
+        # MySQL ASC 默认 NULL 在前，刚加的账号 last_used_at=NULL 自然优先选中。
+        # 不能用 .nulls_first()，那是 PostgreSQL 方言。
+        .order_by(CrawlerAccount.last_used_at.asc())
     )
     result = await session.execute(q)
     accounts = result.scalars().all()

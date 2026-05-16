@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dramatiq
 
+from app.core.exceptions import CrawlerAccountInvalid, CrawlerNotFound
 from app.core.logging import get_logger
 from app.tasks.asyncio_runner import run_async
 from app.tasks.broker import (
@@ -25,11 +26,13 @@ get_broker()
 log = get_logger(__name__)
 
 
-# 通用重试策略：10 次指数退避；中间件 AgeLimit 默认消息生命周期合适
+# 通用重试策略：3 次指数退避，最长 1 分钟。
+# CrawlerNotFound（404）/ CrawlerAccountInvalid 走 throws，dramatiq 不重试。
 _RETRY = {
-    "max_retries": 10,
-    "min_backoff": 2000,
+    "max_retries": 3,
+    "min_backoff": 5_000,
     "max_backoff": 60_000,
+    "throws": (CrawlerNotFound, CrawlerAccountInvalid),
 }
 
 

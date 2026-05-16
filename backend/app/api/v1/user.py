@@ -59,6 +59,7 @@ class UserProfile(BaseModel):
     submitted_problem_count: int | None
     register_time: datetime | None
     introduction_md: str | None
+    last_crawled_at: datetime | None
 
     # 历史
     name_history: list[UserNameHistoryItem]
@@ -146,6 +147,7 @@ async def get_user(
         submitted_problem_count=user.submitted_problem_count,
         register_time=user.register_time,
         introduction_md=user.introduction,
+        last_crawled_at=user.last_crawled_at,
         name_history=history,
         prizes=[
             PrizeItem(

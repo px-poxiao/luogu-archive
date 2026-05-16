@@ -279,7 +279,8 @@ deactivate
 # ---------- 7. 前端依赖 + 构建 ----------
 echo ">>> 安装前端依赖（pnpm install）"
 cd "$FRONTEND"
-pnpm install --frozen-lockfile || pnpm install
+# 第一次没 lockfile 会报 ERR_PNPM_NO_LOCKFILE，兜底用普通 install
+pnpm install --frozen-lockfile 2>/dev/null || pnpm install
 echo ">>> 构建前端（pnpm build）"
 pnpm build
 
