@@ -38,6 +38,40 @@ interface ActivityItem {
   article_title?: string
   paste_id?: string
   judgement_reason?: string
+  judgement_revoked?: number
+  judgement_added?: number
+}
+
+// 活动种类的中文标签
+const KIND_LABEL: Record<string, string> = {
+  feed: '动态',
+  article: '文章',
+  paste: '剪贴板',
+  judgement: '陶片放逐',
+}
+
+// 陶片权限位图（沿用陶片页的常量，单点维护建议后续抽 composable）
+const PERMISSION_MAP: Array<[number, string]> = [
+  [2, '进入主站'],
+  [4, '进入后台'],
+  [32768, '自由发言'],
+  [65536, '发送私信'],
+  [131072, '使用专栏'],
+  [524288, '使用图床'],
+  [4194304, '专栏志愿者'],
+]
+function describePermission(bits: number): string[] {
+  if (!bits) return []
+  const out: string[] = []
+  let remaining = bits
+  for (const [v, label] of PERMISSION_MAP) {
+    if ((bits & v) === v) {
+      out.push(label)
+      remaining &= ~v
+    }
+  }
+  if (remaining) out.push(`未知位 (${remaining})`)
+  return out
 }
 
 const { data: profile, error } = await useAsyncData(`user-${uid}`, () =>
@@ -66,6 +100,9 @@ const userBrief = computed(() => profile.value ? {
   color: profile.value.color,
   badge: profile.value.badge,
   avatar: profile.value.avatar,
+  ccf_level: profile.value.ccf_level,
+  xcpc_level: profile.value.xcpc_level,
+  is_admin: profile.value.is_admin,
 } : null)
 
 // 左侧 Tab 切换
@@ -142,12 +179,12 @@ useCopyCode(contentRef)
           <div class="section-head">
             <h2>活动</h2>
             <label class="toggle">
-              <input type="checkbox" v-model="includeFeed"> 包含犇犇
+              <input type="checkbox" v-model="includeFeed"> 包含动态
             </label>
           </div>
           <ul v-if="activity && activity.length" class="activity-list">
             <li v-for="(a, idx) in activity" :key="idx" :class="`act-${a.kind}`">
-              <span class="kind-tag">{{ a.kind }}</span>
+              <span class="kind-tag">{{ KIND_LABEL[a.kind] || a.kind }}</span>
               <span class="time">{{ smart(a.time) }}</span>
               <template v-if="a.kind === 'feed'">
                 <div class="lg-content" v-html="feedHtml(a.feed_content || '')" />
@@ -159,7 +196,45 @@ useCopyCode(contentRef)
                 <NuxtLink :to="`/paste/${a.paste_id}`">剪贴板 {{ a.paste_id }}</NuxtLink>
               </template>
               <template v-else-if="a.kind === 'judgement'">
-                <span class="judgement-reason">{{ a.judgement_reason }}</span>
+                <div class="judgement-card">
+                  <header class="head">
+                    <span
+                      class="action-tag"
+                      :class="(a.judgement_revoked ?? 0) > 0 ? 'revoked' : 'added'"
+                    >
+                      <template v-if="(a.judgement_revoked ?? 0) > 0 && (a.judgement_added ?? 0) === 0">
+                        撤销权限
+                      </template>
+                      <template v-else-if="(a.judgement_added ?? 0) > 0 && (a.judgement_revoked ?? 0) === 0">
+                        授予权限
+                      </template>
+                      <template v-else>
+                        权限变更
+                      </template>
+                    </span>
+                  </header>
+
+                  <div v-if="describePermission(a.judgement_revoked ?? 0).length" class="perm-row">
+                    <span class="perm-label revoked">● 撤销</span>
+                    <span
+                      v-for="p in describePermission(a.judgement_revoked ?? 0)"
+                      :key="`r-${idx}-${p}`"
+                      class="perm-chip"
+                    >{{ p }}</span>
+                    <span class="perm-suffix">权限</span>
+                  </div>
+                  <div v-if="describePermission(a.judgement_added ?? 0).length" class="perm-row">
+                    <span class="perm-label added">● 授予</span>
+                    <span
+                      v-for="p in describePermission(a.judgement_added ?? 0)"
+                      :key="`a-${idx}-${p}`"
+                      class="perm-chip"
+                    >{{ p }}</span>
+                    <span class="perm-suffix">权限</span>
+                  </div>
+
+                  <div class="reason">{{ a.judgement_reason }}</div>
+                </div>
               </template>
             </li>
           </ul>
@@ -362,6 +437,54 @@ useCopyCode(contentRef)
 .hidden-name {
   color: var(--text-muted);
   font-style: italic;
+}
+
+/* 陶片放逐迷你卡片（沿用陶片页样式，但不带头像名字） */
+.judgement-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+.judgement-card .head {
+  display: flex;
+  align-items: center;
+}
+.judgement-card .action-tag {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 4px;
+}
+.judgement-card .action-tag.revoked { color: var(--lg-red); }
+.judgement-card .action-tag.added { color: var(--lg-green); }
+.judgement-card .perm-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  padding-left: 8px;
+}
+.judgement-card .perm-label { font-weight: 500; }
+.judgement-card .perm-label.revoked { color: var(--lg-red); }
+.judgement-card .perm-label.added { color: var(--lg-green); }
+.judgement-card .perm-chip {
+  background: var(--hover);
+  border: 1px solid var(--border);
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.judgement-card .perm-suffix {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.judgement-card .reason {
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  color: var(--text);
+  font-size: 14px;
 }
 .empty {
   color: var(--text-muted);

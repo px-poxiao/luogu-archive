@@ -91,14 +91,9 @@ class FetchResult:
 def _detect_blocked(status: int, body: str) -> bool:
     """把服务器返回识别为"节点级被拦"信号 —— 触发熔断时调用。
 
-    重要：只把"我们被洛谷整体拦截"识别为 blocked。
-    单个目标用户/页面被洛谷 403（封号、锁主页、隐私设置等）**不算**节点被拦。
-    误判会导致一个封号用户拖瘫全站匿名爬虫 5 分钟（节点冷却期）。
-
-    判别规则：
-      - 429（频率限制）：明确节点级，必拦
-      - 403 + body 含 Cloudflare / 通用 nginx forbidden 标志：节点级
-      - 其他 403：当成内容级（404 类）处理，不熔断
+    保守判断：默认所有 403 都不熔断（视作目标级问题）。
+    只有出现明确的 Cloudflare / nginx 拦截标志，或 429 频率限制，才认为是节点级。
+    连续 403 的"是不是被整体 ban"由调用方再做一次自检（见 _confirm_blocked_via_probe）。
     """
     if status == 429:
         return True
@@ -108,7 +103,7 @@ def _detect_blocked(status: int, body: str) -> bool:
             "cloudflare",
             "attention required",
             "checking your browser",
-            "<title>403 forbidden</title>",  # nginx 默认 403 页
+            "<title>403 forbidden</title>",
             "请求过于频繁",
             "ip 地址不在白名单",
         )
@@ -117,24 +112,62 @@ def _detect_blocked(status: int, body: str) -> bool:
     return False
 
 
-def _detect_account_invalid(status: int, body: str, cookies_present: bool) -> bool:
-    """Cookie 账号失效的特征：
+# 节点级"连续 403 计数"key（短窗口）
+def _consecutive_4xx_key(node_id: str) -> str:
+    return f"crawler:node:{node_id}:cons_4xx"
 
-    - 401 直接判失效
-    - 403 + body 含"用户尚未登录"
-    - 403 + 我们带了 cookie 请求（理论上不该 403）+ body 是 API JSON 错误（短）
-      （洛谷 API 401 风格：返回 403 + JSON 错误体；body 长度 < 1KB）
+
+# 节点连续 4xx 阈值（这么多次后做一次自检确认是不是被全站拦了）
+_CONSECUTIVE_4XX_THRESHOLD = 8
+# 计数器窗口（秒）：在这个窗口内累计达到阈值才算
+_CONSECUTIVE_4XX_WINDOW = 120
+
+
+async def _confirm_blocked_via_probe(node, redis: Redis) -> bool:
+    """节点级自检：访问一个稳定页面（uid=1 的用户主页是网站创始人 chen_zhe，
+    永远存在、永远公开），如果连这个都返 4xx，说明真的被全站拦了。
+
+    返回 True = 真被拦，应触发熔断
+    返回 False = 探针通过，前面那些 403 是目标级问题，不熔断
+    """
+    probe_url = "https://www.luogu.com.cn/user/1"
+    headers = _build_default_headers(node)
+    headers["Accept"] = "text/html,application/xhtml+xml"
+    client = get_http_client()
+    try:
+        r = await client.get(probe_url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            log.info("crawler.probe_ok", node_id=node.node_id, url=probe_url)
+            return False
+        log.warning(
+            "crawler.probe_failed",
+            node_id=node.node_id,
+            url=probe_url,
+            status=r.status_code,
+        )
+        return True
+    except Exception as e:
+        log.warning("crawler.probe_error", node_id=node.node_id, error=str(e))
+        # 探针失败不能误熔断（可能是探针自己网络抖了）
+        return False
+
+
+def _detect_account_invalid(status: int, body: str, cookies_present: bool) -> bool:
+    """Cookie 账号失效的特征（只有这种情况才禁用账号）：
+
+    - 401 + 带了 cookie：肯定是 cookie 失效（匿名 401 是节点级别）
+    - 403 + 带了 cookie + body 含我方失败标志（"用户尚未登录"）
+
+    其他 403（包括 JSON 错误体、Cloudflare 拦截等）一律不算账号失效。
+    我们之前犯过的错：把"对方用户被禁言"的 403 也判成 cookie 失效，
+    结果误禁了完全好的账号。
     """
     if not cookies_present:
-        return False  # 匿名请求的 401/403 不算账号失效，是节点级问题
+        return False
     if status == 401:
         return True
-    if status == 403:
-        if "用户尚未登录" in body:
-            return True
-        # 短 body + JSON 关键字 = 多半是 API 鉴权失败而非 Cloudflare 拦截
-        if len(body) < 1024 and (body.lstrip().startswith("{") or "errorMessage" in body):
-            return True
+    if status == 403 and "用户尚未登录" in body:
+        return True
     return False
 
 
@@ -173,7 +206,12 @@ async def _do_request(
     accept_json: bool = False,
     parse: Literal["html", "json", "auto"] = "auto",
 ) -> FetchResult:
-    """核心请求函数。所有上层 fetch_* 都包它。"""
+    """核心请求函数。所有上层 fetch_* 都包它。
+
+    cookies 参数路径下，使用一个**临时**的 httpx client（不共用全局 _http_client），
+    避免长期进程里匿名请求积累的 Cloudflare cookie 与显式传入的 cookie 冲突
+    导致 403。匿名路径继续使用共享 client + 连接池。
+    """
     await _wait_for_slot(node, redis)
 
     merged_headers = _build_default_headers(node)
@@ -184,17 +222,33 @@ async def _do_request(
     if headers:
         merged_headers.update(headers)
 
-    client = get_http_client()
+    use_isolated_client = cookies is not None
     start = time.monotonic()
     try:
-        resp = await client.request(
-            method,
-            url,
-            params=params,
-            headers=merged_headers,
-            cookies=cookies,
-            json=json_body,
-        )
+        if use_isolated_client:
+            # 一次性 client，每次请求干净的 cookie jar，不被旧 __cf_bm 污染
+            async with httpx.AsyncClient(
+                http2=True,
+                timeout=httpx.Timeout(settings.CRAWLER_REQUEST_TIMEOUT_SEC),
+                follow_redirects=True,
+            ) as isolated:
+                resp = await isolated.request(
+                    method,
+                    url,
+                    params=params,
+                    headers=merged_headers,
+                    cookies=cookies,
+                    json=json_body,
+                )
+        else:
+            resp = await get_http_client().request(
+                method,
+                url,
+                params=params,
+                headers=merged_headers,
+                cookies=cookies,
+                json=json_body,
+            )
     except httpx.TimeoutException as e:
         raise CrawlerTimeoutError(f"请求超时: {url}") from e
     except httpx.HTTPError as e:
@@ -205,20 +259,59 @@ async def _do_request(
     body = resp.text
     ct = resp.headers.get("content-type", "")
 
+    # 调试：cookie 路径下的 4xx 把发出去的 cookie key 打出来（不打值），
+    # 帮排查"cookie 实际是不是传出去了"
+    if cookies and status >= 400:
+        sent_cookie_keys = sorted(cookies.keys()) if cookies else []
+        log.warning(
+            "fetch.authed_4xx",
+            url=str(resp.url),
+            status=status,
+            sent_cookie_keys=sent_cookie_keys,
+            req_cookie_header_present="cookie" in {k.lower() for k in resp.request.headers.keys()},
+            body_head=body[:300],
+        )
+
     # 识别异常
     if _detect_account_invalid(status, body, cookies_present=cookies is not None):
         raise CrawlerAccountInvalid(f"Cookie 账号无效：{url}")
     if _detect_blocked(status, body):
+        # 明确的 Cloudflare / 频率限制 → 直接熔断，不需要自检
         await node.trip_breaker(redis, reason=f"status={status}")
         raise CrawlerBlockedError(f"被目标站点拦截: status={status} url={url}")
 
-    # 404 / 内容级 403（用户被封号/隐私页/不存在）：不熔断、不重试
+    # 404 / 内容级 403（用户被封号/禁言/隐私页/不存在）：不熔断、不重试。
+    # 但如果短窗口内累计太多 4xx，做一次自检确认 IP 是不是真被全站拦了
     if status == 404 or status == 403:
+        if status == 403:
+            cnt_key = _consecutive_4xx_key(node.node_id)
+            cnt = await redis.incr(cnt_key)
+            if cnt == 1:
+                await redis.expire(cnt_key, _CONSECUTIVE_4XX_WINDOW)
+            if cnt >= _CONSECUTIVE_4XX_THRESHOLD:
+                # 清掉计数，避免下一次又触发自检
+                await redis.delete(cnt_key)
+                if await _confirm_blocked_via_probe(node, redis):
+                    await node.trip_breaker(redis, reason=f"probe_failed after {cnt} consecutive 403s")
+                    raise CrawlerBlockedError(f"探针失败：节点 {node.node_id} 似乎被全站拦截")
+                # 探针通过：之前的 403 都是目标级问题，没事
+                log.info(
+                    "crawler.probe_passed",
+                    node_id=node.node_id,
+                    consecutive_403=cnt,
+                )
         raise CrawlerNotFound(f"内容不可访问: status={status} url={url}")
 
     # 其他 4xx/5xx 当作可重试错误
     if status >= 400:
         raise CrawlerError(f"HTTP {status}: {url} body(前200)={body[:200]}")
+
+    # 200 时清掉连续 4xx 计数（一切正常）
+    if status == 200:
+        try:
+            await redis.delete(_consecutive_4xx_key(node.node_id))
+        except Exception:
+            pass
 
     # 解析
     data: dict[str, Any] | None = None
@@ -315,17 +408,13 @@ def _resolve_url(path_or_url: str) -> str:
     """拼完整 URL。若已是 http:// / https:// 则直接返回。
 
     按内容类型分派域名：
-    - 走主站 www.luogu.com.cn 的路径（更稳定、陶片/题目/犇犇）：
-        /judgement, /problem/..., /api/feed/...
-    - 其他路径（文章、剪贴板、用户主页、入口发现）走 CRAWLER_BASE_URL（默认海外镜像）。
-
-    目的：海外镜像对某些 API 会 503 或返回 HTML，这些特定内容强制走主站。
+    - 仅 /judgement 和 /problem 强制走主站 www.luogu.com.cn
+    - 其他路径（含 /api/feed 犇犇接口）走 CRAWLER_BASE_URL（默认海外镜像）
     """
     if path_or_url.startswith(("http://", "https://")):
         return path_or_url
     path = path_or_url if path_or_url.startswith("/") else f"/{path_or_url}"
-    # 主站强制路径（最稳定）
-    cn_prefixes = ("/judgement", "/problem", "/api/feed")
+    cn_prefixes = ("/judgement", "/problem")
     if any(path.startswith(p) for p in cn_prefixes):
         base = "https://www.luogu.com.cn"
     else:

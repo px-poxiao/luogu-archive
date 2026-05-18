@@ -44,6 +44,12 @@ class _UserBrief(BaseModel):
     color: str
     badge: str | None
     avatar: str | None
+    # 钩子（OI 认证）等级：0-2 不显示，3-5 绿，6-7 蓝，8+ 金
+    ccf_level: int = 0
+    # 气球（XCPC 认证）等级：0-2 不显示，3-5 绿，6-7 蓝，8+ 金（与钩子规则相同）
+    xcpc_level: int = 0
+    # 是否管理员（决定 badge 是否当作管理员标识渲染）
+    is_admin: bool = False
 
 
 class ArticleDetail(BaseModel):
@@ -105,6 +111,9 @@ async def _user_brief(session: AsyncSession, uid: int | None) -> _UserBrief | No
         color=u.color.value,
         badge=u.badge,
         avatar=u.avatar,
+        ccf_level=u.ccf_level or 0,
+        xcpc_level=u.xcpc_level or 0,
+        is_admin=u.is_admin,
     )
 
 

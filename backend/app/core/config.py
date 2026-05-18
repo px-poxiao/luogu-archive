@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     CRAWLER_FALLBACK_BASE_URL: str = "https://luogu.com"
     CRAWLER_USER_AGENT: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/79.0.3945.130 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
     CRAWLER_CONTACT_EMAIL: str = "archive-bot@example.com"
     CRAWLER_ANON_RATE_PER_SEC: float = 0.33

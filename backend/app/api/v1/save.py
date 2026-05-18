@@ -166,9 +166,20 @@ async def _try_merge_or_enqueue(
             # ident 任意值都忽略
             msg = crawl_judgement.send("manual")
         elif content_type == "problem":
-            # 列表页点保存：ident 是 "list" → 扫第 1 页；否则数字当页码
-            page = 1 if ident == "list" else int(ident)
-            msg = crawl_problem_list_page.send(page, "manual")
+            # 列表页点保存：默认 ident="list" → 扫前 N 页（发现新题 + 更新难度）
+            #               ident=数字 → 只扫这一页（admin 内部 / 调试用）
+            if ident == "list":
+                # 错峰扫前 30 页（覆盖 1500 道）。每页 10 秒间隔避免节点限流。
+                # 各 send 都返回 msg；这里取第一个 msg 当返回的 task_id。
+                msg = crawl_problem_list_page.send(1, "manual")
+                for page in range(2, 31):
+                    crawl_problem_list_page.send_with_options(
+                        args=(page, "manual"),
+                        delay=(page - 1) * 10_000,
+                    )
+            else:
+                page = int(ident)
+                msg = crawl_problem_list_page.send(page, "manual")
         elif content_type == "problem_solution":
             msg = crawl_problem_solution.send(ident, "manual")
         else:

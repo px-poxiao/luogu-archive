@@ -112,8 +112,7 @@ function formatTime(t: string): string {
               :data-color="u.color"
             >{{ (u.name || '?').charAt(0).toUpperCase() }}</div>
             <div class="name-wrap">
-              <span class="lg-name" :data-color="u.color">{{ u.name }}</span>
-              <span v-if="u.badge" class="lg-badge" :data-color="u.color">{{ u.badge }}</span>
+              <LuoguUserName :user="u" show-badge no-link />
             </div>
           </NuxtLink>
         </div>

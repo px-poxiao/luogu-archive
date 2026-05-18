@@ -452,13 +452,33 @@ async def crawler_stats(
     by_type = {r[0]: int(r[1]) for r in (await db.execute(q)).all()}
 
     # 队列长度（Redis）
+    # Dramatiq 不同版本下 redis broker 的 key 类型可能是 list / hash / zset。
+    # 用 TYPE 探测后再调对应的查长度命令；探测失败统一记 0，避免炸接口。
     redis = get_redis()
     queues = ["crawler.hi", "crawler.mid", "crawler.low", "crawler.feed"]
     queue_lens = {}
     for q_name in queues:
-        # Dramatiq Redis broker 用 list 存队列，key 格式 dramatiq:<queue>.msgs
-        ln = await redis.llen(f"dramatiq:{q_name}.msgs")
-        queue_lens[q_name] = int(ln or 0)
+        ln = 0
+        for key in (f"dramatiq:{q_name}.msgs", f"dramatiq:{q_name}"):
+            try:
+                t = (await redis.type(key))
+                # redis-py 返回 bytes 或 str，统一成 str
+                if isinstance(t, bytes):
+                    t = t.decode()
+                if t == "list":
+                    ln = int(await redis.llen(key))
+                elif t == "hash":
+                    ln = int(await redis.hlen(key))
+                elif t == "zset":
+                    ln = int(await redis.zcard(key))
+                elif t == "stream":
+                    ln = int(await redis.xlen(key))
+                # t == "none" 时该 key 不存在，跳过
+            except Exception:
+                continue
+            if ln:
+                break
+        queue_lens[q_name] = ln
 
     return {
         "window_hours": 24,

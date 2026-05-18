@@ -78,6 +78,8 @@ class ActivityItem(BaseModel):
     article_title: str | None = None
     paste_id: str | None = None
     judgement_reason: str | None = None
+    judgement_revoked: int | None = None
+    judgement_added: int | None = None
 
 
 # ============================================================
@@ -232,6 +234,8 @@ async def user_activity(
                 kind="judgement",
                 time=j.time,
                 judgement_reason=j.reason,
+                judgement_revoked=j.revoked_permission,
+                judgement_added=j.added_permission,
             )
         )
 
