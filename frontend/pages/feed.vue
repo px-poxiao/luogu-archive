@@ -71,6 +71,7 @@ onMounted(() => loadMore())
             <span class="time">{{ smart(f.time) }}</span>
           </header>
           <div class="lg-content content" v-html="feedHtml(f.content_md)" />
+          <footer class="feed-id">#{{ f.id }}</footer>
         </div>
       </li>
     </ul>
@@ -153,6 +154,13 @@ onMounted(() => loadMore())
   font-size: 15px;
   line-height: 1.65;
   word-wrap: break-word;
+}
+.feed-id {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  opacity: 0.55;
 }
 
 .loader {

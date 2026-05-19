@@ -49,6 +49,8 @@ body {
   font-size: 16px;
   line-height: 1.6;
   transition: background 0.2s, color 0.2s;
+  /* 兜底防止子布局意外溢出导致整页横向滚动条 */
+  overflow-x: hidden;
 }
 
 a {

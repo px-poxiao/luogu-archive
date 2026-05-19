@@ -188,6 +188,7 @@ useCopyCode(contentRef)
               <span class="time">{{ smart(a.time) }}</span>
               <template v-if="a.kind === 'feed'">
                 <div class="lg-content" v-html="feedHtml(a.feed_content || '')" />
+                <div class="feed-id">#{{ a.feed_id }}</div>
               </template>
               <template v-else-if="a.kind === 'article'">
                 <NuxtLink :to="`/article/${a.article_id}`">{{ a.article_title || a.article_id }}</NuxtLink>
@@ -276,19 +277,12 @@ useCopyCode(contentRef)
 </template>
 
 <style scoped>
-/* 脱离全局 .container 的 1200px 居中限制，做真·全宽两栏 */
 .user-page {
-  margin-left: calc(50% - 50vw + 56px);
-  margin-right: calc(50% - 50vw);
-  padding: 0 32px;
+  /* 跟其他页面一样住在 main-area 的 1200max 居中容器里，
+     左右距离由父 .main-area 的 padding 统一控制，避免负 margin trick 引发的 28px 错位。 */
+  margin: 0;
+  padding: 0;
   box-sizing: border-box;
-}
-@media (max-width: 768px) {
-  .user-page {
-    margin-left: 0;
-    margin-right: 0;
-    padding: 0;
-  }
 }
 
 .two-col {
@@ -390,8 +384,6 @@ useCopyCode(contentRef)
 
 .content {
   min-width: 0;
-  max-width: 820px;
-  margin: 0 auto;
   width: 100%;
 }
 .content h2 { margin-top: 0; }
@@ -437,6 +429,13 @@ useCopyCode(contentRef)
 .hidden-name {
   color: var(--text-muted);
   font-style: italic;
+}
+.feed-id {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  opacity: 0.55;
 }
 
 /* 陶片放逐迷你卡片（沿用陶片页样式，但不带头像名字） */

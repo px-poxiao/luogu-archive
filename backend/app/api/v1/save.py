@@ -139,6 +139,21 @@ async def _try_merge_or_enqueue(
     )
 
     redis = get_redis()
+
+    # ---- user 类型兜底：独立派一次 crawl_user_feeds ----
+    # crawl_user 自带 task_lock + cascade，链路里任何一环（passive 抢锁 / fetch
+    # 失败 / cascade 静默吞错）都可能让犇犇任务丢失。这里在 dedupe 之前**绕开**
+    # 整条链直接派 feed，60s NX 去重防 spam（feed 任务自身也还有 task_lock）。
+    if content_type == "user":
+        feed_extra_key = f"save:feed_extra_dedup:user:{ident}"
+        if await redis.set(feed_extra_key, "1", ex=60, nx=True):
+            try:
+                crawl_user_feeds.send(int(ident), 1, "manual_save")
+            except Exception as e:
+                log.warning(
+                    "save.feed_extra_dispatch_failed", uid=ident, error=str(e)
+                )
+
     key = _pending_key(content_type, ident)
 
     # 尝试读旧 task_id

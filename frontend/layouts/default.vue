@@ -13,6 +13,16 @@ async function logout() {
   navigateTo('/')
 }
 
+// 运行天数：以 2026-05-01 为元年。客户端 + 服务端都按 UTC 算保证 SSR 一致。
+const runDays = computed(() => {
+  const start = Date.UTC(2026, 4, 1)
+  const today = new Date()
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+  return Math.max(1, Math.floor((todayUtc - start) / 86400000) + 1)
+})
+
+const QQ_GROUP_URL = 'https://qun.qq.com/universal-share/share?ac=1&authKey=DNGeuTd%2FO6sVz5sPqBBv0pZmNZYnf4lg6AL4oeWyXyB3Cb2siArgWUMmaJVKrg6H&busi_data=eyJncm91cENvZGUiOiIxMDU5MzYxNjY4IiwidG9rZW4iOiJHVDk4VCtIOXFaOFdwVGlzR1lIYnVFRUVXZWplRE03a3Z1amNldWdramF5bGl2aDRkTmdmUlkrQWIrZ0xGd2FBIiwidWluIjoiMjQ3NjY3NDU5In0%3D&data=rP1H0BOgnlMi849TXTLTjawGLdZpsX8le6DR_jykWjKBi0elXkJVFrH9UuBejb5fMhL9DzrOEdOizmp6S_Knqw&svctype=4&tempid=h5_group_info'
+
 // 左侧导航项。icon 为内联 SVG path（24x24 viewBox）
 const navItems = [
   {
@@ -169,9 +179,27 @@ const navItems = [
       </main>
 
       <footer class="site-footer">
-        <div class="container">
-          本站为第三方存档，与洛谷官方无关，所有内容版权归原作者。
-          <NuxtLink to="/takedown">侵权投诉 / 内容删除</NuxtLink>
+        <div class="footer-inner">
+          <div class="footer-col">
+            <div class="footer-line">© 2026 洛谷保存站</div>
+            <div class="footer-line">已运行 {{ runDays }} 天</div>
+            <div class="footer-line">第三方存档，与洛谷官方无关，所有内容版权归原作者</div>
+          </div>
+          <div class="footer-col">
+            <div class="footer-line">
+              <a :href="QQ_GROUP_URL" target="_blank" rel="noopener noreferrer">
+                QQ 群 1059361668
+              </a>
+            </div>
+            <div class="footer-line">
+              <a href="https://github.com/px-poxiao/luogu-archive" target="_blank" rel="noopener noreferrer">
+                GitHub
+              </a>
+            </div>
+            <div class="footer-line">
+              <NuxtLink to="/takedown">侵权投诉 / 内容删除</NuxtLink>
+            </div>
+          </div>
         </div>
       </footer>
     </div>
@@ -181,7 +209,6 @@ const navItems = [
 <style scoped>
 .layout-root {
   min-height: 100vh;
-  display: flex;
 }
 
 /* 左侧悬停展开导航栏 */
@@ -271,12 +298,11 @@ const navItems = [
 
 /* 主体 */
 .layout-body {
-  flex: 1;
-  min-width: 0;
   margin-left: 56px;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  min-width: 0;
 }
 .main-area {
   flex: 1;
@@ -285,10 +311,35 @@ const navItems = [
 .site-footer {
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding: 16px 0;
+  padding: 14px 0;
   font-size: 14px;
   color: var(--text-muted);
-  text-align: center;
+  /* 横跨整个 viewport（拉出 layout-body 的 margin-left:56），
+     左 56 段被 fixed 边栏盖在上面 —— 视觉上 footer 下"穿过"边栏，
+     左右各 53px padding 对称（≈ 2 倍行高）。 */
+  margin-left: -56px;
+}
+.footer-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  /* 左 padding = 边栏宽 56 + 53（2 倍行高）；右 53。视觉上左栏离边栏右沿 53px。 */
+  padding: 0 53px 0 109px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.footer-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  line-height: 1.9;
+}
+.footer-line a {
+  color: var(--text-muted);
+}
+.footer-line a:hover {
+  color: var(--link);
 }
 
 /* 移动端：导航栏直接固定在底部（老做法，简单粗暴） */

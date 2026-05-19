@@ -59,6 +59,22 @@ async def _crawl_inner(uid: int, page: int, *, trigger: str) -> None:
 
     async with lease_account() as acc:
         if acc is None:
+            # 池子枯竭：所有账号 QPH 已用满 / 全被禁用 / 全被锁。
+            # 写一条 failed 审计便于在管理后台和 crawl_task 表里看到，
+            # 否则任务直接消失，运维只能去 worker.log 翻 qph_exceeded。
+            task_id = await record_task_start(
+                "feed",
+                url_path,
+                trigger=trigger_from(trigger),
+                node_id=node.node_id,
+                account_id=None,
+            )
+            await record_task_done(
+                task_id,
+                status=CrawlTaskStatus.failed,
+                error_msg="no_account_available: 所有 Cookie 账号都不可用（QPH 用满 / 被禁用 / 锁占用）",
+                duration_ms=0,
+            )
             log.warning("crawl_feed.no_account_available", uid=uid)
             raise CrawlerError("没有可用的爬取账号")
 

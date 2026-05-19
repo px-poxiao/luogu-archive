@@ -60,26 +60,38 @@ _VIOLATION_NAME_PATS: list[re.Pattern[str]] = [
 ]
 
 
-async def _enqueue_user_cascades(uid: int) -> None:
-    """用户保存按钮 / 首次入库时附带派发：
-       1) 当前用户犇犇第一页爬取（带 Cookie）
-       2) 库里已记录的、属于该用户的全部文章 + 剪贴板，错峰派发
-    """
-    from app.models.luogu_content import Article, Paste
-    from app.tasks.actors.crawl import (
-        crawl_article,
-        crawl_paste,
-        crawl_user_feeds,
-    )
+async def _enqueue_feed_cascade(uid: int, *, trigger: str) -> None:
+    """派一次该用户犇犇第一页。
 
-    # 限速参数：避免一次性投出几十条任务把节点打 403/429 → 熔断
-    PER_TASK_DELAY_MS = 2000      # 任务之间相隔 2 秒
-    MAX_TASKS_PER_TYPE = 30       # 文章 + 剪贴板各最多派 30 条；超量留给下一次保存按钮
+    passive 触发会经过 10 分钟 NX dedup（多次访问同一用户不会重复派），
+    manual / first_time / cascaded 触发不去重，立即派。
+    """
+    from app.tasks.actors.crawl import crawl_user_feeds
+
+    if trigger == "passive":
+        redis = get_redis()
+        dedup_key = f"crawl_user.feed_passive_dedup:{uid}"
+        # 10 分钟 NX：访问触发的犇犇拉取，10 分钟内同一用户最多派一次
+        if not await redis.set(dedup_key, "1", ex=600, nx=True):
+            log.info("crawl_user.feed_passive_deduped", uid=uid)
+            return
 
     try:
-        crawl_user_feeds.send(uid, 1, "cascaded_from_user")
+        crawl_user_feeds.send(uid, 1, f"cascaded_from_user:{trigger}")
     except Exception as e:
         log.warning("crawl_user.cascade_feed_failed", uid=uid, error=str(e))
+
+
+async def _enqueue_articles_pastes_cascade(uid: int) -> None:
+    """派该用户库里已收录的文章 + 剪贴板（错峰）。
+
+    仅在 manual 或首次入库时调用，避免 passive 反复刷新把节点打爆。
+    """
+    from app.models.luogu_content import Article, Paste
+    from app.tasks.actors.crawl import crawl_article, crawl_paste
+
+    PER_TASK_DELAY_MS = 2000
+    MAX_TASKS_PER_TYPE = 30
 
     try:
         async with db_session() as session:
@@ -93,7 +105,6 @@ async def _enqueue_user_cascades(uid: int) -> None:
             )).scalars().all()
         for i, aid in enumerate(arts):
             try:
-                # delay 单位毫秒；让任务在未来错峰执行
                 crawl_article.send_with_options(
                     args=(aid, "cascaded_from_user"),
                     delay=i * PER_TASK_DELAY_MS,
@@ -104,7 +115,6 @@ async def _enqueue_user_cascades(uid: int) -> None:
             try:
                 crawl_paste.send_with_options(
                     args=(pid, "cascaded_from_user"),
-                    # 把剪贴板排在文章之后，整体错峰串行
                     delay=(len(arts) + i) * PER_TASK_DELAY_MS,
                 )
             except Exception as e:
@@ -118,6 +128,12 @@ async def _enqueue_user_cascades(uid: int) -> None:
         )
     except Exception as e:
         log.warning("crawl_user.cascade_query_failed", uid=uid, error=str(e))
+
+
+async def _enqueue_user_cascades(uid: int) -> None:
+    """兼容旧调用入口：manual 触发的全量级联（feed + 文章 + 剪贴板）。"""
+    await _enqueue_feed_cascade(uid, trigger="manual")
+    await _enqueue_articles_pastes_cascade(uid)
 
 
 def _is_violation_name(name: str) -> bool:
@@ -145,6 +161,11 @@ async def crawl_one(uid: int, *, trigger: str = "scheduled") -> None:
     async with task_lock("user", str(uid)) as got:
         if not got:
             log.info("crawl_user.skip_locked", uid=uid)
+            # 即便主任务被另一个 worker 占着，manual 触发的 cascade 也得跑。
+            # 否则用户点"立即更新"时，正好撞上 passive 刷新，犇犇/文章/剪贴板
+            # 的级联派发就被静默吞掉，前端一直看不到更新。
+            if trigger == "manual":
+                await _enqueue_user_cascades(uid)
             return
         await _crawl_one_inner(uid, trigger=trigger)
 
@@ -183,12 +204,15 @@ async def _crawl_one_inner(uid: int, *, trigger: str) -> None:
             duration_ms=dur,
         )
 
-        # 级联派发 feed/article/paste 的两个时机：
-        #   1. trigger=manual：用户显式点保存
-        #   2. was_first_time：陌生用户首次入库（passive 触发也算）
-        # 已收录用户的纯定时/被动刷新不级联，保护 cookie 池。
+        # 级联派发策略：
+        # - 犇犇：所有触发都派一次（passive 加 10min NX dedup 防止刷新洪水），
+        #   因为 scheduler 的分层轮询只覆盖 last_active_feed_at != NULL 的用户，
+        #   从没有 feed 入库过的用户永远轮询不到 → 必须靠访问触发兜底。
+        # - 文章/剪贴板：仅 manual 或首次入库派，避免 passive 把节点打爆
+        #   （文章/剪贴板还有 discovery 列表页轮询兜底）
+        await _enqueue_feed_cascade(uid, trigger=trigger)
         if trigger == "manual" or was_first_time:
-            await _enqueue_user_cascades(uid)
+            await _enqueue_articles_pastes_cascade(uid)
     except Exception as e:
         dur = int((_t.monotonic() - start) * 1000)
         await record_task_done(

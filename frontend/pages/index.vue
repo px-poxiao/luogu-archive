@@ -1,11 +1,36 @@
 <script setup lang="ts">
 definePageMeta({ layout: 'default' })
 
-const inputId = ref('')
+type JumpType = 'article' | 'paste' | 'user' | 'problem'
 
-function go(type: string) {
+const inputId = ref('')
+// 上次选择的跳转类型，写到 localStorage，下次回到首页保留选择
+const selectedType = ref<JumpType>('article')
+
+onMounted(() => {
+  const saved = localStorage.getItem('quick-jump-type') as JumpType | null
+  if (saved && ['article', 'paste', 'user', 'problem'].includes(saved)) {
+    selectedType.value = saved
+  }
+})
+
+function setType(t: JumpType) {
+  selectedType.value = t
+  if (process.client) localStorage.setItem('quick-jump-type', t)
+}
+
+function go(type?: JumpType) {
+  const t = type || selectedType.value
   if (!inputId.value.trim()) return
-  navigateTo(`/${type}/${encodeURIComponent(inputId.value.trim())}`)
+  setType(t)
+  navigateTo(`/${t}/${encodeURIComponent(inputId.value.trim())}`)
+}
+
+const TYPE_LABELS: Record<JumpType, string> = {
+  article: '文章',
+  paste: '剪贴板',
+  user: '用户',
+  problem: '题目',
 }
 </script>
 
@@ -21,16 +46,19 @@ function go(type: string) {
       <div class="input-group">
         <input
           v-model="inputId"
-          placeholder="输入文章 ID / 剪贴板 ID / 用户 UID / 题号"
-          @keydown.enter="go('article')"
+          :placeholder="`输入 ${TYPE_LABELS[selectedType]} ID（回车跳转）`"
+          @keydown.enter="go()"
         >
       </div>
       <div class="btn-group">
-        <button @click="go('article')">文章</button>
-        <button @click="go('paste')">剪贴板</button>
-        <button @click="go('user')">用户</button>
-        <button @click="go('problem')">题目</button>
+        <button
+          v-for="t in (['article', 'paste', 'user', 'problem'] as JumpType[])"
+          :key="t"
+          :class="{ active: selectedType === t }"
+          @click="go(t)"
+        >{{ TYPE_LABELS[t] }}</button>
       </div>
+      <p class="hint">点击类型按钮直接跳转；输入框回车跳到当前选中类型（{{ TYPE_LABELS[selectedType] }}）。</p>
     </section>
 
     <section class="quick-links">
@@ -77,11 +105,13 @@ function go(type: string) {
   border-radius: 6px;
   background: var(--surface);
   color: var(--text);
+  box-sizing: border-box;
 }
 .btn-group {
   display: flex;
   gap: 8px;
   margin-top: 10px;
+  flex-wrap: wrap;
 }
 .btn-group button {
   padding: 8px 16px;
@@ -94,6 +124,16 @@ function go(type: string) {
 .btn-group button:hover {
   border-color: var(--link);
   color: var(--link);
+}
+.btn-group button.active {
+  border-color: var(--link);
+  color: var(--link);
+  background: color-mix(in srgb, var(--link) 8%, transparent);
+}
+.hint {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 .grid {
   display: grid;

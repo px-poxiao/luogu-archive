@@ -249,6 +249,20 @@ async def _crawl_solution_inner(pid: str, *, trigger: str) -> None:
 
     async with lease_account() as acc:
         if acc is None:
+            task_id = await record_task_start(
+                "problem_solution",
+                url_path,
+                trigger=trigger_from(trigger),
+                node_id=node.node_id,
+                account_id=None,
+            )
+            await record_task_done(
+                task_id,
+                status=CrawlTaskStatus.failed,
+                error_msg="no_account_available: 所有 Cookie 账号都不可用（QPH 用满 / 被禁用 / 锁占用）",
+                duration_ms=0,
+            )
+            log.warning("crawl_problem_solution.no_account_available", pid=pid)
             raise CrawlerError("题解开放检测需要 Cookie 账号，但当前无可用账号")
 
         task_id = await record_task_start(
