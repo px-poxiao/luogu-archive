@@ -5,7 +5,6 @@
 - 解密 Cookie 字段（Fernet 加密存储）
 - 轮换分配（最久未用优先）
 - 单账号串行化（通过分布式锁，保号）
-- QPH 上限（每账号每小时 ≤ 300）
 - 异常即禁用：403/429/isBanned → 禁用 + 写日志
 - 心跳自检：30 分钟扫一次
 
@@ -21,12 +20,10 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.db import db_session
 from app.core.exceptions import CrawlerError
 from app.core.locks import DistributedLock, lock_key
 from app.core.logging import get_logger
-from app.core.ratelimit import SlidingWindowLimiter, ratelimit_key
 from app.core.redis_client import get_redis
 from app.models.admin import CrawlerAccount
 from app.models._common import utcnow
@@ -74,11 +71,9 @@ def decrypt_cookie(token: str) -> str:
 async def pick_account(session: AsyncSession) -> AccountCookies | None:
     """选取一个可用账号（最久未用优先）。
 
-    同时预扣一次 QPH 配额，超限则跳过。
+    节点级速率（CRAWLER_AUTH_RATE_PER_SEC）已经把请求频率压住了，账号级 QPH
+    没有再加一层的必要。直接拿最久未用的启用账号。
     """
-    redis = get_redis()
-    limiter = SlidingWindowLimiter(redis)
-
     q = (
         select(CrawlerAccount)
         .where(CrawlerAccount.enabled.is_(True))
@@ -90,15 +85,6 @@ async def pick_account(session: AsyncSession) -> AccountCookies | None:
     accounts = result.scalars().all()
 
     for acc in accounts:
-        qph_key = ratelimit_key("crawler_account_qph", str(acc.id))
-        ok, _count = await limiter.acquire(
-            qph_key,
-            window_sec=3600,
-            limit=settings.CRAWLER_AUTH_QPH_PER_ACCOUNT,
-        )
-        if not ok:
-            log.info("crawler_account.qph_exceeded", account_id=acc.id, label=acc.label)
-            continue
         # 更新 last_used_at
         acc.last_used_at = utcnow()
         await session.commit()

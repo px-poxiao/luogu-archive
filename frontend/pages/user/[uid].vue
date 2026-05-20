@@ -278,11 +278,23 @@ useCopyCode(contentRef)
 
 <style scoped>
 .user-page {
-  /* 跟其他页面一样住在 main-area 的 1200max 居中容器里，
-     左右距离由父 .main-area 的 padding 统一控制，避免负 margin trick 引发的 28px 错位。 */
-  margin: 0;
-  padding: 0;
+  /* 用户页要全宽两栏：sidebar 始终贴近左边栏。
+     .main-area 是 .container（max-width:1200, margin:auto, padding:28 40 56）。
+     break out 方法：宽 = layout-body 宽（100vw - 56），左偏移 = .main-area 自身距 layout-body 左边的距离。
+     .main-area 距 layout-body 左 = max(0, (100vw-56-1200)/2) + 40px(.main-area padding-left)。
+     用 calc 配合 max() 兼容窄屏。 */
+  width: calc(100vw - 56px);
+  margin-left: calc(-40px - max(0px, (100vw - 56px - 1200px) / 2));
+  margin-right: 0;
+  padding: 0 32px;
   box-sizing: border-box;
+}
+@media (max-width: 768px) {
+  .user-page {
+    width: 100%;
+    margin-left: 0;
+    padding: 0;
+  }
 }
 
 .two-col {

@@ -92,24 +92,38 @@ def _detect_blocked(status: int, body: str) -> bool:
     """把服务器返回识别为"节点级被拦"信号 —— 触发熔断时调用。
 
     保守判断：默认所有 403 都不熔断（视作目标级问题）。
-    只有出现明确的 Cloudflare / nginx 拦截标志，或 429 频率限制，才认为是节点级。
-    连续 403 的"是不是被整体 ban"由调用方再做一次自检（见 _confirm_blocked_via_probe）。
+    只有出现明确的 Cloudflare 拦截标志（强信号），才单次直接熔断。
+    其他弱信号（普通 "<title>403 Forbidden</title>" 这种，洛谷"无权限"
+    内容也会有）一律不在这里熔断 —— 改由 _CONSECUTIVE_4XX_THRESHOLD 累计
+    + 同类资源探针确认（见 _confirm_blocked_via_probe）。
     """
     if status == 429:
         return True
     if status == 403:
         b = body.lower()
-        cf_signals = (
+        # 强信号：明确的反爬拦截页，命中即熔断
+        strong_cf_signals = (
             "cloudflare",
             "attention required",
             "checking your browser",
-            "<title>403 forbidden</title>",
             "请求过于频繁",
             "ip 地址不在白名单",
         )
-        if any(s in b for s in cf_signals):
+        if any(s in b for s in strong_cf_signals):
             return True
     return False
+
+
+def _probe_url_for(failed_url: str) -> str:
+    """根据失败的请求 URL 选探针目标 —— 同类型已知公开可访问的样本。
+
+    文章接口故障最常见的就是某篇文章被设置为不公开 → 403。这种情况下应该
+    用一篇**确知公开**的文章去验证节点本身是否可用，而不是用 user/1（用户
+    主页几乎不可能 403，会假阴性）。
+    """
+    if "/article/" in failed_url:
+        return "https://www.luogu.com.cn/article/cznleq5o"
+    return "https://www.luogu.com.cn/user/1"
 
 
 # 节点级"连续 403 计数"key（短窗口）
@@ -123,14 +137,14 @@ _CONSECUTIVE_4XX_THRESHOLD = 8
 _CONSECUTIVE_4XX_WINDOW = 120
 
 
-async def _confirm_blocked_via_probe(node, redis: Redis) -> bool:
-    """节点级自检：访问一个稳定页面（uid=1 的用户主页是网站创始人 chen_zhe，
-    永远存在、永远公开），如果连这个都返 4xx，说明真的被全站拦了。
+async def _confirm_blocked_via_probe(node, redis: Redis, *, failed_url: str) -> bool:
+    """节点级自检：访问一个稳定页面（同类型已知公开样本），如果连这个都返 4xx，
+    说明真的被全站拦了。
 
     返回 True = 真被拦，应触发熔断
     返回 False = 探针通过，前面那些 403 是目标级问题，不熔断
     """
-    probe_url = "https://www.luogu.com.cn/user/1"
+    probe_url = _probe_url_for(failed_url)
     headers = _build_default_headers(node)
     headers["Accept"] = "text/html,application/xhtml+xml"
     client = get_http_client()
@@ -291,7 +305,7 @@ async def _do_request(
             if cnt >= _CONSECUTIVE_4XX_THRESHOLD:
                 # 清掉计数，避免下一次又触发自检
                 await redis.delete(cnt_key)
-                if await _confirm_blocked_via_probe(node, redis):
+                if await _confirm_blocked_via_probe(node, redis, failed_url=url):
                     await node.trip_breaker(redis, reason=f"probe_failed after {cnt} consecutive 403s")
                     raise CrawlerBlockedError(f"探针失败：节点 {node.node_id} 似乎被全站拦截")
                 # 探针通过：之前的 403 都是目标级问题，没事
