@@ -427,7 +427,11 @@ async def _check_and_record_name_violation(
 
 
 async def _sync_prizes(session: AsyncSession, uid: int, prizes: list) -> None:
-    """OI 奖项同步（只增不减，UNIQUE 拦重复）。"""
+    """OI 奖项同步（只增不减，UNIQUE 拦重复）。
+
+    注意 MySQL 在 UNIQUE 索引里 NULL 互不相等，所以 event=NULL 的行会反复
+    入库。这里把 None 规一化成 ''，再用 INSERT IGNORE，让 UNIQUE 真生效。
+    """
     from sqlalchemy.dialects.mysql import insert as mysql_insert
 
     if not prizes:
@@ -442,13 +446,12 @@ async def _sync_prizes(session: AsyncSession, uid: int, prizes: list) -> None:
                 "uid": uid,
                 "year": int(p.get("year") or 0),
                 "contest": p.get("contest") or "",
-                "event": p.get("event"),
+                "event": p.get("event") or "",
                 "prize": p.get("prize") or "",
             }
         )
     if not rows:
         return
-    # 使用 INSERT IGNORE 语义避免 UNIQUE 冲突
     stmt = mysql_insert(UserPrize).values(rows).prefix_with("IGNORE")
     await session.execute(stmt)
 

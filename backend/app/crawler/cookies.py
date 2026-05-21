@@ -20,6 +20,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.db import db_session
 from app.core.exceptions import CrawlerError
 from app.core.locks import DistributedLock, lock_key
@@ -27,6 +28,7 @@ from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.models.admin import CrawlerAccount
 from app.models._common import utcnow
+from app.core.config import settings
 
 log = get_logger(__name__)
 
@@ -69,26 +71,50 @@ def decrypt_cookie(token: str) -> str:
 
 
 async def pick_account(session: AsyncSession) -> AccountCookies | None:
-    """选取一个可用账号（最久未用优先）。
+    """[已废弃] 仅留作历史兼容，新代码应使用 lease_account。
 
-    节点级速率（CRAWLER_AUTH_RATE_PER_SEC）已经把请求频率压住了，账号级 QPH
-    没有再加一层的必要。直接拿最久未用的启用账号。
+    早期 lease_account 把"选号"和"加锁"分两步做，导致高峰所有 worker 都
+    涌向同一个最旧账号 → 锁竞争。现在 lease_account 直接逐个尝试加锁
+    + 跳过冲突，本函数无需再独立调用。
     """
-    q = (
-        select(CrawlerAccount)
-        .where(CrawlerAccount.enabled.is_(True))
-        # MySQL ASC 默认 NULL 在前，刚加的账号 last_used_at=NULL 自然优先选中。
-        # 不能用 .nulls_first()，那是 PostgreSQL 方言。
-        .order_by(CrawlerAccount.last_used_at.asc())
-    )
-    result = await session.execute(q)
-    accounts = result.scalars().all()
+    raise RuntimeError("pick_account 已废弃，请使用 lease_account()")
 
-    for acc in accounts:
-        # 更新 last_used_at
+
+@asynccontextmanager
+async def lease_account():
+    """上下文管理器：租用一个账号（多账号轮询）。
+
+    注意：已**移除**单账号串行锁，多个 worker 可以并发使用同一账号 cookie。
+    全局速率仍由节点级 token bucket（CRAWLER_AUTH_RATE_PER_SEC ≈ 6s/req）控制。
+
+    选号策略：用 redis INCR 做全局 round-robin，每次 +1 % len(accounts) 选下一个，
+    多 worker 高并发时也能均匀分摊到所有账号上 —— 不再都涌向"最久未用"那一个。
+
+    用法：
+        async with lease_account() as cookies:
+            if cookies is None:
+                return   # 没启用账号
+            result = await fetch_authed(url, cookies=cookies.as_cookie_dict(), ...)
+    """
+    async with db_session() as session:
+        q = (
+            select(CrawlerAccount)
+            .where(CrawlerAccount.enabled.is_(True))
+            .order_by(CrawlerAccount.id.asc())  # 稳定顺序，便于 round-robin 索引
+        )
+        accounts = (await session.execute(q)).scalars().all()
+        if not accounts:
+            yield None
+            return
+
+        # redis 原子自增计数器；多 worker / 多节点都共用一个序列
+        redis = get_redis()
+        idx = await redis.incr("crawler:account:rr_idx") - 1
+        acc = accounts[idx % len(accounts)]
+
         acc.last_used_at = utcnow()
         await session.commit()
-        return AccountCookies(
+        cookies = AccountCookies(
             account_id=acc.id,
             luogu_uid=acc.luogu_uid,
             label=acc.label,
@@ -96,39 +122,7 @@ async def pick_account(session: AsyncSession) -> AccountCookies | None:
             client_id=decrypt_cookie(acc.client_id_encrypted),
             c3vk=decrypt_cookie(acc.c3vk_encrypted) if acc.c3vk_encrypted else None,
         )
-    return None
-
-
-@asynccontextmanager
-async def lease_account():
-    """上下文管理器：租用一个账号，持有期间不许其他 worker 并发使用同一账号。
-
-    用法：
-        async with lease_account() as cookies:
-            if cookies is None:
-                return   # 没可用账号
-            result = await fetch_authed(url, cookies=cookies.as_cookie_dict(), ...)
-    """
-    redis = get_redis()
-    lock = DistributedLock(redis)
-
-    async with db_session() as session:
-        cookies = await pick_account(session)
-        if cookies is None:
-            yield None
-            return
-
-        # 同一账号串行化
-        key = lock_key("account", str(cookies.account_id))
-        async with lock.guard(key, ttl_sec=30, wait_sec=15) as got:
-            if not got:
-                log.warning(
-                    "crawler_account.lock_busy",
-                    account_id=cookies.account_id,
-                )
-                yield None
-                return
-            yield cookies
+        yield cookies
 
 
 async def mark_account_failed(

@@ -138,6 +138,9 @@ onMounted(() => loadMore())
 .body {
   flex: 1;
   min-width: 0;
+  /* 防止内部连续长字符串撑爆容器，强制按需断行 */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .meta {
   display: flex;
@@ -145,6 +148,11 @@ onMounted(() => loadMore())
   gap: 10px;
   margin-bottom: 6px;
   flex-wrap: wrap;
+  min-width: 0;
+}
+.meta > * {
+  /* 让 LuoguUserName / 时间等子项也允许收缩、换行 */
+  min-width: 0;
 }
 .time {
   color: var(--text-muted);
@@ -153,7 +161,13 @@ onMounted(() => loadMore())
 .content {
   font-size: 15px;
   line-height: 1.65;
-  word-wrap: break-word;
+  /* anywhere 比 break-word 更激进，能拆超长无空格 token（URL、ID 串） */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.content :deep(img) {
+  max-width: 100%;
+  height: auto;
 }
 .feed-id {
   margin-top: 8px;

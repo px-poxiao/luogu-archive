@@ -189,11 +189,14 @@ async def _wait_for_slot(
     node: CrawlerNode,
     redis: Redis,
     *,
-    max_wait_ms: int = 10_000,
+    max_wait_ms: int = 120_000,
 ) -> None:
     """在节点令牌桶里等一个令牌。
 
     若等不到（比如熔断中）→ 抛 CrawlerBlockedError。
+
+    max_wait_ms 默认 120 秒：批量任务（feed 分层轮询一次派几百条）排队时给
+    充足余量，避免出现"排队 8 秒后超时被抛弃"的伪限流。
     """
     deadline = time.monotonic() * 1000 + max_wait_ms
     while True:

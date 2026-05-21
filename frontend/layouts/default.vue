@@ -342,32 +342,6 @@ const navItems = [
   color: var(--link);
 }
 
-/* 移动端：导航栏直接固定在底部（老做法，简单粗暴） */
-@media (max-width: 640px) {
-  .side-nav {
-    top: auto;
-    right: 0;
-    bottom: 0;
-    width: auto;
-    height: auto;
-    flex-direction: row;
-    padding: 6px;
-    border-right: none;
-    border-top: 1px solid var(--border);
-    overflow-x: auto;
-  }
-  .side-nav:hover { width: auto; box-shadow: none; }
-  .brand { display: none; }
-  .side-bottom {
-    flex-direction: row;
-    margin-top: 0;
-    padding-top: 0;
-    border-top: none;
-    border-left: 1px solid var(--border);
-    padding-left: 6px;
-    margin-left: 4px;
-  }
-  .label { display: none; }
-  .layout-body { margin-left: 0; padding-bottom: 60px; }
-}
+/* 左侧栏在所有设备（含手机端）保持一致 —— 56px 宽固定贴左
+   layout-body 永远 margin-left:56，footer 已自行 -56 抵消撑满 */
 </style>

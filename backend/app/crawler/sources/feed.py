@@ -145,6 +145,9 @@ async def _crawl_inner(uid: int, page: int, *, trigger: str) -> None:
             )
             raise
         except CrawlerBlockedError as e:
+            # 注意：CrawlerBlockedError 既可能是真"目标站点拦截"（429/CF），
+            # 也可能是"节点令牌桶排队超时" —— 后者跟账号无关，不该让账号背锅。
+            # 通过 error message 区分两类。
             dur = int((_t.monotonic() - start) * 1000)
             await record_task_done(
                 task_id,
@@ -152,9 +155,13 @@ async def _crawl_inner(uid: int, page: int, *, trigger: str) -> None:
                 error_msg=str(e),
                 duration_ms=dur,
             )
-            await mark_account_failed(
-                acc.account_id, reason=f"被拦截（429/403）: {e}", disable=False
-            )
+            if "限流/熔断中" in str(e) or "等待" in str(e):
+                # 节点排队超时，不计入账号失败
+                log.info("crawl_feed.node_busy", uid=uid, page=page, error=str(e))
+            else:
+                await mark_account_failed(
+                    acc.account_id, reason=f"被拦截（429/403）: {e}", disable=False
+                )
             raise
         except Exception as e:
             dur = int((_t.monotonic() - start) * 1000)

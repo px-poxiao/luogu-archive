@@ -78,8 +78,8 @@ class Settings(BaseSettings):
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
     CRAWLER_CONTACT_EMAIL: str = "archive-bot@example.com"
-    CRAWLER_ANON_RATE_PER_SEC: float = 0.33
-    CRAWLER_AUTH_RATE_PER_SEC: float = 0.17
+    CRAWLER_ANON_RATE_PER_SEC: float = 1.0
+    CRAWLER_AUTH_RATE_PER_SEC: float = 0.5
     CRAWLER_AUTH_QPH_PER_ACCOUNT: int = 2000
     CRAWLER_BREAKER_COOLDOWN_SEC: int = 300
     CRAWLER_GLOBAL_BREAKER_NODE_THRESHOLD: int = 3

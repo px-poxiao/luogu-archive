@@ -277,22 +277,30 @@ useCopyCode(contentRef)
 </template>
 
 <style scoped>
+/*
+  用户页要 break out 父级 .container（max-width:1200, margin:auto, padding:28 40 56），
+  让 sidebar 永远紧贴左边栏。在所有分辨率下三段视觉距离都 = 40px：
+    左边栏右沿 → sidebar 左 = 40
+    sidebar 右 → content 左 = 40 (grid gap)
+    content 右 → viewport 右 = 40
+
+  break out 公式：宽 = 100vw - 56(左边栏)；
+  左偏移 = 父 .main-area 自身距 layout-body 左边的距离。
+  .main-area 距 layout-body 左边 = max(0, (100vw-56-1200)/2) + 40px(.main-area padding-left)。
+  右偏移同理（反过来抵消父级 padding-right）。
+*/
 .user-page {
-  /* 用户页要全宽两栏：sidebar 始终贴近左边栏。
-     .main-area 是 .container（max-width:1200, margin:auto, padding:28 40 56）。
-     break out 方法：宽 = layout-body 宽（100vw - 56），左偏移 = .main-area 自身距 layout-body 左边的距离。
-     .main-area 距 layout-body 左 = max(0, (100vw-56-1200)/2) + 40px(.main-area padding-left)。
-     用 calc 配合 max() 兼容窄屏。 */
   width: calc(100vw - 56px);
   margin-left: calc(-40px - max(0px, (100vw - 56px - 1200px) / 2));
-  margin-right: 0;
-  padding: 0 32px;
+  margin-right: calc(-40px - max(0px, (100vw - 56px - 1200px) / 2));
+  padding: 0 40px;
   box-sizing: border-box;
 }
 @media (max-width: 768px) {
   .user-page {
     width: 100%;
     margin-left: 0;
+    margin-right: 0;
     padding: 0;
   }
 }
@@ -300,18 +308,25 @@ useCopyCode(contentRef)
 .two-col {
   display: grid;
   grid-template-columns: 260px 1fr;
-  gap: 32px;
+  gap: 40px;
   margin-top: 16px;
   align-items: start;
 }
 @media (max-width: 768px) {
-  .two-col { grid-template-columns: 1fr; }
+  .two-col { grid-template-columns: 1fr; gap: 16px; }
 }
 
 .sidebar {
   position: sticky;
   top: 16px;
   align-self: start;
+}
+@media (max-width: 768px) {
+  /* 手机端：sidebar 变普通块，跟随页面向上滚出视口；tab 横向铺开 */
+  .sidebar {
+    position: static;
+    top: auto;
+  }
 }
 
 .profile-head {
@@ -392,6 +407,18 @@ useCopyCode(contentRef)
 .tabs button.active {
   background: var(--link);
   color: #fff;
+}
+
+@media (max-width: 768px) {
+  /* 手机端 tab 横向铺开，便于一行选 */
+  .tabs {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .tabs button {
+    flex: 1 0 auto;
+    text-align: center;
+  }
 }
 
 .content {
