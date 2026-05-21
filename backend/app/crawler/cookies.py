@@ -28,7 +28,6 @@ from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.models.admin import CrawlerAccount
 from app.models._common import utcnow
-from app.core.config import settings
 
 log = get_logger(__name__)
 
