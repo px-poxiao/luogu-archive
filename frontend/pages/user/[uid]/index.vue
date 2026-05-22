@@ -191,10 +191,14 @@ useCopyCode(contentRef)
                 <div class="feed-id">#{{ a.feed_id }}</div>
               </template>
               <template v-else-if="a.kind === 'article'">
-                <NuxtLink :to="`/article/${a.article_id}`">{{ a.article_title || a.article_id }}</NuxtLink>
+                <div class="link-line">
+                  <NuxtLink :to="`/article/${a.article_id}`">{{ a.article_title || a.article_id }}</NuxtLink>
+                </div>
               </template>
               <template v-else-if="a.kind === 'paste'">
-                <NuxtLink :to="`/paste/${a.paste_id}`">剪贴板 {{ a.paste_id }}</NuxtLink>
+                <div class="link-line">
+                  <NuxtLink :to="`/paste/${a.paste_id}`">剪贴板 {{ a.paste_id }}</NuxtLink>
+                </div>
               </template>
               <template v-else-if="a.kind === 'judgement'">
                 <div class="judgement-card">
@@ -464,6 +468,10 @@ useCopyCode(contentRef)
   color: var(--text-muted);
   font-size: 13px;
   margin-left: 12px;
+}
+.link-line {
+  /* 文章 / 剪贴板的链接独占一行，上方留空与 feed 内容块保持一致 */
+  margin-top: 8px;
 }
 .hidden-name {
   color: var(--text-muted);

@@ -11,7 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.core.exceptions import NotFoundError
 from app.crawler.revalidate import is_stale, schedule_refresh_user
-from app.models.luogu_content import Article, Feed, Judgement, Paste
+from app.models.luogu_content import (
+    Article,
+    ArticleVersion,
+    Feed,
+    Judgement,
+    Paste,
+    PasteVersion,
+)
 from app.models.luogu_user import (
     LuoguUser,
     UserNameVersion,
@@ -191,33 +198,38 @@ async def user_activity(
                 )
             )
 
+    # 排序按"产生新版本的时间"，即 current_version 的 crawled_at —— 这是真正
+    # 反映"上次有变化"的时间。Article.last_crawled_at 每次扫描都会被更新，
+    # 哪怕内容没变；用它排会把"刚被定时扫了但内容未变"的文章顶上来，误导用户。
     aq = (
-        select(Article)
+        select(Article, ArticleVersion.crawled_at.label("changed_at"))
+        .join(ArticleVersion, ArticleVersion.id == Article.current_version_id)
         .where(Article.author_uid == uid)
-        .order_by(desc(Article.last_crawled_at))
+        .order_by(desc(ArticleVersion.crawled_at))
         .limit(limit)
     )
-    for a in (await db.execute(aq)).scalars().all():
+    for a, changed_at in (await db.execute(aq)).all():
         items.append(
             ActivityItem(
                 kind="article",
-                time=a.last_crawled_at,
+                time=changed_at,
                 article_id=a.article_id,
                 article_title=a.title,
             )
         )
 
     pq = (
-        select(Paste)
+        select(Paste, PasteVersion.crawled_at.label("changed_at"))
+        .join(PasteVersion, PasteVersion.id == Paste.current_version_id)
         .where(Paste.author_uid == uid)
-        .order_by(desc(Paste.last_crawled_at))
+        .order_by(desc(PasteVersion.crawled_at))
         .limit(limit)
     )
-    for p in (await db.execute(pq)).scalars().all():
+    for p, changed_at in (await db.execute(pq)).all():
         items.append(
             ActivityItem(
                 kind="paste",
-                time=p.last_crawled_at,
+                time=changed_at,
                 paste_id=p.paste_id,
             )
         )
