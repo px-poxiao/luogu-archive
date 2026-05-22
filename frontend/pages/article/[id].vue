@@ -155,7 +155,7 @@ const crawledAtText = computed(() =>
 .avatar-fallback[data-color="Purple"]  { background: var(--lg-purple); }
 .avatar-fallback[data-color="Cyan"]    { background: var(--lg-cyan); }
 .avatar-fallback[data-color="Black"]   { background: var(--lg-black); }
-.avatar-fallback[data-color="Cheater"] { background: var(--lg-cheater); }
+.avatar-fallback[data-color="Cheater"] { background: var(--lg-cheater-tag); }
 
 .meta-right {
   margin-left: auto;

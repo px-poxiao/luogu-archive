@@ -292,13 +292,16 @@ async def _do_request(
     # 识别异常
     if _detect_account_invalid(status, body, cookies_present=cookies is not None):
         raise CrawlerAccountInvalid(f"Cookie 账号无效：{url}")
-    if _detect_blocked(status, body):
-        # 明确的 Cloudflare / 频率限制 → 直接熔断，不需要自检
-        await node.trip_breaker(redis, reason=f"status={status}")
-        raise CrawlerBlockedError(f"被目标站点拦截: status={status} url={url}")
 
-    # 404 / 内容级 403（用户被封号/禁言/隐私页/不存在）：不熔断、不重试。
-    # 但如果短窗口内累计太多 4xx，做一次自检确认 IP 是不是真被全站拦了
+    # 429（上游主动节流）→ 直接熔断，不需探针
+    if status == 429:
+        await node.trip_breaker(redis, reason="status=429")
+        raise CrawlerBlockedError(f"被目标站点拦截: status=429 url={url}")
+
+    # 403 / 404：先累计连续 4xx 计数；达阈值 → 探针自检 → 探针失败才熔断。
+    # 不管 body 里有没有 "cloudflare" 字样，都走这个路径 —— 洛谷被官方 ban
+    # 的文章 / 被封禁用户都会返 403 + 含 cloudflare 元数据，单次熔断会
+    # 把整个节点锁死 5 分钟，全站保存不了。
     if status == 404 or status == 403:
         if status == 403:
             cnt_key = _consecutive_4xx_key(node.node_id)

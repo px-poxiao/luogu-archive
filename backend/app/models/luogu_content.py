@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -73,7 +74,7 @@ class ArticleVersion(Base):
         nullable=False,
     )
     title: Mapped[str] = mapped_column(String(512), nullable=False)
-    content_md: Mapped[str] = mapped_column(Text, nullable=False)
+    content_md: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     crawled_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
@@ -121,7 +122,7 @@ class PasteVersion(Base):
     paste_id: Mapped[str] = mapped_column(
         String(16), ForeignKey("pastes.paste_id", ondelete="CASCADE"), nullable=False
     )
-    content_md: Mapped[str] = mapped_column(Text, nullable=False)
+    content_md: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     crawled_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow

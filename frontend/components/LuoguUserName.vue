@@ -46,6 +46,14 @@ function levelTier(lv: number | undefined): 'green' | 'blue' | 'top' | null {
 
 const ccfTier = computed(() => levelTier(props.user?.ccf_level))
 const xcpcTier = computed(() => levelTier(props.user?.xcpc_level))
+
+// 棕名（Cheater）默认带"作弊者"称号；后端没返回 badge 时本地补上
+const effectiveBadge = computed<string | null>(() => {
+  if (!props.user) return null
+  if (props.user.badge) return props.user.badge
+  if (props.user.color === 'Cheater') return '作弊者'
+  return null
+})
 </script>
 
 <template>
@@ -65,13 +73,13 @@ const xcpcTier = computed(() => levelTier(props.user?.xcpc_level))
     >{{ displayName }}</span>
 
     <template v-if="showBadge">
-      <!-- 称号：背景为用户名颜色，文字白色 -->
+      <!-- 称号：背景为用户名颜色，文字白色（棕名无 badge 时本地补"作弊者"） -->
       <span
-        v-if="user.badge"
+        v-if="effectiveBadge"
         class="lg-badge"
         :data-color="user.color"
         :title="user.is_admin ? '管理员' : ''"
-      >{{ user.badge }}</span>
+      >{{ effectiveBadge }}</span>
 
       <!-- 钩子（OI 认证）：fa-badge-check（双色：彩盾 + 白勾） -->
       <span
