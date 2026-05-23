@@ -369,7 +369,7 @@ async def _do_request(
 async def fetch_anon(
     path_or_url: str,
     *,
-    node: CrawlerNode,
+    node: CrawlerNode | None = None,
     redis: Redis,
     params: dict[str, Any] | None = None,
     accept_json: bool = False,
@@ -379,9 +379,17 @@ async def fetch_anon(
 
     path_or_url：相对路径（如 `/article/xxx`）自动拼 CRAWLER_BASE_URL；
                  完整 URL 直接用。
+
+    node 不传时按目标域名自动选：走 luogu.com.cn 主站 → cn 限速节点（0.1 req/s）；
+    走海外镜像 luogu.com → 默认 anon 节点。
     """
-    assert node.kind == NodeKind.ANON, "fetch_anon 只能用 ANON 节点"
+    from app.crawler.nodes.local import get_default_node
+
     url = _resolve_url(path_or_url)
+    if node is None:
+        cn = "luogu.com.cn" in url
+        node = get_default_node(NodeKind.ANON, cn=cn)
+    assert node.kind == NodeKind.ANON, "fetch_anon 只能用 ANON 节点"
     return await _do_request(
         "GET",
         url,
@@ -396,7 +404,7 @@ async def fetch_anon(
 async def fetch_authed(
     path_or_url: str,
     *,
-    node: CrawlerNode,
+    node: CrawlerNode | None = None,
     redis: Redis,
     cookies: dict[str, str],
     params: dict[str, Any] | None = None,
@@ -406,12 +414,18 @@ async def fetch_authed(
     """认证请求（带 Cookie）。仅用于犇犇爬取。
 
     cookies: 必传 `_uid` + `__client_id`（可选 `C3VK`）
+
+    node 不传时按目标域名自动选 cn / 海外。
     """
-    assert node.kind == NodeKind.AUTHED, "fetch_authed 只能用 AUTHED 节点"
-    # 防呆：缺关键字段直接报错
+    from app.crawler.nodes.local import get_default_node
+
     if "_uid" not in cookies or "__client_id" not in cookies:
         raise ValueError("cookies 必须含 _uid 和 __client_id")
     url = _resolve_url(path_or_url)
+    if node is None:
+        cn = "luogu.com.cn" in url
+        node = get_default_node(NodeKind.AUTHED, cn=cn)
+    assert node.kind == NodeKind.AUTHED, "fetch_authed 只能用 AUTHED 节点"
     return await _do_request(
         "GET",
         url,

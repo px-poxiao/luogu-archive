@@ -92,6 +92,7 @@ class ProblemItem(BaseModel):
     pid: str
     title: str
     difficulty: str | None
+    tags: list[int] = []
     solution_open: bool
 
 
@@ -309,14 +310,16 @@ async def _group_judgements(
 
 @router.get("/problem/list", response_model=dict[str, list[ProblemItem]])
 async def problem_list_by_difficulty(
+    include_closed: bool = Query(False, description="是否包含'不可提交题解'的题"),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, list[ProblemItem]]:
-    """按难度分桶返回"允许提交题解"的题目。"""
-    q = (
-        select(Problem)
-        .where(Problem.solution_open.is_(True))
-        .order_by(Problem.difficulty, Problem.pid)
-    )
+    """按难度分桶返回题目。
+
+    默认只返"允许提交题解"的；include_closed=true 时也包含已收录的所有题。
+    """
+    q = select(Problem).order_by(Problem.difficulty, Problem.pid)
+    if not include_closed:
+        q = q.where(Problem.solution_open.is_(True))
     rows = (await db.execute(q)).scalars().all()
     out: dict[str, list[ProblemItem]] = defaultdict(list)
     for p in rows:
@@ -325,6 +328,7 @@ async def problem_list_by_difficulty(
                 pid=p.pid,
                 title=p.title,
                 difficulty=p.difficulty,
+                tags=p.tags or [],
                 solution_open=p.solution_open,
             )
         )

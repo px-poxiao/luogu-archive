@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
@@ -201,6 +202,8 @@ class Problem(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     # 难度：用枚举字符串存（入门/普及-/普及/提高-/提高+/省选-/省选/NOI-/NOI/NOI+/CTSC/暂无评定）
     difficulty: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # 标签 ID 列表（洛谷返整数数组，名称需要查字典）；JSON 列存数组
+    tags: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # 是否允许提交题解
     solution_open: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     last_solution_check_at: Mapped[datetime | None] = mapped_column(

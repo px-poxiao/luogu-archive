@@ -1,10 +1,16 @@
 <script setup lang="ts">
 const api = useApi()
 
+interface ProblemItem {
+  pid: string
+  title: string
+  difficulty: string | null
+  tags: number[]
+  solution_open: boolean
+}
+
 const { data } = await useAsyncData('problem-list', () =>
-  api<Record<string, Array<{ pid: string; title: string; difficulty: string | null; solution_open: boolean }>>>(
-    '/problem/list',
-  ),
+  api<Record<string, ProblemItem[]>>('/problem/list'),
 )
 const { data: lastCrawled } = await useAsyncData('problem-list-last-crawled', () =>
   api<{ last_crawled_at: string | null }>('/last-crawled?type=problem_list'),
@@ -19,8 +25,7 @@ const diffOrder = [
 
 const sortedKeys = computed(() => {
   if (!data.value) return []
-  const keys = Object.keys(data.value)
-  return keys.sort((a, b) => {
+  return Object.keys(data.value).sort((a, b) => {
     const ai = diffOrder.indexOf(a)
     const bi = diffOrder.indexOf(b)
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
@@ -49,7 +54,7 @@ const diffColor: Record<string, string> = {
     />
     <h1>题目库（允许提交题解）</h1>
     <p class="note">
-      按洛谷难度分档，仅显示**当前允许提交题解**的题目。
+      按洛谷难度分档，仅显示当前允许提交题解的题目。
     </p>
 
     <section v-for="k in sortedKeys" :key="k" class="diff-section">
@@ -101,6 +106,7 @@ const diffColor: Record<string, string> = {
   color: var(--text);
   display: flex;
   gap: 10px;
+  align-items: center;
 }
 .pid { color: var(--text-muted); font-family: monospace; }
 .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

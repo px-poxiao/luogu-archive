@@ -371,8 +371,9 @@ class ProblemRefreshReq(BaseModel):
     p_max: int = Field(16501, ge=1)
     b_min: int = Field(2001, ge=1)
     b_max: int = Field(4528, ge=1)
-    delay_ms: int = Field(3000, ge=500, le=30000,
-                           description="任务之间的间隔，越小越快但越容易被洛谷拦")
+    delay_ms: int = Field(11000, ge=500, le=30000,
+                           description="任务之间的间隔，越小越快但越容易被洛谷拦。"
+                                       ".com.cn 节点 0.1 req/s = 10s/req，建议 ≥ 11000")
 
 
 @router.post("/problems/full-refresh")

@@ -1,9 +1,13 @@
 """题目爬虫：列表页 + 题解开放状态。
 
-- 列表页 /problem/list?page=N   → 老版 SSR（_feInjection）
-  用于发现最新题号 + 获取难度
-- 题解状态 /problem/solution/<pid>   → 新版 SSR 或 HTML 兜底
-  判断"是否允许提交题解"
+- 列表页 /problem/list?page=N
+  发现新题号 + 维护 title / difficulty / tags
+- 题解状态 /problem/<pid>
+  匿名访问详情页，读 lentille 里的 problem.acceptSolution（true/false）
+  ↑ 改造前用 /problem/solution/<pid> 需要 cookie；现在不需要，
+  authed 节点完全释放给犇犇用。
+
+所有路径都自动走 .com.cn 主站节点（fetch_anon 按域名挑节点）。
 """
 from __future__ import annotations
 
@@ -22,7 +26,6 @@ from app.crawler.lentille import (
     data_from_lentille,
     extract_page_data,
 )
-from app.crawler.nodes import NodeKind, get_default_node
 from app.crawler.sources.base import (
     record_task_done,
     record_task_start,
@@ -35,6 +38,46 @@ from app.models.luogu_content import Problem, ProblemSolutionHistory
 log = get_logger(__name__)
 
 
+# ============================================================
+# 难度文本化
+# ============================================================
+
+_DIFF_MAP = {
+    0: "暂无评定",
+    1: "入门",
+    2: "普及-",
+    3: "普及/提高-",
+    4: "普及+/提高",
+    5: "提高+/省选-",
+    6: "省选/NOI-",
+    7: "NOI/NOI+/CTSC",
+}
+
+_DIFF_STRING_NORMALIZE = {v: v for v in _DIFF_MAP.values()}
+
+
+def _diff_text(v) -> str | None:
+    """归一化 difficulty 字段为中文文本。lentille 现在返 int(0-7)。"""
+    if v is None:
+        return None
+    if isinstance(v, int):
+        return _DIFF_MAP.get(v, f"unknown_{v}")
+    if isinstance(v, str):
+        s = v.strip()
+        if s in _DIFF_STRING_NORMALIZE:
+            return _DIFF_STRING_NORMALIZE[s]
+        if s.isdigit():
+            return _DIFF_MAP.get(int(s), f"unknown_{s}")
+        log.warning("problem.unknown_difficulty_string", value=s)
+        return s
+    log.warning("problem.unknown_difficulty_type", type=type(v).__name__)
+    return None
+
+
+# ============================================================
+# 列表页：/problem/list?page=N
+# ============================================================
+
 async def crawl_list_page(page: int, *, trigger: str = "scheduled") -> None:
     """爬题目列表一页，更新 problems 主表。"""
     async with task_lock("problem_list", str(page)) as got:
@@ -45,11 +88,7 @@ async def crawl_list_page(page: int, *, trigger: str = "scheduled") -> None:
 
 
 def _extract_problem_items(kind: str, data: dict) -> list[dict]:
-    """从两种 SSR 结构中取题目列表。
-
-    - injection（老版）：currentData.problems = { result: [...], perPage, count }
-    - lentille（新版）：data.problems 同样位置，兜底也看 data.result
-    """
+    """从 lentille / injection 两种 SSR 结构中取题目列表。"""
     if kind == "injection":
         current = current_data_from_injection(data)
         pr = current.get("problems")
@@ -70,19 +109,19 @@ def _extract_problem_items(kind: str, data: dict) -> list[dict]:
 
 
 async def _crawl_list_inner(page: int, *, trigger: str) -> None:
-    node = get_default_node(NodeKind.ANON)
     redis = get_redis()
     url_path = "/problem/list"
+    # 列表页强制走 .com.cn（_resolve_url 已处理）；fetch_anon 自动选 cn 节点
     task_id = await record_task_start(
         "problem_list",
         f"{url_path}?page={page}",
         trigger=trigger_from(trigger),
-        node_id=node.node_id,
+        node_id=None,  # 节点 ID 在 fetch_anon 内部确定，这里 placeholder
     )
     start = _t.monotonic()
     try:
         result = await fetch_anon(
-            url_path, node=node, redis=redis, params={"page": page}, parse="html"
+            url_path, redis=redis, params={"page": page}, parse="html"
         )
         kind, page_data = extract_page_data(result.body_text)
         items = _extract_problem_items(kind, page_data)
@@ -94,60 +133,69 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
             pid = item.get("pid")
             if not pid:
                 continue
+            # lentille 字段：name / difficulty(int) / tags(int[]) / flag(int)
+            title = item.get("name") or item.get("title") or ""
+            tags_raw = item.get("tags") or []
+            tags = [int(t) for t in tags_raw if isinstance(t, (int, str)) and str(t).isdigit()]
             rows.append(
                 {
                     "pid": str(pid),
-                    "title": (item.get("title") or "")[:500],
+                    "title": title[:500],
                     "difficulty": _diff_text(item.get("difficulty")),
-                    "solution_open": bool(item.get("showSolution", False)),
+                    "tags": tags,
                     "first_seen_at": utcnow(),
                 }
             )
 
-        # 在写入前先记录"哪些 pid 是本批次新发现的"（DB 里之前不存在）
+        if rows:
+            sample = rows[0]
+            log.info(
+                "crawl_problem_list.sample",
+                page=page, count=len(rows),
+                pid=sample["pid"], title=sample["title"],
+                difficulty=sample["difficulty"], tags=sample["tags"],
+            )
+
+        # 写库：UPSERT title / difficulty / tags（solution_open 由 _crawl_problem_inner 单独维护）
         new_pids: set[str] = set()
         if rows:
             async with db_session() as session:
-                # 先查这批 pid 哪些已经存在
                 pids_in_batch = [r["pid"] for r in rows]
                 existing_q = select(Problem.pid).where(Problem.pid.in_(pids_in_batch))
-                existing_set = {
-                    r[0] for r in (await session.execute(existing_q)).all()
-                }
+                existing_set = {r[0] for r in (await session.execute(existing_q)).all()}
                 new_pids = set(pids_in_batch) - existing_set
 
                 stmt = mysql_insert(Problem).values(rows)
-                # 已存在的题目更新标题和难度，但 solution_open 不从列表接口确定
                 stmt = stmt.on_duplicate_key_update(
                     title=stmt.inserted.title,
                     difficulty=stmt.inserted.difficulty,
+                    tags=stmt.inserted.tags,
                 )
                 await session.execute(stmt)
                 await session.commit()
 
-        # 1.md 原则：不允许提交题解的题一般不会重新开放，更新时只确定那些"允许提交题解"的题。
-        # 具体策略：
-        #   - 本批次新发现的题（DB 里还不存在）：cascade 扫一次确认初始状态
-        #   - 已经 solution_open=True 的老题：cascade 重扫（确认是否仍然开放）
-        #   - 已经 solution_open=False 的老题：跳过（视为终态，节省请求）
-        # manual 触发才派；scheduled 巡检由 scheduler 单独管理（避免每次轮询雪崩）。
-        if trigger == "manual" and rows:
+        # cascade 派题解检测：
+        # - 本批次所有 pid（manual / scheduled 都派）
+        # - 错峰 11s/题（节点 0.1 req/s = 10s/req，留 1s 余量）
+        # - severe 严格终态：solution_open=False 的老题不再派（已确认关闭）
+        if rows:
             from app.tasks.actors.crawl import crawl_problem_solution
             async with db_session() as session:
-                # 已开放的老题
                 pids_in_batch = [r["pid"] for r in rows]
-                open_q = (
+                # 已确认关闭的老题（solution_open=False 且检测过）排除
+                closed_q = (
                     select(Problem.pid)
                     .where(Problem.pid.in_(pids_in_batch))
-                    .where(Problem.solution_open.is_(True))
+                    .where(Problem.solution_open.is_(False))
+                    .where(Problem.last_solution_check_at.is_not(None))
                 )
-                open_pids = {r[0] for r in (await session.execute(open_q)).all()}
-            cascade_pids = sorted(new_pids | open_pids)
+                closed_set = {r[0] for r in (await session.execute(closed_q)).all()}
+            cascade_pids = sorted(set(pids_in_batch) - closed_set)
             for i, pid in enumerate(cascade_pids):
                 try:
                     crawl_problem_solution.send_with_options(
-                        args=(pid, "cascaded_from_problem_list"),
-                        delay=i * 3000,   # 每 3 秒一题
+                        args=(pid, f"cascaded_from_list_{trigger}"),
+                        delay=i * 11_000,
                     )
                 except Exception as e:
                     log.warning(
@@ -156,10 +204,8 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
                     )
             log.info(
                 "crawl_problem_list.cascade_solution_dispatched",
-                page=page,
-                new_count=len(new_pids),
-                open_count=len(open_pids),
-                total=len(cascade_pids),
+                page=page, new_count=len(new_pids),
+                cascade_count=len(cascade_pids), total=len(pids_in_batch),
             )
 
         dur = int((_t.monotonic() - start) * 1000)
@@ -182,53 +228,12 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
         raise
 
 
-# 洛谷难度整数编码 → 文本（API 偶发返回 int 编号）
-_DIFF_MAP = {
-    0: "暂无评定",
-    1: "入门",
-    2: "普及-",
-    3: "普及/提高-",
-    4: "普及+/提高",
-    5: "提高+/省选-",
-    6: "省选/NOI-",
-    7: "NOI/NOI+/CTSC",
-}
-
-# 常见难度字符串值（防御式：洛谷可能也返回 string）
-_DIFF_STRING_NORMALIZE = {
-    # 已知洛谷网页的中文标签
-    "暂无评定": "暂无评定",
-    "入门": "入门",
-    "普及-": "普及-",
-    "普及/提高-": "普及/提高-",
-    "普及+/提高": "普及+/提高",
-    "提高+/省选-": "提高+/省选-",
-    "省选/NOI-": "省选/NOI-",
-    "NOI/NOI+/CTSC": "NOI/NOI+/CTSC",
-}
-
-
-def _diff_text(v) -> str | None:
-    if v is None:
-        return None
-    if isinstance(v, int):
-        return _DIFF_MAP.get(v, f"unknown_{v}")
-    if isinstance(v, str):
-        # 标准化字符串：先看是不是已知文本，否则原样返回
-        s = v.strip()
-        if s in _DIFF_STRING_NORMALIZE:
-            return _DIFF_STRING_NORMALIZE[s]
-        # 偶发：洛谷返回数字字符串
-        if s.isdigit():
-            return _DIFF_MAP.get(int(s), f"unknown_{s}")
-        log.warning("problem.unknown_difficulty_string", value=s)
-        return s
-    log.warning("problem.unknown_difficulty_type", value=v, type=type(v).__name__)
-    return str(v)
-
+# ============================================================
+# 题解开放检测：/problem/<pid>
+# ============================================================
 
 async def crawl_solution_state(pid: str, *, trigger: str = "scheduled") -> None:
-    """爬题解开放状态：/problem/solution/<pid>"""
+    """爬题目详情页，读 acceptSolution 字段判定题解是否开放。"""
     async with task_lock("problem_solution", pid) as got:
         if not got:
             log.info("crawl_problem_solution.skip_locked", pid=pid)
@@ -237,149 +242,135 @@ async def crawl_solution_state(pid: str, *, trigger: str = "scheduled") -> None:
 
 
 async def _crawl_solution_inner(pid: str, *, trigger: str) -> None:
-    """题解开放检测必须带 Cookie 访问，否则洛谷返回 401。
-    用 AUTHED 节点 + 账号池里的一个账号 cookie。
+    """匿名访问 /problem/<pid>，读 lentille.problem.acceptSolution。
+
+    acceptSolution=true → 题解开放；false → 不允许提交题解。
     """
-    from app.crawler.cookies import lease_account, mark_account_ok
-    from app.crawler.http import fetch_authed
-
-    node = get_default_node(NodeKind.AUTHED)
     redis = get_redis()
-    url_path = f"/problem/solution/{pid}"
+    url_path = f"/problem/{pid}"
+    task_id = await record_task_start(
+        "problem_solution",
+        url_path,
+        trigger=trigger_from(trigger),
+        node_id=None,
+    )
+    start = _t.monotonic()
+    try:
+        result = await fetch_anon(url_path, redis=redis, parse="html")
 
-    async with lease_account() as acc:
-        if acc is None:
-            task_id = await record_task_start(
-                "problem_solution",
-                url_path,
-                trigger=trigger_from(trigger),
-                node_id=node.node_id,
-                account_id=None,
-            )
-            await record_task_done(
-                task_id,
-                status=CrawlTaskStatus.failed,
-                error_msg="no_account_available: 所有 Cookie 账号都不可用（QPH 用满 / 被禁用 / 锁占用）",
-                duration_ms=0,
-            )
-            log.warning("crawl_problem_solution.no_account_available", pid=pid)
-            raise CrawlerError("题解开放检测需要 Cookie 账号，但当前无可用账号")
+        solution_open = _detect_solution_open(result.body_text)
+        title_from_page = _extract_problem_title(result.body_text)
+        difficulty_from_page = _extract_problem_difficulty(result.body_text)
+        tags_from_page = _extract_problem_tags(result.body_text)
 
-        task_id = await record_task_start(
-            "problem_solution",
-            url_path,
-            trigger=trigger_from(trigger),
-            node_id=node.node_id,
-            account_id=acc.account_id,
-        )
-        start = _t.monotonic()
-        try:
-            result = await fetch_authed(
-                url_path,
-                node=node,
-                redis=redis,
-                cookies=acc.as_cookie_dict(),
-                accept_json=False,
-                parse="html",
-            )
-            # 判断 solution_open：先尝试解析结构化数据，失败回退到文本匹配
-            solution_open = _detect_solution_open(result.body_text)
-
-            async with db_session() as session:
-                existing = await session.get(Problem, pid)
-                now = utcnow()
-                if existing is None:
+        async with db_session() as session:
+            existing = await session.get(Problem, pid)
+            now = utcnow()
+            if existing is None:
+                # cascade 派出去时还没入库 → 直接补 row
+                session.add(
+                    Problem(
+                        pid=pid,
+                        title=title_from_page or pid,
+                        difficulty=difficulty_from_page,
+                        tags=tags_from_page,
+                        solution_open=solution_open,
+                        last_solution_check_at=now,
+                        first_seen_at=now,
+                    )
+                )
+            else:
+                # 状态变化 → 写历史
+                if existing.solution_open != solution_open:
                     session.add(
-                        Problem(
+                        ProblemSolutionHistory(
                             pid=pid,
-                            title=pid,
                             solution_open=solution_open,
-                            last_solution_check_at=now,
-                            first_seen_at=now,
                         )
                     )
-                else:
-                    if existing.solution_open != solution_open:
-                        session.add(
-                            ProblemSolutionHistory(
-                                pid=pid,
-                                solution_open=solution_open,
-                            )
-                        )
-                    existing.solution_open = solution_open
-                    existing.last_solution_check_at = now
-                await session.commit()
+                existing.solution_open = solution_open
+                existing.last_solution_check_at = now
+                # 顺手刷 title/difficulty/tags（详情页这些字段比 list 接口准）
+                if title_from_page:
+                    existing.title = title_from_page
+                if difficulty_from_page is not None:
+                    existing.difficulty = difficulty_from_page
+                if tags_from_page is not None:
+                    existing.tags = tags_from_page
+            await session.commit()
 
-            dur = int((_t.monotonic() - start) * 1000)
-            await record_task_done(
-                task_id,
-                status=CrawlTaskStatus.success,
-                http_status=result.status,
-                duration_ms=dur,
-            )
-            await mark_account_ok(acc.account_id)
-        except Exception as e:
-            dur = int((_t.monotonic() - start) * 1000)
-            await record_task_done(
-                task_id,
-                status=CrawlTaskStatus.failed,
-                error_msg=str(e),
-                duration_ms=dur,
-            )
-            log.error("crawl_problem_solution.failed", pid=pid, error=str(e))
-            raise
+        dur = int((_t.monotonic() - start) * 1000)
+        await record_task_done(
+            task_id,
+            status=CrawlTaskStatus.success,
+            http_status=result.status,
+            duration_ms=dur,
+        )
+        log.info(
+            "crawl_problem_solution.done",
+            pid=pid, solution_open=solution_open, trigger=trigger,
+        )
+    except Exception as e:
+        dur = int((_t.monotonic() - start) * 1000)
+        await record_task_done(
+            task_id,
+            status=CrawlTaskStatus.failed,
+            error_msg=str(e),
+            duration_ms=dur,
+        )
+        log.error("crawl_problem_solution.failed", pid=pid, error=str(e))
+        raise
 
 
-# 负面关键字：命中即视作"不允许提交题解"
-_DENY_KEYWORDS = (
-    "不允许提交题解",
-    "不可以提交题解",
-    "题解已关闭",
-    "已禁止题解",
-)
-
-# lentille / injection 的判定字段名（按优先级试）
-_SOLUTION_FIELDS = ("canSubmitSolution", "solutionOpen", "acceptingSolutions", "showSolution")
+def _get_problem_node(body_text: str) -> dict | None:
+    """从 SSR body 里取 problem 节点（同时兼容 lentille 和 injection）。"""
+    try:
+        kind, page_data = extract_page_data(body_text)
+        inner = (
+            current_data_from_injection(page_data)
+            if kind == "injection"
+            else data_from_lentille(page_data)
+        )
+        if isinstance(inner.get("problem"), dict):
+            return inner["problem"]
+        return inner if isinstance(inner, dict) else None
+    except Exception:
+        return None
 
 
 def _detect_solution_open(body_text: str) -> bool:
-    """判断该题题解通道是否开放。
-
-    策略：
-      1. 优先看结构化字段（lentille 或 injection 里的 canSubmitSolution / showSolution 等）
-      2. 找不到结构化字段 → 看负面关键字命中（"不允许提交题解"等）
-      3. 都判不出 → **返回 False（保守）**
-         理由：1.md 原则"不开放是终态"，宁可漏掉一题暂时不显示，也不要把
-         大量"不允许"的题误判成允许。
-    """
-    # 1. 结构化字段
-    try:
-        kind, page_data = extract_page_data(body_text)
-        if kind == "injection":
-            current = current_data_from_injection(page_data)
-        else:
-            current = data_from_lentille(page_data)
-
-        # 直接顶层字段
-        for key in _SOLUTION_FIELDS:
-            v = current.get(key)
-            if isinstance(v, bool):
-                return v
-        # 嵌套在 problem 子节点里
-        problem = current.get("problem")
-        if isinstance(problem, dict):
-            for key in _SOLUTION_FIELDS:
-                v = problem.get(key)
-                if isinstance(v, bool):
-                    return v
-    except Exception:
-        pass
-
-    # 2. 负面关键字明确命中 → 关闭
-    for kw in _DENY_KEYWORDS:
-        if kw in body_text:
-            return False
-
-    # 3. 啥也判断不出 —— 保守判关闭
-    log.warning("problem_solution.indeterminate", body_head=body_text[:200])
+    """读 lentille.problem.acceptSolution。判不出来保守视作 False。"""
+    p = _get_problem_node(body_text)
+    if p is None:
+        log.warning("problem_solution.indeterminate", body_head=body_text[:200])
+        return False
+    v = p.get("acceptSolution")
+    if isinstance(v, bool):
+        return v
+    log.warning("problem_solution.no_acceptSolution_field", pid=p.get("pid"))
     return False
+
+
+def _extract_problem_title(body_text: str) -> str | None:
+    p = _get_problem_node(body_text)
+    if p is None:
+        return None
+    v = p.get("name") or p.get("title")
+    return v[:500] if isinstance(v, str) else None
+
+
+def _extract_problem_difficulty(body_text: str) -> str | None:
+    p = _get_problem_node(body_text)
+    if p is None:
+        return None
+    return _diff_text(p.get("difficulty"))
+
+
+def _extract_problem_tags(body_text: str) -> list[int] | None:
+    p = _get_problem_node(body_text)
+    if p is None:
+        return None
+    raw = p.get("tags") or []
+    if not isinstance(raw, list):
+        return None
+    return [int(t) for t in raw if isinstance(t, (int, str)) and str(t).isdigit()]
