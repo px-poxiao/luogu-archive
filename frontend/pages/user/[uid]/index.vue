@@ -79,14 +79,76 @@ const { data: profile, error } = await useAsyncData(`user-${uid}`, () =>
 )
 
 const includeFeed = ref(true)
-const { data: activity } = await useAsyncData(
+// 活动列表分页：游标 = 列表最后一条的 time（更老的时间）
+const activity = ref<ActivityItem[]>([])
+const activityLoading = ref(false)
+const activityNoMore = ref(false)
+const activityBefore = ref<string | null>(null)
+const PAGE_SIZE = 50
+
+// SSR 首屏：useAsyncData 拿第一页，序列化到 payload，client hydrate 不会重跑。
+// 之前犯的错：把 ref 修改写在 handler 里 —— 那只在 SSR 阶段执行；client
+// 直接读 payload，外部 ref 永远是空。这里改回让 useAsyncData 自管 data ref，
+// 在客户端用 watchEffect 同步到 activity ref 作为初值。
+const { data: firstPage } = await useAsyncData(
   `user-activity-${uid}`,
   () =>
     api<ActivityItem[]>(`/user/${uid}/activity`, {
-      query: { include_feed: includeFeed.value ? 'true' : 'false', limit: 50 },
+      query: { include_feed: includeFeed.value ? 'true' : 'false', limit: PAGE_SIZE },
     }),
-  { watch: [includeFeed] },
 )
+
+if (firstPage.value && firstPage.value.length) {
+  activity.value = [...firstPage.value]
+  activityBefore.value = firstPage.value[firstPage.value.length - 1].time
+  if (firstPage.value.length < PAGE_SIZE) activityNoMore.value = true
+} else {
+  activityNoMore.value = true
+}
+
+async function loadMoreActivity() {
+  if (activityLoading.value || activityNoMore.value) return
+  activityLoading.value = true
+  try {
+    const q: Record<string, any> = {
+      include_feed: includeFeed.value ? 'true' : 'false',
+      limit: PAGE_SIZE,
+    }
+    if (activityBefore.value) q.before = activityBefore.value
+    const page = await api<ActivityItem[]>(`/user/${uid}/activity`, { query: q })
+    if (page.length === 0) {
+      activityNoMore.value = true
+    } else {
+      activity.value.push(...page)
+      activityBefore.value = page[page.length - 1].time
+      if (page.length < PAGE_SIZE) activityNoMore.value = true
+    }
+  } finally {
+    activityLoading.value = false
+  }
+}
+
+// 切换"包含动态"开关 → 重置 + 拉第一页
+watch(includeFeed, async () => {
+  activity.value = []
+  activityBefore.value = null
+  activityNoMore.value = false
+  activityLoading.value = true
+  try {
+    const page = await api<ActivityItem[]>(`/user/${uid}/activity`, {
+      query: { include_feed: includeFeed.value ? 'true' : 'false', limit: PAGE_SIZE },
+    })
+    activity.value = page
+    if (page.length === 0) {
+      activityNoMore.value = true
+    } else {
+      activityBefore.value = page[page.length - 1].time
+      if (page.length < PAGE_SIZE) activityNoMore.value = true
+    }
+  } finally {
+    activityLoading.value = false
+  }
+})
 
 const { render } = useMarkdown()
 const introHtml = computed(() =>
@@ -244,6 +306,14 @@ useCopyCode(contentRef)
             </li>
           </ul>
           <p v-else class="empty">暂无活动记录</p>
+
+          <!-- 加载更多 -->
+          <div v-if="activity && activity.length" class="loader">
+            <button v-if="!activityNoMore" :disabled="activityLoading" @click="loadMoreActivity">
+              {{ activityLoading ? '加载中...' : '加载更多' }}
+            </button>
+            <span v-else class="empty">没有更多了</span>
+          </div>
         </section>
 
         <!-- 个人介绍 -->
@@ -536,6 +606,30 @@ useCopyCode(contentRef)
   color: var(--text-muted);
   text-align: center;
   padding: 40px;
+}
+.loader {
+  text-align: center;
+  padding: 16px 0;
+}
+.loader button {
+  padding: 8px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+}
+.loader button:hover:not(:disabled) {
+  border-color: var(--link);
+  color: var(--link);
+}
+.loader button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.loader .empty {
+  padding: 8px;
 }
 .error-box {
   padding: 30px;

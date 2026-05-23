@@ -176,18 +176,24 @@ async def user_activity(
     uid: int,
     include_feed: bool = Query(True, description="是否包含犇犇（用户可折叠）"),
     limit: int = Query(50, ge=1, le=200),
+    before: datetime | None = Query(
+        None, description="分页锚点：拿严格早于此时间的活动，时间倒序游标分页"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> list[ActivityItem]:
-    """聚合用户的所有活动：犇犇 + 文章 + 剪贴板 + 陶片，按时间倒序。"""
+    """聚合用户的所有活动：犇犇 + 文章 + 剪贴板 + 陶片，按时间倒序。
+
+    分页：传 before（最后一条的 time）拿更老的；不传从最新开始。
+    每路（feed/article/paste/judgement）各取 limit 条，合并排序后再裁 limit。
+    所以总返回 ≤ limit 条；前端判断"返回 0 条"即认为没有更早的了。
+    """
     items: list[ActivityItem] = []
 
     if include_feed:
-        fq = (
-            select(Feed)
-            .where(Feed.author_uid == uid)
-            .order_by(desc(Feed.time))
-            .limit(limit)
-        )
+        fq = select(Feed).where(Feed.author_uid == uid)
+        if before is not None:
+            fq = fq.where(Feed.time < before)
+        fq = fq.order_by(desc(Feed.time)).limit(limit)
         for f in (await db.execute(fq)).scalars().all():
             items.append(
                 ActivityItem(
@@ -205,9 +211,10 @@ async def user_activity(
         select(Article, ArticleVersion.crawled_at.label("changed_at"))
         .join(ArticleVersion, ArticleVersion.id == Article.current_version_id)
         .where(Article.author_uid == uid)
-        .order_by(desc(ArticleVersion.crawled_at))
-        .limit(limit)
     )
+    if before is not None:
+        aq = aq.where(ArticleVersion.crawled_at < before)
+    aq = aq.order_by(desc(ArticleVersion.crawled_at)).limit(limit)
     for a, changed_at in (await db.execute(aq)).all():
         items.append(
             ActivityItem(
@@ -222,9 +229,10 @@ async def user_activity(
         select(Paste, PasteVersion.crawled_at.label("changed_at"))
         .join(PasteVersion, PasteVersion.id == Paste.current_version_id)
         .where(Paste.author_uid == uid)
-        .order_by(desc(PasteVersion.crawled_at))
-        .limit(limit)
     )
+    if before is not None:
+        pq = pq.where(PasteVersion.crawled_at < before)
+    pq = pq.order_by(desc(PasteVersion.crawled_at)).limit(limit)
     for p, changed_at in (await db.execute(pq)).all():
         items.append(
             ActivityItem(
@@ -234,12 +242,10 @@ async def user_activity(
             )
         )
 
-    jq = (
-        select(Judgement)
-        .where(Judgement.uid == uid)
-        .order_by(desc(Judgement.time))
-        .limit(limit)
-    )
+    jq = select(Judgement).where(Judgement.uid == uid)
+    if before is not None:
+        jq = jq.where(Judgement.time < before)
+    jq = jq.order_by(desc(Judgement.time)).limit(limit)
     for j in (await db.execute(jq)).scalars().all():
         items.append(
             ActivityItem(
