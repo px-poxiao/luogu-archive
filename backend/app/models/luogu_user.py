@@ -17,6 +17,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -182,6 +183,9 @@ class UserPrize(Base):
     contest: Mapped[str] = mapped_column(String(128), nullable=False)
     event: Mapped[str | None] = mapped_column(String(128), nullable=True)
     prize: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 公开成绩才有；XCPC 的 score 是浮点（赛区 penalty 算法）
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped[LuoguUser] = relationship(back_populates="prizes")
 

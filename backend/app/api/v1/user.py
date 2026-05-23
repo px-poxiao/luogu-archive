@@ -45,6 +45,8 @@ class PrizeItem(BaseModel):
     contest: str
     event: str | None
     prize: str
+    score: float | None = None
+    rank: int | None = None
 
 
 class UserProfile(BaseModel):
@@ -164,6 +166,8 @@ async def get_user(
                 contest=p.contest,
                 event=p.event,
                 prize=p.prize,
+                score=p.score,
+                rank=p.rank,
             )
             for p in prizes
         ],

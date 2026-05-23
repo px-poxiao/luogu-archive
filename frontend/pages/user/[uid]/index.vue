@@ -25,7 +25,7 @@ interface UserProfile {
   introduction_md: string | null
   last_crawled_at: string | null
   name_history: Array<{ name: string; first_seen_at: string; last_seen_at: string; is_hidden: boolean }>
-  prizes: Array<{ year: number; contest: string; event: string | null; prize: string }>
+  prizes: Array<{ year: number; contest: string; event: string | null; prize: string; score: number | null; rank: number | null }>
   name_hidden: boolean
 }
 
@@ -181,6 +181,11 @@ const tabs: Array<{ key: TabKey; label: string; show: () => boolean }> = [
 // 代码复制按钮：绑在右侧内容容器上，覆盖 activity / intro 两种 md 场景
 const contentRef = ref<HTMLElement | null>(null)
 useCopyCode(contentRef)
+
+// XCPC 的 score 是浮点（penalty 算法），OI 是整数；整数原样、浮点保留 2 位小数
+function formatScore(s: number): string {
+  return Number.isInteger(s) ? String(s) : s.toFixed(2)
+}
 </script>
 
 <template>
@@ -325,13 +330,36 @@ useCopyCode(contentRef)
         <!-- OI 获奖 -->
         <section v-if="activeTab === 'prizes'">
           <h2>OI 获奖</h2>
-          <ul class="simple-list">
-            <li v-for="p in profile.prizes" :key="`${p.year}-${p.contest}-${p.prize}`">
-              {{ p.year }} {{ p.contest }}
-              <template v-if="p.event"> · {{ p.event }}</template>
-              · {{ p.prize }}
-            </li>
-          </ul>
+          <table class="prize-table">
+            <thead>
+              <tr>
+                <th>年份</th>
+                <th>赛事</th>
+                <th>项目</th>
+                <th>奖项</th>
+                <th>分数</th>
+                <th>排名</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(p, idx) in profile.prizes" :key="`${idx}-${p.contest}-${p.prize}`">
+                <td>
+                  <template v-if="p.year && p.year > 0">{{ p.year }}</template>
+                  <span v-else class="hidden-cell">已隐藏</span>
+                </td>
+                <td>{{ p.contest }}</td>
+                <td>{{ p.event || '—' }}</td>
+                <td>{{ p.prize }}</td>
+                <!-- score/rank 都为 null：合并两格，"已隐藏"在两列范围内居中 -->
+                <td v-if="p.score === null && p.rank === null"
+                    colspan="2" class="hidden-cell hidden-merged">已隐藏</td>
+                <template v-else>
+                  <td>{{ p.score !== null ? formatScore(p.score) : '—' }}</td>
+                  <td>{{ p.rank !== null ? p.rank : '—' }}</td>
+                </template>
+              </tr>
+            </tbody>
+          </table>
         </section>
 
         <!-- 用户名历史 -->
@@ -606,6 +634,42 @@ useCopyCode(contentRef)
   color: var(--text-muted);
   text-align: center;
   padding: 40px;
+}
+.prize-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 14px;
+}
+.prize-table th,
+.prize-table td {
+  padding: 8px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.prize-table thead {
+  background: var(--hover);
+}
+.prize-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.prize-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.prize-table tbody tr:hover {
+  background: var(--hover);
+}
+.hidden-cell {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.prize-table td.hidden-merged {
+  text-align: center;
 }
 .loader {
   text-align: center;

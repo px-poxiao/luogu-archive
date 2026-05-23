@@ -441,6 +441,8 @@ async def _sync_prizes(session: AsyncSession, uid: int, prizes: list) -> None:
         p = item.get("prize") if isinstance(item, dict) else None
         if not isinstance(p, dict):
             continue
+        score_raw = p.get("score")
+        rank_raw = p.get("rank")
         rows.append(
             {
                 "uid": uid,
@@ -448,11 +450,21 @@ async def _sync_prizes(session: AsyncSession, uid: int, prizes: list) -> None:
                 "contest": p.get("contest") or "",
                 "event": p.get("event") or "",
                 "prize": p.get("prize") or "",
+                # null 时保留 None；公开了才记录
+                "score": float(score_raw) if score_raw is not None else None,
+                "rank": int(rank_raw) if rank_raw is not None else None,
             }
         )
     if not rows:
         return
-    stmt = mysql_insert(UserPrize).values(rows).prefix_with("IGNORE")
+    # 用 INSERT ... ON DUPLICATE KEY UPDATE 而不是 IGNORE：
+    # 已有 (uid,year,contest,event,prize) 行时，把 score/rank 更新过去
+    # —— 用户从"未公开"切到"公开成绩"时数据能回填。
+    stmt = mysql_insert(UserPrize).values(rows)
+    stmt = stmt.on_duplicate_key_update(
+        score=stmt.inserted.score,
+        rank=stmt.inserted.rank,
+    )
     await session.execute(stmt)
 
 
