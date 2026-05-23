@@ -22,6 +22,8 @@
   --lg-purple: #9b59b6;
   --lg-cyan: #3498db;
   --lg-black: #0a0a0a;
+  /* 洛谷"黑题"在深色模式下用浅蓝（与官方一致），浅色模式仍用 #0a0a0a */
+  --lg-black-name: var(--lg-black);
   --lg-cheater: #ffdd54;          /* 棕名：名字色 */
   --lg-cheater-tag: #bb9915;      /* 棕名：tag 背景色 */
 }
@@ -37,6 +39,8 @@
   --banner-bg: #3b2f00;
   --banner-border: #8b6e00;
   --article-banner-bg: linear-gradient(135deg, #1a2a44 0%, #1c2128 100%);
+  /* 黑题在深色模式下用浅蓝，跟洛谷官方一致 */
+  --lg-black-name: #accbf4;
 }
 
 html,
@@ -82,7 +86,7 @@ a:hover {
 .lg-name[data-color="Red"] { color: var(--lg-red); }
 .lg-name[data-color="Purple"] { color: var(--lg-purple); }
 .lg-name[data-color="Cyan"] { color: var(--lg-cyan); }
-.lg-name[data-color="Black"] { color: var(--lg-black); font-weight: 700; }
+.lg-name[data-color="Black"] { color: var(--lg-black-name); font-weight: 700; }
 .lg-name[data-color="Cheater"] { color: var(--lg-cheater); }
 
 .lg-badge {
@@ -130,8 +134,10 @@ a:hover {
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--surface);
+  color: var(--text);
   cursor: pointer;
   font-size: 14px;
+  font-weight: normal;
   transition: all 0.15s;
 }
 .save-btn:hover:not(:disabled) {
