@@ -41,7 +41,9 @@ async def crawl_all(*, trigger: str = "scheduled") -> None:
 
 
 async def _crawl_inner(*, trigger: str) -> None:
-    node = get_default_node(NodeKind.ANON)
+    # /judgement 走 cn 主站（_resolve_url 强制），节点也得用 cn 主站节点
+    # 否则海外节点 token bucket / 熔断状态会被主站 0.1 req/s 限速污染
+    node = get_default_node(NodeKind.ANON, cn=True)
     redis = get_redis()
     task_id = await record_task_start(
         "judgement", "/judgement", trigger=trigger_from(trigger), node_id=node.node_id

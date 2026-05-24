@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const api = useApi()
+const route = useRoute()
 
 interface ProblemItem {
   pid: string
@@ -35,12 +36,32 @@ const sortedKeys = computed(() => {
 const diffColor: Record<string, string> = {
   '入门': 'Red',
   '普及-': 'Orange',
-  '普及/提高-': 'Orange',
+  '普及/提高-': 'Yellow',
   '普及+/提高': 'Green',
   '提高+/省选-': 'Blue',
   '省选/NOI-': 'Purple',
   'NOI/NOI+/CTSC': 'Black',
   '暂无评定': 'Gray',
+}
+
+const PREVIEW_LIMIT = 20
+
+// 通过 ?difficulty=xxx 切到单档全列表视图
+const selectedDiff = computed<string | null>(() => {
+  const d = route.query.difficulty
+  return typeof d === 'string' && d.length > 0 ? d : null
+})
+
+const visibleKeys = computed(() => {
+  if (selectedDiff.value) {
+    return sortedKeys.value.includes(selectedDiff.value) ? [selectedDiff.value] : []
+  }
+  return sortedKeys.value
+})
+
+function listFor(k: string): ProblemItem[] {
+  const all = data.value?.[k] || []
+  return selectedDiff.value ? all : all.slice(0, PREVIEW_LIMIT)
 }
 </script>
 
@@ -52,30 +73,56 @@ const diffColor: Record<string, string> = {
       content-type="problem"
       content-id="list"
     />
-    <h1>题目库（允许提交题解）</h1>
-    <p class="note">
-      按洛谷难度分档，仅显示当前允许提交题解的题目。
+    <h1>
+      题目库（允许提交题解）
+      <span v-if="selectedDiff" class="sub">
+        ·
+        <span class="lg-name" :data-color="diffColor[selectedDiff] || 'Gray'">{{ selectedDiff }}</span>
+      </span>
+    </h1>
+    <p v-if="!selectedDiff" class="note">
+      按洛谷难度分档，每档仅显示前 {{ PREVIEW_LIMIT }} 道，点"查看全部"看完整列表。
+    </p>
+    <p v-else class="note">
+      <NuxtLink to="/problem/list">← 返回所有难度</NuxtLink>
     </p>
 
-    <section v-for="k in sortedKeys" :key="k" class="diff-section">
+    <section v-for="k in visibleKeys" :key="k" class="diff-section">
       <h2>
         <span class="lg-name" :data-color="diffColor[k] || 'Gray'">{{ k }}</span>
         <span class="count">{{ data![k].length }}</span>
+        <NuxtLink
+          v-if="!selectedDiff && data![k].length > PREVIEW_LIMIT"
+          :to="{ path: '/problem/list', query: { difficulty: k } }"
+          class="view-all"
+        >
+          查看全部 →
+        </NuxtLink>
       </h2>
       <ul class="problem-list">
-        <li v-for="p in data![k]" :key="p.pid">
+        <li v-for="p in listFor(k)" :key="p.pid">
           <a :href="`https://www.luogu.com.cn/problem/${p.pid}`" target="_blank" rel="noopener">
-            <span class="pid">{{ p.pid }}</span>
+            <span class="pid lg-name" :data-color="diffColor[k] || 'Gray'">{{ p.pid }}</span>
             <span class="title">{{ p.title }}</span>
           </a>
         </li>
       </ul>
+      <p
+        v-if="!selectedDiff && data![k].length > PREVIEW_LIMIT"
+        class="more-hint"
+      >
+        仅显示前 {{ PREVIEW_LIMIT }} 道（共 {{ data![k].length }} 道），
+        <NuxtLink :to="{ path: '/problem/list', query: { difficulty: k } }">
+          查看该档全部题目 →
+        </NuxtLink>
+      </p>
     </section>
   </div>
 </template>
 
 <style scoped>
 .note { color: var(--text-muted); }
+.sub { font-size: 18px; font-weight: normal; margin-left: 4px; }
 .diff-section {
   margin-bottom: 24px;
 }
@@ -88,6 +135,11 @@ const diffColor: Record<string, string> = {
   font-size: 13px;
   color: var(--text-muted);
   font-weight: normal;
+}
+.view-all {
+  font-size: 13px;
+  font-weight: normal;
+  margin-left: auto;
 }
 .problem-list {
   list-style: none;
@@ -108,6 +160,11 @@ const diffColor: Record<string, string> = {
   gap: 10px;
   align-items: center;
 }
-.pid { color: var(--text-muted); font-family: monospace; }
+.pid { font-family: monospace; font-weight: 600; }
 .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.more-hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
 </style>

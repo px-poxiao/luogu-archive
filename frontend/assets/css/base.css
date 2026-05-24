@@ -17,7 +17,8 @@
   --lg-gray: #bfbfbf;
   --lg-blue: #0e90d2;
   --lg-green: #5eb95e;
-  --lg-orange: #e67e22;
+  --lg-orange: #f4a629;
+  --lg-yellow: #ffc629;
   --lg-red: #e74c3c;
   --lg-purple: #9b59b6;
   --lg-cyan: #3498db;
@@ -83,6 +84,7 @@ a:hover {
 .lg-name[data-color="Blue"] { color: var(--lg-blue); }
 .lg-name[data-color="Green"] { color: var(--lg-green); }
 .lg-name[data-color="Orange"] { color: var(--lg-orange); }
+.lg-name[data-color="Yellow"] { color: var(--lg-yellow); }
 .lg-name[data-color="Red"] { color: var(--lg-red); }
 .lg-name[data-color="Purple"] { color: var(--lg-purple); }
 .lg-name[data-color="Cyan"] { color: var(--lg-cyan); }
@@ -103,6 +105,7 @@ a:hover {
 .lg-badge[data-color="Blue"]    { background: var(--lg-blue); }
 .lg-badge[data-color="Green"]   { background: var(--lg-green); }
 .lg-badge[data-color="Orange"]  { background: var(--lg-orange); }
+.lg-badge[data-color="Yellow"]  { background: var(--lg-yellow); color: #333; }
 .lg-badge[data-color="Red"]     { background: var(--lg-red); }
 .lg-badge[data-color="Purple"]  { background: var(--lg-purple); }
 .lg-badge[data-color="Cyan"]    { background: var(--lg-cyan); }
