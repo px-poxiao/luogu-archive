@@ -9,7 +9,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -94,6 +94,12 @@ class ProblemItem(BaseModel):
     difficulty: str | None
     tags: list[int] = []
     solution_open: bool
+
+
+class ProblemDifficultyBucket(BaseModel):
+    """每档难度的预览：前 N 条 + 该档总数。前端据此决定是否显示"查看全部"。"""
+    items: list[ProblemItem]
+    total: int
 
 
 # ============================================================
@@ -230,10 +236,16 @@ async def global_feed(
 
 @router.get("/judgement", response_model=list[JudgementGroup])
 async def list_judgement(
-    limit: int = Query(200, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=500),
+    before: datetime | None = Query(
+        None, description="分页锚点：拿严格早于此时间的，时间倒序游标分页"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> list[JudgementGroup]:
-    q = select(Judgement).order_by(desc(Judgement.time)).limit(limit)
+    q = select(Judgement).order_by(desc(Judgement.time))
+    if before is not None:
+        q = q.where(Judgement.time < before)
+    q = q.limit(limit)
     rows = (await db.execute(q)).scalars().all()
 
     # 分组：reason + 权限位图 + 时间窗
@@ -308,22 +320,28 @@ async def _group_judgements(
 # 题目列表（按难度分组，仅开放题解的）
 # ============================================================
 
-@router.get("/problem/list", response_model=dict[str, list[ProblemItem]])
+@router.get("/problem/list", response_model=dict[str, ProblemDifficultyBucket])
 async def problem_list_by_difficulty(
+    preview_limit: int = Query(20, ge=1, le=200,
+                                description="每档返回的预览条数，前端默认 20"),
     include_closed: bool = Query(False, description="是否包含'不可提交题解'的题"),
     db: AsyncSession = Depends(get_db),
-) -> dict[str, list[ProblemItem]]:
-    """按难度分桶返回题目。
+) -> dict[str, ProblemDifficultyBucket]:
+    """按难度分桶返回题目预览：每档前 preview_limit 条 + 该档总数。
 
-    默认只返"允许提交题解"的；include_closed=true 时也包含已收录的所有题。
+    用户点"查看全部"再调 /problem/list/by-difficulty?difficulty=xxx 拉单档全量。
     """
+    base_filter = [] if include_closed else [Problem.solution_open.is_(True)]
+
+    # 一次查全量再 group by 内存里切，省去对每个档单独打两遍 SQL
     q = select(Problem).order_by(Problem.difficulty, Problem.pid)
-    if not include_closed:
-        q = q.where(Problem.solution_open.is_(True))
+    for f in base_filter:
+        q = q.where(f)
     rows = (await db.execute(q)).scalars().all()
-    out: dict[str, list[ProblemItem]] = defaultdict(list)
+
+    buckets: dict[str, list[ProblemItem]] = defaultdict(list)
     for p in rows:
-        out[p.difficulty or "暂无评定"].append(
+        buckets[p.difficulty or "暂无评定"].append(
             ProblemItem(
                 pid=p.pid,
                 title=p.title,
@@ -332,7 +350,42 @@ async def problem_list_by_difficulty(
                 solution_open=p.solution_open,
             )
         )
-    return dict(out)
+
+    return {
+        diff: ProblemDifficultyBucket(
+            items=items[:preview_limit],
+            total=len(items),
+        )
+        for diff, items in buckets.items()
+    }
+
+
+@router.get("/problem/list/by-difficulty", response_model=list[ProblemItem])
+async def problem_list_full_by_difficulty(
+    difficulty: str = Query(..., description="难度档名（如 '入门' / '暂无评定'）"),
+    include_closed: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+) -> list[ProblemItem]:
+    """单档全量。'暂无评定' 同时匹配 difficulty IS NULL 和字符串 '暂无评定'
+    —— 爬虫对 difficulty=0 的题会存成字符串，老数据可能是 NULL，两种都得包进来。"""
+    q = select(Problem).order_by(Problem.pid)
+    if difficulty == "暂无评定":
+        q = q.where(or_(Problem.difficulty.is_(None), Problem.difficulty == "暂无评定"))
+    else:
+        q = q.where(Problem.difficulty == difficulty)
+    if not include_closed:
+        q = q.where(Problem.solution_open.is_(True))
+    rows = (await db.execute(q)).scalars().all()
+    return [
+        ProblemItem(
+            pid=p.pid,
+            title=p.title,
+            difficulty=p.difficulty,
+            tags=p.tags or [],
+            solution_open=p.solution_open,
+        )
+        for p in rows
+    ]
 
 
 # ============================================================

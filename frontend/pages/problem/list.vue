@@ -10,8 +10,18 @@ interface ProblemItem {
   solution_open: boolean
 }
 
+interface ProblemDifficultyBucket {
+  items: ProblemItem[]
+  total: number
+}
+
+const PREVIEW_LIMIT = 20
+
+// 总览：每档前 20 条 + 该档总数
 const { data } = await useAsyncData('problem-list', () =>
-  api<Record<string, ProblemItem[]>>('/problem/list'),
+  api<Record<string, ProblemDifficultyBucket>>('/problem/list', {
+    query: { preview_limit: PREVIEW_LIMIT },
+  }),
 )
 const { data: lastCrawled } = await useAsyncData('problem-list-last-crawled', () =>
   api<{ last_crawled_at: string | null }>('/last-crawled?type=problem_list'),
@@ -44,13 +54,23 @@ const diffColor: Record<string, string> = {
   '暂无评定': 'Gray',
 }
 
-const PREVIEW_LIMIT = 20
-
 // 通过 ?difficulty=xxx 切到单档全列表视图
 const selectedDiff = computed<string | null>(() => {
   const d = route.query.difficulty
   return typeof d === 'string' && d.length > 0 ? d : null
 })
+
+// 单档全量数据：仅当 selectedDiff 非空时拉取，切换 query 时自动重拉
+const { data: fullList, pending: fullPending } = await useAsyncData(
+  'problem-list-full',
+  () => {
+    if (!selectedDiff.value) return Promise.resolve<ProblemItem[]>([])
+    return api<ProblemItem[]>('/problem/list/by-difficulty', {
+      query: { difficulty: selectedDiff.value },
+    })
+  },
+  { watch: [selectedDiff] },
+)
 
 const visibleKeys = computed(() => {
   if (selectedDiff.value) {
@@ -59,9 +79,12 @@ const visibleKeys = computed(() => {
   return sortedKeys.value
 })
 
-function listFor(k: string): ProblemItem[] {
-  const all = data.value?.[k] || []
-  return selectedDiff.value ? all : all.slice(0, PREVIEW_LIMIT)
+function previewFor(k: string): ProblemItem[] {
+  return data.value?.[k]?.items || []
+}
+
+function totalFor(k: string): number {
+  return data.value?.[k]?.total || 0
 }
 </script>
 
@@ -87,12 +110,31 @@ function listFor(k: string): ProblemItem[] {
       <NuxtLink to="/problem/list">← 返回所有难度</NuxtLink>
     </p>
 
-    <section v-for="k in visibleKeys" :key="k" class="diff-section">
+    <!-- 单档全量视图 -->
+    <section v-if="selectedDiff" class="diff-section">
+      <h2>
+        <span class="lg-name" :data-color="diffColor[selectedDiff] || 'Gray'">{{ selectedDiff }}</span>
+        <span class="count">{{ fullList?.length || 0 }}</span>
+      </h2>
+      <p v-if="fullPending" class="empty">加载中...</p>
+      <ul v-else-if="fullList && fullList.length" class="problem-list">
+        <li v-for="p in fullList" :key="p.pid">
+          <a :href="`https://www.luogu.com.cn/problem/${p.pid}`" target="_blank" rel="noopener">
+            <span class="pid lg-name" :data-color="diffColor[selectedDiff] || 'Gray'">{{ p.pid }}</span>
+            <span class="title">{{ p.title }}</span>
+          </a>
+        </li>
+      </ul>
+      <p v-else class="empty">该档暂无题目</p>
+    </section>
+
+    <!-- 总览：所有难度的预览 -->
+    <section v-for="k in visibleKeys" v-else :key="k" class="diff-section">
       <h2>
         <span class="lg-name" :data-color="diffColor[k] || 'Gray'">{{ k }}</span>
-        <span class="count">{{ data![k].length }}</span>
+        <span class="count">{{ totalFor(k) }}</span>
         <NuxtLink
-          v-if="!selectedDiff && data![k].length > PREVIEW_LIMIT"
+          v-if="totalFor(k) > PREVIEW_LIMIT"
           :to="{ path: '/problem/list', query: { difficulty: k } }"
           class="view-all"
         >
@@ -100,7 +142,7 @@ function listFor(k: string): ProblemItem[] {
         </NuxtLink>
       </h2>
       <ul class="problem-list">
-        <li v-for="p in listFor(k)" :key="p.pid">
+        <li v-for="p in previewFor(k)" :key="p.pid">
           <a :href="`https://www.luogu.com.cn/problem/${p.pid}`" target="_blank" rel="noopener">
             <span class="pid lg-name" :data-color="diffColor[k] || 'Gray'">{{ p.pid }}</span>
             <span class="title">{{ p.title }}</span>
@@ -108,10 +150,10 @@ function listFor(k: string): ProblemItem[] {
         </li>
       </ul>
       <p
-        v-if="!selectedDiff && data![k].length > PREVIEW_LIMIT"
+        v-if="totalFor(k) > PREVIEW_LIMIT"
         class="more-hint"
       >
-        仅显示前 {{ PREVIEW_LIMIT }} 道（共 {{ data![k].length }} 道），
+        仅显示前 {{ PREVIEW_LIMIT }} 道（共 {{ totalFor(k) }} 道），
         <NuxtLink :to="{ path: '/problem/list', query: { difficulty: k } }">
           查看该档全部题目 →
         </NuxtLink>

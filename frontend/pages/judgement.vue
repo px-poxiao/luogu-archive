@@ -21,12 +21,54 @@ interface JudgementGroup {
   count: number
 }
 
-const { data } = await useAsyncData('judgement', () =>
-  api<JudgementGroup[]>('/judgement?limit=200'),
+const PAGE_SIZE = 50
+
+const groups = ref<JudgementGroup[]>([])
+const loading = ref(false)
+const noMore = ref(false)
+// 游标：取下一页时把这个值塞 ?before=
+const beforeTs = ref<string | null>(null)
+
+// 首屏：useAsyncData 拿第一页，SSR 序列化到 payload，client hydrate 不重跑
+const { data: firstPage } = await useAsyncData('judgement-first', () =>
+  api<JudgementGroup[]>('/judgement', { query: { limit: PAGE_SIZE } }),
 )
 const { data: lastCrawled } = await useAsyncData('judgement-last-crawled', () =>
   api<{ last_crawled_at: string | null }>('/last-crawled?type=judgement'),
 )
+
+if (firstPage.value && firstPage.value.length) {
+  groups.value = [...firstPage.value]
+  // 用 time_end 倒序拿下一页：取最后一组的 time_start 当游标
+  // （服务端按 Judgement.time desc 拉再合并，所以游标是 time_start）
+  beforeTs.value = firstPage.value[firstPage.value.length - 1].time_start
+  // 注意：不能用 length < PAGE_SIZE 判 noMore —— 后端先按 50 条原始
+  // judgement 拉，再合并成 group，组数总是远小于 50。只有真正返回空才算到底。
+} else {
+  noMore.value = true
+}
+
+async function loadMore() {
+  if (loading.value || noMore.value) return
+  loading.value = true
+  try {
+    const q: Record<string, any> = { limit: PAGE_SIZE }
+    if (beforeTs.value) q.before = beforeTs.value
+    const page = await api<JudgementGroup[]>('/judgement', { query: q })
+    if (page.length === 0) {
+      noMore.value = true
+    } else {
+      // 去重：分页边界上同一条 judgement 可能在两页都被合并出来
+      const seen = new Set(groups.value.map(g => g.group_key))
+      const fresh = page.filter(g => !seen.has(g.group_key))
+      groups.value.push(...fresh)
+      beforeTs.value = page[page.length - 1].time_start
+      // 同首屏，只有空页才判 noMore；group 数小于 PAGE_SIZE 是合并后的常态
+    }
+  } finally {
+    loading.value = false
+  }
+}
 
 /**
  * 洛谷权限位图。多个权限组合 = 数值相加（位或）。
@@ -72,8 +114,8 @@ function formatTime(t: string): string {
     />
     <h1>陶片放逐（封号公示存档）</h1>
 
-    <ul v-if="data && data.length" class="list">
-      <li v-for="g in data" :key="g.group_key" class="item">
+    <ul v-if="groups.length" class="list">
+      <li v-for="g in groups" :key="g.group_key" class="item">
         <!-- 顶部：权限变更头标 + 时间 -->
         <header class="head">
           <span class="action-tag" :class="g.revoked_permission > 0 ? 'revoked' : 'added'">
@@ -136,6 +178,13 @@ function formatTime(t: string): string {
       </li>
     </ul>
     <p v-else class="empty">暂无数据</p>
+
+    <div v-if="groups.length" class="loader">
+      <button v-if="!noMore" :disabled="loading" @click="loadMore">
+        {{ loading ? '加载中...' : '加载更多' }}
+      </button>
+      <span v-else class="empty-line">没有更多了</span>
+    </div>
   </div>
 </template>
 
@@ -286,5 +335,30 @@ function formatTime(t: string): string {
   text-align: center;
   color: var(--text-muted);
   padding: 40px;
+}
+
+.loader {
+  text-align: center;
+  padding: 20px;
+}
+.loader button {
+  padding: 8px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+}
+.loader button:hover:not(:disabled) {
+  border-color: var(--link);
+  color: var(--link);
+}
+.loader button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.loader .empty-line {
+  color: var(--text-muted);
 }
 </style>
