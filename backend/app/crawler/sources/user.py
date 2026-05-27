@@ -65,8 +65,10 @@ async def _enqueue_feed_cascade(uid: int, *, trigger: str) -> None:
 
     passive 触发会经过 10 分钟 NX dedup（多次访问同一用户不会重复派），
     manual / first_time / cascaded 触发不去重，立即派。
+
+    manual 走 hi 队列，passive / cascaded 走 feed 队列。
     """
-    from app.tasks.actors.crawl import crawl_user_feeds
+    from app.tasks.actors.crawl import crawl_user_feeds, crawl_user_feeds_hi
 
     if trigger == "passive":
         redis = get_redis()
@@ -76,8 +78,10 @@ async def _enqueue_feed_cascade(uid: int, *, trigger: str) -> None:
             log.info("crawl_user.feed_passive_deduped", uid=uid)
             return
 
+    is_user_initiated = trigger in ("manual", "first_time")
+    actor = crawl_user_feeds_hi if is_user_initiated else crawl_user_feeds
     try:
-        crawl_user_feeds.send(uid, 1, f"cascaded_from_user:{trigger}")
+        actor.send(uid, 1, f"cascaded_from_user:{trigger}")
     except Exception as e:
         log.warning("crawl_user.cascade_feed_failed", uid=uid, error=str(e))
 

@@ -14,7 +14,7 @@ import asyncio
 from datetime import timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from app.core.db import db_session
 from app.core.logging import get_logger, setup_logging
@@ -135,73 +135,135 @@ async def job_feed_tiered_polling() -> None:
     )
 
 
-async def job_problem_tiered_polling() -> None:
-    """题目分层扫描（只扫 solution_open 为 true 的）。
+async def job_problem_tier_hourly() -> None:
+    """tier1（入门 / 普及-）：每小时派一次"距上次检查 ≥ 1h"的题。
 
-    入门 / 普及- 每 2h，普及/普及+/提高+/省选- 每 12h，省选+ 每 3 天
+    每小时的目标周期是 1h，所以查 last_solution_check_at < now-1h（含 NULL）的题。
+    11s/题错峰，cn 节点 0.1 req/s 是上限。
     """
     from app.tasks.actors.crawl import crawl_problem_solution
     now = utcnow()
 
     async with db_session() as session:
-        # 入门 / 普及-
         q = (
             select(Problem.pid)
             .where(
                 Problem.solution_open.is_(True),
                 Problem.difficulty.in_(["入门", "普及-"]),
                 or_(
-                    Problem.last_solution_check_at < now - timedelta(hours=2),
+                    Problem.last_solution_check_at < now - timedelta(hours=1),
                     Problem.last_solution_check_at.is_(None),
                 ),
             )
-            .limit(500)
+            .order_by(Problem.last_solution_check_at.asc().nullsfirst())
         )
-        tier1 = [r[0] for r in (await session.execute(q)).all()]
+        pids = [r[0] for r in (await session.execute(q)).all()]
 
-        # 普及/普及+/提高+/省选-
+    for i, pid in enumerate(pids):
+        crawl_problem_solution.send_with_options(
+            args=(pid, "scheduled"), delay=i * 11_000,
+        )
+    log.info("problem_polling.tier_hourly", count=len(pids))
+
+
+async def job_problem_tier_daily() -> None:
+    """tier2（普及/提高-）：每天派一次"距上次检查 ≥ 24h"的题。"""
+    from app.tasks.actors.crawl import crawl_problem_solution
+    now = utcnow()
+
+    async with db_session() as session:
         q = (
             select(Problem.pid)
             .where(
                 Problem.solution_open.is_(True),
-                Problem.difficulty.in_(["普及/提高-", "普及+/提高", "提高+/省选-"]),
+                Problem.difficulty == "普及/提高-",
                 or_(
-                    Problem.last_solution_check_at < now - timedelta(hours=12),
+                    Problem.last_solution_check_at < now - timedelta(hours=24),
                     Problem.last_solution_check_at.is_(None),
                 ),
             )
-            .limit(500)
+            .order_by(Problem.last_solution_check_at.asc().nullsfirst())
         )
-        tier2 = [r[0] for r in (await session.execute(q)).all()]
+        pids = [r[0] for r in (await session.execute(q)).all()]
 
-        # 省选/NOI- + NOI/CTSC
+    for i, pid in enumerate(pids):
+        crawl_problem_solution.send_with_options(
+            args=(pid, "scheduled"), delay=i * 11_000,
+        )
+    log.info("problem_polling.tier_daily", count=len(pids))
+
+
+async def job_problem_tier_weekly() -> None:
+    """tier3（其他档）：每天派 1/7 的"距上次检查 ≥ 7d"的题，让全周均匀分摊。
+
+    覆盖：普及+/提高、提高+/省选-、省选/NOI-、NOI/NOI+/CTSC、暂无评定。
+
+    避免周一一次性把全档 1000+ 道题全派进队列堵住其他用户操作。
+    取最旧的 ceil(N/7) 条，每天派一次，7 天正好把全档转完一轮。
+    """
+    import math
+    from app.tasks.actors.crawl import crawl_problem_solution
+    now = utcnow()
+
+    other_diffs = [
+        "普及+/提高", "提高+/省选-", "省选/NOI-", "NOI/NOI+/CTSC", "暂无评定",
+    ]
+    async with db_session() as session:
+        # 总数（用于今日配额计算）
+        total_q = (
+            select(func.count(Problem.pid))
+            .where(
+                Problem.solution_open.is_(True),
+                or_(
+                    Problem.difficulty.in_(other_diffs),
+                    Problem.difficulty.is_(None),
+                ),
+            )
+        )
+        total = (await session.execute(total_q)).scalar_one()
+        # 今日配额：覆盖全档 7 天，多 1 题保证收敛
+        daily_quota = max(1, math.ceil(total / 7))
+
         q = (
             select(Problem.pid)
             .where(
                 Problem.solution_open.is_(True),
-                Problem.difficulty.in_(["省选/NOI-", "NOI/NOI+/CTSC"]),
                 or_(
-                    Problem.last_solution_check_at < now - timedelta(days=3),
+                    Problem.difficulty.in_(other_diffs),
+                    Problem.difficulty.is_(None),
+                ),
+                or_(
+                    Problem.last_solution_check_at < now - timedelta(days=7),
                     Problem.last_solution_check_at.is_(None),
                 ),
             )
-            .limit(200)
+            .order_by(Problem.last_solution_check_at.asc().nullsfirst())
+            .limit(daily_quota)
         )
-        tier3 = [r[0] for r in (await session.execute(q)).all()]
+        pids = [r[0] for r in (await session.execute(q)).all()]
 
-    for pid in tier1 + tier2 + tier3:
-        crawl_problem_solution.send(pid, "scheduled")
+    for i, pid in enumerate(pids):
+        crawl_problem_solution.send_with_options(
+            args=(pid, "scheduled"), delay=i * 11_000,
+        )
     log.info(
-        "problem_polling.enqueued",
-        tier1=len(tier1), tier2=len(tier2), tier3=len(tier3),
+        "problem_polling.tier_weekly", count=len(pids),
+        total_in_tier=total, daily_quota=daily_quota,
     )
 
 
 async def job_problem_list_scan() -> None:
-    """每天凌晨扫前 20 页题目列表，发现新题。"""
+    """每天凌晨扫前 20 页题目列表，发现新题。
+
+    新题进 problems 表后，list 页 cascade 会自动派一次 solution 检测（去重 30min）。
+    """
     from app.tasks.actors.crawl import crawl_problem_list_page
     for page in range(1, 21):
-        crawl_problem_list_page.send(page, "scheduled")
+        # 每页错峰 11s，让 cn 节点不被一口气怼 20 个 list 请求
+        crawl_problem_list_page.send_with_options(
+            args=(page, "scheduled"),
+            delay=(page - 1) * 11_000,
+        )
 
 
 # ============================================================
@@ -215,7 +277,12 @@ def build_scheduler() -> AsyncIOScheduler:
     sched.add_job(job_discover_article, "interval", minutes=10, id="discover_article")
     sched.add_job(job_crawl_judgement, "interval", hours=1, id="crawl_judgement")
     sched.add_job(job_feed_tiered_polling, "interval", minutes=10, id="feed_polling")
-    sched.add_job(job_problem_tiered_polling, "interval", hours=1, id="problem_polling")
+    sched.add_job(job_problem_tier_hourly, "interval", hours=1, id="problem_tier_hourly")
+    # tier2 每天凌晨 02:17 开始
+    sched.add_job(job_problem_tier_daily, "cron", hour=2, minute=17, id="problem_tier_daily")
+    # tier3 每天 02:33 派 1/7 配额，7 天滚完一轮
+    sched.add_job(job_problem_tier_weekly, "cron", hour=2, minute=33, id="problem_tier_weekly")
+    # 列表页发现新题，凌晨 02:13
     sched.add_job(job_problem_list_scan, "cron", hour=2, minute=13, id="problem_list_scan")
     return sched
 

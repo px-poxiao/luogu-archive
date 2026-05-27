@@ -75,15 +75,29 @@ def crawl_user(uid: int, trigger: str = "manual") -> None:
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_FEED, **_RETRY)
 def crawl_user_feeds(uid: int, page: int = 1, trigger: str = "scheduled") -> None:
-    """用 Cookie 账号爬某用户的犇犇。"""
+    """用 Cookie 账号爬某用户的犇犇（定时 / 入口页发现走这里）。"""
     log.info("actor.crawl_user_feeds", uid=uid, page=page, trigger=trigger)
+    run_async(_crawl_feed_user_page(uid, page=page, trigger=trigger))
+
+
+@dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
+def crawl_user_feeds_hi(uid: int, page: int = 1, trigger: str = "manual") -> None:
+    """用户主动保存触发的犇犇爬取，走 hi 队列优先。"""
+    log.info("actor.crawl_user_feeds_hi", uid=uid, page=page, trigger=trigger)
     run_async(_crawl_feed_user_page(uid, page=page, trigger=trigger))
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_MID, **_RETRY)
 def crawl_judgement(trigger: str = "scheduled") -> None:
-    """爬全站陶片放逐 500 条。"""
+    """爬全站陶片放逐 500 条（定时任务走这里）。"""
     log.info("actor.crawl_judgement", trigger=trigger)
+    run_async(_crawl_judgement_all(trigger=trigger))
+
+
+@dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
+def crawl_judgement_hi(trigger: str = "manual") -> None:
+    """用户主动保存触发的陶片爬取，走 hi 队列优先。"""
+    log.info("actor.crawl_judgement_hi", trigger=trigger)
     run_async(_crawl_judgement_all(trigger=trigger))
 
 
@@ -93,9 +107,24 @@ def crawl_problem_list_page(page: int, trigger: str = "scheduled") -> None:
     run_async(_crawl_problem_list_page(page, trigger=trigger))
 
 
+@dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
+def crawl_problem_list_page_hi(page: int, trigger: str = "manual") -> None:
+    """用户主动保存（题目列表保存按钮）触发的列表页爬取。"""
+    log.info("actor.crawl_problem_list_page_hi", page=page, trigger=trigger)
+    run_async(_crawl_problem_list_page(page, trigger=trigger))
+
+
 @dramatiq.actor(queue_name=QUEUE_CRAWL_MID, **_RETRY)
 def crawl_problem_solution(pid: str, trigger: str = "scheduled") -> None:
+    """定时 / cascade 触发的题解检测，走 mid 队列。"""
     log.info("actor.crawl_problem_solution", pid=pid, trigger=trigger)
+    run_async(_crawl_problem_solution_state(pid, trigger=trigger))
+
+
+@dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
+def crawl_problem_solution_hi(pid: str, trigger: str = "manual") -> None:
+    """用户主动保存（单题）触发的题解检测，走 hi 队列优先。"""
+    log.info("actor.crawl_problem_solution_hi", pid=pid, trigger=trigger)
     run_async(_crawl_problem_solution_state(pid, trigger=trigger))
 
 

@@ -175,14 +175,17 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
                 await session.commit()
 
         # cascade 派题解检测：
-        # - 本批次所有 pid（manual / scheduled 都派）
+        # - manual / 入口页发现等"高频用户触发"：批次内全部派
+        # - scheduled / cascaded_*：只派 new_pids（首次见的题），避免每天定时
+        #   扫一次就把 1000+ 已知题全部重派堵队列
+        # - 同 pid 30 分钟 redis 去重（NX setex），防止短时多源并发派同一题
         # - 错峰 11s/题（节点 0.1 req/s = 10s/req，留 1s 余量）
-        # - severe 严格终态：solution_open=False 的老题不再派（已确认关闭）
+        # - solution_open=False 且已检测过的老题不再派（已确认关闭，终态）
         if rows:
             from app.tasks.actors.crawl import crawl_problem_solution
             async with db_session() as session:
                 pids_in_batch = [r["pid"] for r in rows]
-                # 已确认关闭的老题（solution_open=False 且检测过）排除
+                # 已确认关闭的老题排除
                 closed_q = (
                     select(Problem.pid)
                     .where(Problem.pid.in_(pids_in_batch))
@@ -190,13 +193,31 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
                     .where(Problem.last_solution_check_at.is_not(None))
                 )
                 closed_set = {r[0] for r in (await session.execute(closed_q)).all()}
-            cascade_pids = sorted(set(pids_in_batch) - closed_set)
-            for i, pid in enumerate(cascade_pids):
+
+            base_candidates = sorted(set(pids_in_batch) - closed_set)
+            # scheduled / cascade 触发：只派新题，老题留给 tiered_polling
+            is_low_priority_trigger = (
+                trigger == "scheduled" or trigger.startswith("cascaded")
+            )
+            if is_low_priority_trigger:
+                cascade_pids = [p for p in base_candidates if p in new_pids]
+            else:
+                cascade_pids = base_candidates
+
+            # 30 分钟 redis NX 去重，防短时多源并发重复派
+            dispatched = 0
+            skipped_dedup = 0
+            for pid in cascade_pids:
+                dedup_key = f"crawl:dedup:problem_solution:{pid}"
+                if not await redis.set(dedup_key, "1", ex=1800, nx=True):
+                    skipped_dedup += 1
+                    continue
                 try:
                     crawl_problem_solution.send_with_options(
                         args=(pid, f"cascaded_from_list_{trigger}"),
-                        delay=i * 11_000,
+                        delay=dispatched * 11_000,
                     )
+                    dispatched += 1
                 except Exception as e:
                     log.warning(
                         "crawl_problem_list.cascade_solution_failed",
@@ -205,7 +226,9 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
             log.info(
                 "crawl_problem_list.cascade_solution_dispatched",
                 page=page, new_count=len(new_pids),
-                cascade_count=len(cascade_pids), total=len(pids_in_batch),
+                cascade_count=dispatched, skipped_dedup=skipped_dedup,
+                total=len(pids_in_batch),
+                low_priority=is_low_priority_trigger,
             )
 
         dur = int((_t.monotonic() - start) * 1000)

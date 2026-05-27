@@ -78,6 +78,7 @@ async function loadMore() {
 const PERMISSION_MAP: Array<[number, string]> = [
   [2, '进入主站'],
   [4, '进入后台'],
+  [8, '题目管理'],
   [32768, '自由发言'],
   [65536, '发送私信'],
   [131072, '使用专栏'],
