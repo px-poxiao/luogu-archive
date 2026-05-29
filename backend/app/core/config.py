@@ -107,6 +107,14 @@ class Settings(BaseSettings):
     JWT_REFRESH_TTL_SEC: int = 604800
 
     # ---------- 邮件 ----------
+    # 发送后端：resend（HTTP API，推荐）或 smtp（aiosmtplib）
+    MAIL_PROVIDER: Literal["resend", "smtp"] = "smtp"
+    MAIL_FROM: str = "noreply@example.com"   # 发件人，需为已验证域名下的地址
+
+    # Resend HTTP API
+    RESEND_API_KEY: str = ""
+
+    # 传统 SMTP（MAIL_PROVIDER=smtp 时用）
     SMTP_HOST: str = "smtp.example.com"
     SMTP_PORT: int = 587
     SMTP_USER: str = "noreply@example.com"

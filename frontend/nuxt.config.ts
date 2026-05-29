@@ -47,7 +47,7 @@ export default defineNuxtConfig({
         { name: 'description', content: '洛谷社区内容存档站 —— 文章 / 剪贴板 / 犇犇 / 陶片放逐 / 题解' },
       ],
       link: [
-        { rel: 'icon', href: '/favicon.ico' },
+        { rel: 'icon', type: 'image/png', href: '/favicon.png' },
       ],
     },
   },

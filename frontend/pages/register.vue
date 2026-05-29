@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const form = ref({ email: '', password: '', display_name: '' })
+const passwordConfirm = ref('')
 const state = ref<'idle' | 'loading' | 'done'>('idle')
 const err = ref('')
 
@@ -7,6 +8,10 @@ const api = useApi()
 
 async function submit() {
   err.value = ''
+  if (form.value.password !== passwordConfirm.value) {
+    err.value = '两次输入的密码不一致'
+    return
+  }
   state.value = 'loading'
   try {
     await api('/auth/register', { method: 'POST', body: form.value })
@@ -24,10 +29,12 @@ async function submit() {
     <form v-if="state !== 'done'" @submit.prevent="submit">
       <label>邮箱</label>
       <input v-model="form.email" type="email" autocomplete="email" required>
-      <label>显示名（1-64 字）</label>
-      <input v-model="form.display_name" type="text" minlength="1" maxlength="64" required>
+      <label>显示名（1-16 字）</label>
+      <input v-model="form.display_name" type="text" minlength="1" maxlength="16" required>
       <label>密码（至少 8 位，含字母和数字）</label>
-      <input v-model="form.password" type="password" autocomplete="new-password" minlength="8" required>
+      <input v-model="form.password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required>
+      <label>确认密码</label>
+      <input v-model="passwordConfirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" required>
       <button :disabled="state === 'loading'" type="submit">
         {{ state === 'loading' ? '提交中...' : '注册' }}
       </button>

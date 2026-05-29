@@ -57,7 +57,7 @@ REFRESH_COOKIE_NAME = "la_refresh"
 class RegisterReq(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
-    display_name: str = Field(..., min_length=1, max_length=64)
+    display_name: str = Field(..., min_length=1, max_length=16)
 
 
 class LoginReq(BaseModel):
@@ -137,6 +137,58 @@ async def register(
     return {"message": "已发送验证邮件，请查收"}
 
 
+class ResendVerifyReq(BaseModel):
+    email: EmailStr
+
+
+@router.post("/auth/resend-verification", response_model=dict)
+async def resend_verification(
+    req: ResendVerifyReq,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """重发验证邮件。
+
+    - 同一邮箱 60s 冷却（redis NX）
+    - 同 IP 每小时最多 5 次（与注册共享额度精神，独立 key）
+    - 不泄露邮箱是否存在 / 是否已验证：一律返回同样的成功文案
+    """
+    redis = get_redis()
+    email_lower = req.email.lower()
+
+    # 同 IP 每小时 5 次
+    ok, _ = await SlidingWindowLimiter(redis).acquire(
+        ratelimit_key("resend_verify_ip", get_client_ip(request)),
+        window_sec=3600,
+        limit=5,
+    )
+    if not ok:
+        raise RateLimitError("操作过于频繁", retry_after_sec=1800)
+
+    # 同邮箱 60s 冷却
+    cd_key = f"auth:resend_verify_cd:{email_lower}"
+    if not await redis.set(cd_key, "1", ex=60, nx=True):
+        raise RateLimitError("发送过于频繁，请 60 秒后再试", retry_after_sec=60)
+
+    generic_resp = {"message": "若该邮箱待验证，我们已重新发送验证邮件"}
+
+    q = select(SiteUser).where(SiteUser.email == email_lower)
+    user = (await db.execute(q)).scalar_one_or_none()
+    # 邮箱不存在 / 已验证：静默返回，不泄露状态（冷却已扣）
+    if user is None or user.email_verified:
+        return generic_resp
+
+    # 重新生成 token + 续期 24h
+    token = secrets.token_urlsafe(32)
+    user.email_verification_token = token
+    user.email_verification_expires = utcnow() + timedelta(hours=24)
+    await db.commit()
+
+    verify_url = f"{settings.WEB_PUBLIC_ORIGIN}/auth/verify?token={token}"
+    await send_verification_email(user.email, verify_url)
+    return generic_resp
+
+
 @router.get("/auth/verify")
 async def verify_email(
     token: str,
@@ -146,7 +198,12 @@ async def verify_email(
     user = (await db.execute(q)).scalar_one_or_none()
     if user is None:
         raise NotFoundError("验证链接无效")
-    if user.email_verification_expires and user.email_verification_expires < utcnow():
+    expires = user.email_verification_expires
+    # MySQL DATETIME 读回来是 naive，补 UTC 时区再跟 aware 的 utcnow() 比较，
+    # 否则 offset-naive vs offset-aware 比较会抛 TypeError → 500。
+    if expires is not None and expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires and expires < utcnow():
         raise ValidationError("验证链接已过期，请重新注册")
 
     user.email_verified = True
@@ -189,7 +246,10 @@ async def login(
         raise AuthError("邮箱或密码错误")
     if user.is_banned:
         raise AuthError("账号已停用")
-    if user.locked_until and user.locked_until > utcnow():
+    locked = user.locked_until
+    if locked is not None and locked.tzinfo is None:
+        locked = locked.replace(tzinfo=timezone.utc)
+    if locked and locked > utcnow():
         raise AuthError(f"账号已锁定，请稍后再试")
 
     if not verify_password(req.password, user.password_hash):

@@ -45,11 +45,6 @@ const navItems = [
     label: '题目',
     icon: 'M6 4h10l4 4v12H6V4zM9 14h6M9 18h6',
   },
-  {
-    to: '/takedown',
-    label: '侵权删除',
-    icon: 'M12 3l8 4v6c0 5-4 7-8 8-4-1-8-3-8-8V7l8-4z',
-  },
 ]
 </script>
 
@@ -57,15 +52,7 @@ const navItems = [
   <div class="layout-root">
     <aside class="side-nav">
       <NuxtLink to="/" class="brand" title="洛谷存档">
-        <svg viewBox="0 0 24 24" class="icon">
-          <path
-            d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linejoin="round"
-          />
-        </svg>
+        <img src="/favicon.png" alt="洛谷存档" class="brand-logo">
         <span class="label">洛谷存档</span>
       </NuxtLink>
 
@@ -268,6 +255,16 @@ const navItems = [
   height: 22px;
   flex-shrink: 0;
   color: inherit;
+}
+
+.brand-logo {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  object-fit: cover;
+  display: block;
+  margin-left: -4px;
 }
 
 .label {
