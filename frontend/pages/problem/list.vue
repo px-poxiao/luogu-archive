@@ -1,6 +1,7 @@
 <script setup lang="ts">
 const api = useApi()
 const route = useRoute()
+const { fromNow } = useTime()
 
 interface ProblemItem {
   pid: string
@@ -26,6 +27,49 @@ const { data } = await useAsyncData('problem-list', () =>
 const { data: lastCrawled } = await useAsyncData('problem-list-last-crawled', () =>
   api<{ last_crawled_at: string | null }>('/last-crawled?type=problem_list'),
 )
+
+const saveState = ref<'idle' | 'pending' | 'success' | 'failed' | 'cooldown' | 'captcha'>('idle')
+const saveMessage = ref('')
+
+const relTime = computed(() =>
+  lastCrawled.value?.last_crawled_at ? fromNow(lastCrawled.value.last_crawled_at) : '未知',
+)
+
+async function saveProblemList() {
+  if (saveState.value === 'pending') return
+  saveState.value = 'pending'
+  saveMessage.value = '排队中...'
+  try {
+    const resp = await api<{ task_id: string; merged: boolean; status: string }>('/save', {
+      method: 'POST',
+      body: {
+        content_type: 'problem',
+        id: 'list',
+      },
+    })
+    saveState.value = 'success'
+    saveMessage.value = resp.merged ? '已合并到进行中的任务' : '已派发，请稍后刷新'
+    setTimeout(() => {
+      saveState.value = 'idle'
+      saveMessage.value = ''
+    }, 3000)
+  } catch (e: any) {
+    const code = e?.data?.error_code
+    if (code === 'captcha_required') {
+      saveState.value = 'captcha'
+      saveMessage.value = '请先完成人机验证'
+    } else if (code === 'rate_limited') {
+      saveState.value = 'cooldown'
+      const s = e?.data?.data?.retry_after_sec || 30
+      saveMessage.value = `冷却中 ${s}s`
+      setTimeout(() => { saveState.value = 'idle' }, s * 1000)
+    } else {
+      saveState.value = 'failed'
+      saveMessage.value = e?.data?.message || '失败'
+      setTimeout(() => { saveState.value = 'idle' }, 3000)
+    }
+  }
+}
 
 // 按洛谷难度顺序排序
 const diffOrder = [
@@ -90,24 +134,37 @@ function totalFor(k: string): number {
 
 <template>
   <div>
-    <OriginBanner
-      origin-url="https://www.luogu.com.cn/problem/list"
-      :crawled-at="lastCrawled?.last_crawled_at"
-      content-type="problem"
-      content-id="list"
-    />
-    <h1>
-      题目库（允许提交题解）
-      <span v-if="selectedDiff" class="sub">
-        ·
-        <span class="lg-name" :data-color="diffColor[selectedDiff] || 'Gray'">{{ selectedDiff }}</span>
-      </span>
-    </h1>
-    <p v-if="!selectedDiff" class="note">
-      按洛谷难度分档，每档仅显示前 {{ PREVIEW_LIMIT }} 道，点"查看全部"看完整列表。
+    <section class="problem-hero">
+      <h1>题目库</h1>
+      <div class="hero-meta">
+        <span class="attr">
+          <a href="https://www.luogu.com.cn/problem/list" target="_blank" rel="noopener noreferrer">
+            查看洛谷原文
+          </a>
+          · 上次更新：{{ relTime }}
+        </span>
+        <button
+          class="hero-save-btn"
+          :class="{
+            success: saveState === 'success',
+            error: saveState === 'failed',
+            cooldown: saveState === 'cooldown' || saveState === 'captcha',
+          }"
+          :disabled="saveState === 'pending'"
+          @click="saveProblemList"
+        >
+          <span v-if="saveState === 'idle'">🔄 立即更新</span>
+          <span v-else>{{ saveMessage }}</span>
+        </button>
+      </div>
+    </section>
+    <p v-if="selectedDiff" class="note diff-current">
+      当前难度：
+      <span class="lg-name" :data-color="diffColor[selectedDiff] || 'Gray'">{{ selectedDiff }}</span>
+      · <NuxtLink to="/problem/list">← 返回所有难度</NuxtLink>
     </p>
     <p v-else class="note">
-      <NuxtLink to="/problem/list">← 返回所有难度</NuxtLink>
+      允许提交题解的题目，按洛谷难度分档，每档仅显示前 {{ PREVIEW_LIMIT }} 道，点"查看全部"看完整列表。
     </p>
 
     <!-- 单档全量视图 -->
@@ -163,6 +220,65 @@ function totalFor(k: string): number {
 </template>
 
 <style scoped>
+.problem-hero {
+  position: relative;
+  border-radius: 12px;
+  padding: 22px 26px;
+  margin-bottom: 20px;
+  overflow: hidden;
+  background: var(--hero-bg);
+  border: 1px solid var(--hero-border);
+}
+.problem-hero h1 {
+  margin: 0 0 10px;
+  color: var(--hero-text);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.3px;
+}
+.hero-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.attr {
+  flex: 1;
+  min-width: 0;
+  color: var(--hero-text-muted);
+  font-size: 13.5px;
+}
+.attr a {
+  color: var(--link);
+  text-decoration: none;
+}
+.attr a:hover {
+  text-decoration: underline;
+}
+.hero-save-btn {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--hero-border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13.5px;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s, color 0.15s;
+}
+.hero-save-btn:hover:not(:disabled) {
+  border-color: var(--link);
+  color: var(--link);
+  transform: translateY(-1px);
+}
+.hero-save-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.hero-save-btn.success { color: var(--lg-green); border-color: var(--lg-green); }
+.hero-save-btn.error { color: var(--lg-red); border-color: var(--lg-red); }
+.hero-save-btn.cooldown { color: var(--lg-orange); border-color: var(--lg-orange); }
 .note { color: var(--text-muted); }
 .sub { font-size: 18px; font-weight: normal; margin-left: 4px; }
 .diff-section {
@@ -208,5 +324,11 @@ function totalFor(k: string): number {
   margin: 8px 0 0;
   font-size: 13px;
   color: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+  .problem-hero {
+    padding: 18px 16px;
+  }
 }
 </style>

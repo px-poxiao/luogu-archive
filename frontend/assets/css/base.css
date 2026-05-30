@@ -13,6 +13,12 @@
   /* 文章头 banner（浅色渐变 → 深色渐变） */
   --article-banner-bg: linear-gradient(135deg, #eaf4ff 0%, #f3f4f6 100%);
 
+  /* 页面头图：比背景 (--bg #f7f8fa) 微微发蓝 */
+  --hero-bg: #eef3fb;
+  --hero-border: #dde6f3;
+  --hero-text: var(--text);
+  --hero-text-muted: var(--text-muted);
+
   /* 洛谷难度 / 用户颜色（沿用官方色值） */
   --lg-gray: #bfbfbf;
   --lg-blue: #0e90d2;
@@ -42,6 +48,9 @@
   --article-banner-bg: linear-gradient(135deg, #1a2a44 0%, #1c2128 100%);
   /* 黑题在深色模式下用浅蓝，跟洛谷官方一致 */
   --lg-black-name: #accbf4;
+  /* 页面头图：比背景 (--bg #0d1117) 微微发蓝 */
+  --hero-bg: #141c2b;
+  --hero-border: #233044;
 }
 
 html,
@@ -76,6 +85,134 @@ a:hover {
 @media (max-width: 768px) {
   .container {
     padding: 0 14px;
+  }
+}
+
+/* 页面头图的全局兜底样式。
+   这些组件也有 scoped CSS；这里保证路由 chunk / 接口数据到达前后尺寸一致，避免标题闪跳。 */
+.page-hero,
+.origin-hero {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--hero-bg);
+  border: 1px solid var(--hero-border);
+}
+.page-hero {
+  padding: 24px 28px;
+  margin-bottom: 20px;
+}
+.origin-hero {
+  padding: 22px 26px;
+  margin-bottom: 20px;
+}
+.page-hero .hero-title,
+.origin-hero .hero-title {
+  color: var(--hero-text);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.page-hero .hero-title {
+  margin: 0;
+}
+.origin-hero .hero-title {
+  margin: 0 0 10px;
+}
+.page-hero .hero-sub {
+  margin: 8px 0 0;
+  color: var(--hero-text-muted);
+  font-size: 14px;
+}
+.origin-hero .hero-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.origin-hero .attr {
+  flex: 1;
+  min-width: 0;
+  color: var(--hero-text-muted);
+  font-size: 13.5px;
+}
+.origin-hero.compact {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+.origin-hero.compact .hero-title {
+  display: none;
+}
+
+/* feed / problem list 页面直接写在本页模板里，但样式仍放全局兜底。
+   这样首屏 SSR HTML 出来时就能拿到尺寸，避免等待页面 scoped CSS chunk 后标题跳动。 */
+.feed-hero,
+.problem-hero {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--hero-bg);
+  border: 1px solid var(--hero-border);
+}
+.feed-hero {
+  padding: 24px 28px;
+  margin-bottom: 20px;
+}
+.problem-hero {
+  padding: 22px 26px;
+  margin-bottom: 20px;
+}
+.feed-hero h1,
+.problem-hero h1 {
+  color: var(--hero-text);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.3px;
+}
+.feed-hero h1 {
+  margin: 0;
+}
+.problem-hero h1 {
+  margin: 0 0 10px;
+}
+.feed-hero p {
+  margin: 8px 0 0;
+  color: var(--hero-text-muted);
+  font-size: 14px;
+}
+.problem-hero .hero-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.problem-hero .attr {
+  flex: 1;
+  min-width: 0;
+  color: var(--hero-text-muted);
+  font-size: 13.5px;
+}
+
+@media (max-width: 768px) {
+  .page-hero {
+    padding: 20px 18px;
+  }
+  .origin-hero {
+    padding: 18px 16px;
+  }
+  .page-hero .hero-title,
+  .origin-hero .hero-title {
+    font-size: 21px;
+  }
+  .feed-hero {
+    padding: 20px 18px;
+  }
+  .problem-hero {
+    padding: 18px 16px;
   }
 }
 

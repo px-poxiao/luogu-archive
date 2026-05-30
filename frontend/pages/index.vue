@@ -1,15 +1,63 @@
 <script setup lang="ts">
 definePageMeta({ layout: 'default' })
 
-type JumpType = 'article' | 'paste' | 'user' | 'problem'
+type JumpType = 'article' | 'paste' | 'user'
 
 const inputId = ref('')
-// 上次选择的跳转类型，写到 localStorage，下次回到首页保留选择
 const selectedType = ref<JumpType>('article')
+
+const jumpTypes: Array<{
+  key: JumpType
+  label: string
+  placeholder: string
+  icon: string
+}> = [
+  {
+    key: 'article',
+    label: '文章',
+    placeholder: '例如 abcdef12',
+    icon: 'M4 5h16M4 10h16M4 15h10M4 20h7',
+  },
+  {
+    key: 'paste',
+    label: '剪贴板',
+    placeholder: '例如 xy123abc',
+    icon: 'M8 4h8l2 2v14H6V6l2-2zM9 9h6M9 13h6M9 17h4',
+  },
+  {
+    key: 'user',
+    label: '用户',
+    placeholder: '例如 1',
+    icon: 'M12 12a4 4 0 100-8 4 4 0 000 8zM4 21c0-4.2 3.6-7 8-7s8 2.8 8 7',
+  },
+]
+
+const primaryLinks = [
+  {
+    to: '/feed',
+    title: '伪全网犇',
+    meta: '“洛谷微博”',
+    icon: 'M4 5h16v10H8l-4 4V5z',
+  },
+  {
+    to: '/judgement',
+    title: '陶片放逐',
+    meta: '封禁公示归档',
+    icon: 'M4 14l5-5 4 4 7-7M4 20h16',
+  },
+  {
+    to: '/problem/list',
+    title: '题目库',
+    meta: '题解开放状态',
+    icon: 'M6 4h10l4 4v12H6V4zM9 14h6M9 18h6',
+  },
+]
+
+const activeType = computed(() => jumpTypes.find((item) => item.key === selectedType.value)!)
 
 onMounted(() => {
   const saved = localStorage.getItem('quick-jump-type') as JumpType | null
-  if (saved && ['article', 'paste', 'user', 'problem'].includes(saved)) {
+  if (saved && jumpTypes.some((item) => item.key === saved)) {
     selectedType.value = saved
   }
 })
@@ -20,61 +68,102 @@ function setType(t: JumpType) {
 }
 
 function go(type?: JumpType) {
-  const t = type || selectedType.value
-  if (!inputId.value.trim()) return
-  setType(t)
-  navigateTo(`/${t}/${encodeURIComponent(inputId.value.trim())}`)
+  const targetType = type || selectedType.value
+  const value = inputId.value.trim()
+  if (!value) return
+  setType(targetType)
+  navigateTo(`/${targetType}/${encodeURIComponent(value)}`)
 }
 
-const TYPE_LABELS: Record<JumpType, string> = {
-  article: '文章',
-  paste: '剪贴板',
-  user: '用户',
-  problem: '题目',
-}
 </script>
 
 <template>
-  <div>
-    <section class="hero">
-      <h1>洛谷档案馆</h1>
-      <p class="subtitle">永久保存文章、剪贴板、犇犇、陶片放逐、题目信息</p>
-    </section>
+  <div class="home-page">
+    <PageHero
+      title="洛谷档案馆"
+      subtitle="第三方存档：保存文章、剪贴板、犇犇、陶片放逐和题目信息。"
+    />
 
-    <section class="quick-jump">
-      <h2>快速跳转</h2>
-      <div class="input-group">
-        <input
-          v-model="inputId"
-          :placeholder="`输入 ${TYPE_LABELS[selectedType]} ID（回车跳转）`"
-          @keydown.enter="go()"
+    <section class="home-board">
+      <div class="jump-panel" aria-label="快速跳转">
+        <div class="jump-head">
+          <div>
+            <h2>快速跳转</h2>
+            <p>输入原站 ID，直接打开本站收录页；未收录时会触发后台抓取。</p>
+          </div>
+        </div>
+
+        <div class="jump-tabs" role="tablist" aria-label="内容类型">
+          <button
+            v-for="item in jumpTypes"
+            :key="item.key"
+            type="button"
+            class="jump-tab"
+            :class="{ active: selectedType === item.key }"
+            :aria-selected="selectedType === item.key"
+            @click="setType(item.key)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                :d="item.icon"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>{{ item.label }}</span>
+          </button>
+        </div>
+
+        <form class="jump-form" @submit.prevent="go()">
+          <label class="input-wrap">
+            <span>{{ activeType.label }} ID</span>
+            <input
+              v-model="inputId"
+              :placeholder="activeType.placeholder"
+              autocomplete="off"
+              spellcheck="false"
+            >
+          </label>
+          <button class="go-btn" type="submit" :disabled="!inputId.trim()">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M5 12h13M13 6l6 6-6 6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>打开</span>
+          </button>
+        </form>
+      </div>
+
+      <div class="quick-grid" aria-label="快速入口">
+        <NuxtLink
+          v-for="link in primaryLinks"
+          :key="link.to"
+          :to="link.to"
+          class="quick-entry"
         >
-      </div>
-      <div class="btn-group">
-        <button
-          v-for="t in (['article', 'paste', 'user', 'problem'] as JumpType[])"
-          :key="t"
-          :class="{ active: selectedType === t }"
-          @click="go(t)"
-        >{{ TYPE_LABELS[t] }}</button>
-      </div>
-      <p class="hint">点击类型按钮直接跳转；输入框回车跳到当前选中类型（{{ TYPE_LABELS[selectedType] }}）。</p>
-    </section>
-
-    <section class="quick-links">
-      <h2>快速入口</h2>
-      <div class="grid">
-        <NuxtLink to="/feed" class="card">
-          <h3>伪全网犇</h3>
-          <p>全站最新犇犇墙</p>
-        </NuxtLink>
-        <NuxtLink to="/judgement" class="card">
-          <h3>陶片放逐</h3>
-          <p>封号公示存档</p>
-        </NuxtLink>
-        <NuxtLink to="/problem/list" class="card">
-          <h3>题目库</h3>
-          <p>按难度查看可提交题解的题目</p>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              :d="link.icon"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span>
+            <strong>{{ link.title }}</strong>
+            <small>{{ link.meta }}</small>
+          </span>
         </NuxtLink>
       </div>
     </section>
@@ -82,80 +171,255 @@ const TYPE_LABELS: Record<JumpType, string> = {
 </template>
 
 <style scoped>
-.hero {
-  text-align: center;
-  padding: 40px 0;
-}
-.hero h1 {
-  font-size: 36px;
-  margin: 0 0 8px;
-}
-.subtitle {
-  color: var(--text-muted);
-}
-.quick-jump,
-.quick-links {
-  margin: 24px 0;
-}
-.input-group input {
-  width: 100%;
-  padding: 10px 14px;
-  font-size: 16px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  box-sizing: border-box;
-}
-.btn-group {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-  flex-wrap: wrap;
-}
-.btn-group button {
-  padding: 8px 16px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.btn-group button:hover {
-  border-color: var(--link);
-  color: var(--link);
-}
-.btn-group button.active {
-  border-color: var(--link);
-  color: var(--link);
-  background: color-mix(in srgb, var(--link) 8%, transparent);
-}
-.hint {
-  margin: 8px 0 0;
-  color: var(--text-muted);
-  font-size: 13px;
-}
-.grid {
+.home-page {
+  min-height: calc(100vh - 190px);
+  padding-bottom: 44px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 22px;
 }
-.card {
-  padding: 20px;
+
+.home-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 22px;
+  min-height: clamp(430px, calc(100vh - 330px), 680px);
+}
+
+.jump-panel {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  color: var(--text);
+  padding: clamp(24px, 3.2vw, 42px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
-.card:hover {
+
+.jump-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 26px;
+}
+
+.jump-head h2 {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 36px);
+  line-height: 1.15;
+}
+
+.jump-head p {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.jump-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.jump-tab {
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 18px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+}
+
+.jump-tab:hover,
+.jump-tab.active {
+  color: var(--link);
   border-color: var(--link);
+  background: color-mix(in srgb, var(--link) 8%, transparent);
+}
+
+.jump-tab svg,
+.go-btn svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.jump-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.input-wrap {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.input-wrap span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.input-wrap input {
+  width: 100%;
+  min-height: 54px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.input-wrap input:focus {
+  outline: 2px solid color-mix(in srgb, var(--link) 28%, transparent);
+  border-color: var(--link);
+}
+
+.go-btn {
+  align-self: end;
+  min-height: 54px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--link);
+  border-radius: 6px;
+  padding: 0 24px;
+  background: var(--link);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.go-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.quick-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.quick-entry {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  align-items: center;
+  gap: 22px;
+  min-height: 0;
+  padding: 26px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
+}
+
+.quick-entry:hover {
+  border-color: var(--link);
+  background: color-mix(in srgb, var(--link) 4%, var(--surface));
+  transform: translateY(-1px);
   text-decoration: none;
 }
-.card h3 {
-  margin: 0 0 6px;
+
+.quick-entry svg {
+  width: 70px;
+  height: 70px;
+  padding: 16px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--hover);
+  color: var(--link);
 }
-.card p {
+
+.quick-entry strong,
+.quick-entry small {
+  display: block;
+}
+
+.quick-entry small {
   color: var(--text-muted);
-  margin: 0;
+  font-size: 14px;
+  margin-top: 6px;
+}
+
+.quick-entry strong {
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+@media (max-width: 980px) {
+  .home-page {
+    min-height: auto;
+  }
+
+  .home-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-height: auto;
+  }
+
+  .jump-panel {
+    grid-column: 1 / -1;
+    min-height: 330px;
+  }
+}
+
+@media (max-width: 640px) {
+  .home-page {
+    padding-top: 0;
+  }
+
+  .jump-panel {
+    padding: 16px;
+    min-height: auto;
+  }
+
+  .jump-head {
+    display: grid;
+  }
+
+  .jump-form {
+    grid-template-columns: 1fr;
+  }
+
+  .home-board,
+  .quick-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .quick-entry {
+    min-height: 96px;
+    padding: 16px;
+    gap: 14px;
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .quick-entry svg {
+    width: 48px;
+    height: 48px;
+    padding: 10px;
+  }
+
+  .go-btn {
+    width: 100%;
+  }
+
 }
 </style>

@@ -109,11 +109,11 @@ function formatTime(t: string): string {
   <div>
     <OriginBanner
       origin-url="https://www.luogu.com.cn/judgement"
+      title="陶片放逐"
       :crawled-at="lastCrawled?.last_crawled_at"
       content-type="judgement"
       content-id="all"
     />
-    <h1>陶片放逐（封号公示存档）</h1>
 
     <ul v-if="groups.length" class="list">
       <li v-for="g in groups" :key="g.group_key" class="item">

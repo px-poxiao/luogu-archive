@@ -1,6 +1,7 @@
 <script setup lang="ts">
 const api = useApi()
 const { smart } = useTime()
+const PAGE_SIZE = 30
 
 interface FeedItem {
   id: number
@@ -10,16 +11,24 @@ interface FeedItem {
   user: { uid: number; name: string; color: string; badge: string | null; avatar: string | null } | null
 }
 
-const items = ref<FeedItem[]>([])
+const { data: firstPage } = await useAsyncData('feed-first', () =>
+  api<FeedItem[]>('/feed', { query: { limit: PAGE_SIZE } }),
+)
+
+const items = ref<FeedItem[]>(firstPage.value ? [...firstPage.value] : [])
 const loading = ref(false)
-const beforeTs = ref<string | null>(null)
-const noMore = ref(false)
+const beforeTs = ref<string | null>(
+  firstPage.value && firstPage.value.length
+    ? firstPage.value[firstPage.value.length - 1].time
+    : null,
+)
+const noMore = ref(firstPage.value ? firstPage.value.length === 0 : false)
 
 async function loadMore() {
   if (loading.value || noMore.value) return
   loading.value = true
   try {
-    const q: Record<string, any> = { limit: 30 }
+    const q: Record<string, any> = { limit: PAGE_SIZE }
     if (beforeTs.value) q.before = beforeTs.value
     const page = await api<FeedItem[]>('/feed', { query: q })
     items.value.push(...page)
@@ -38,14 +47,14 @@ function feedHtml(c: string) { return render(c) }
 
 const listRef = ref<HTMLElement | null>(null)
 useCopyCode(listRef)
-
-onMounted(() => loadMore())
 </script>
 
 <template>
   <div>
-    <h1>伪全网犇</h1>
-    <p class="note">这里汇总本站爬到的所有用户的犇犇，按时间倒序。</p>
+    <section class="feed-hero">
+      <h1>伪全网犇</h1>
+      <p>这里汇总本站爬到的所有用户的犇犇，按时间倒序。</p>
+    </section>
 
     <ul ref="listRef" class="feed-list">
       <li v-for="f in items" :key="f.id" class="feed-item">
@@ -89,6 +98,28 @@ onMounted(() => loadMore())
 </template>
 
 <style scoped>
+.feed-hero {
+  position: relative;
+  border-radius: 12px;
+  padding: 24px 28px;
+  margin-bottom: 20px;
+  overflow: hidden;
+  background: var(--hero-bg);
+  border: 1px solid var(--hero-border);
+}
+.feed-hero h1 {
+  margin: 0;
+  color: var(--hero-text);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.3px;
+}
+.feed-hero p {
+  margin: 8px 0 0;
+  color: var(--hero-text-muted);
+  font-size: 14px;
+}
 .note {
   color: var(--text-muted);
 }
@@ -199,5 +230,11 @@ onMounted(() => loadMore())
 }
 .loader .empty {
   color: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+  .feed-hero {
+    padding: 20px 18px;
+  }
 }
 </style>

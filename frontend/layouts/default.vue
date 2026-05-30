@@ -21,8 +21,6 @@ const runDays = computed(() => {
   return Math.max(1, Math.floor((todayUtc - start) / 86400000) + 1)
 })
 
-const QQ_GROUP_URL = 'https://qun.qq.com/universal-share/share?ac=1&authKey=DNGeuTd%2FO6sVz5sPqBBv0pZmNZYnf4lg6AL4oeWyXyB3Cb2siArgWUMmaJVKrg6H&busi_data=eyJncm91cENvZGUiOiIxMDU5MzYxNjY4IiwidG9rZW4iOiJHVDk4VCtIOXFaOFdwVGlzR1lIYnVFRUVXZWplRE03a3Z1amNldWdramF5bGl2aDRkTmdmUlkrQWIrZ0xGd2FBIiwidWluIjoiMjQ3NjY3NDU5In0%3D&data=rP1H0BOgnlMi849TXTLTjawGLdZpsX8le6DR_jykWjKBi0elXkJVFrH9UuBejb5fMhL9DzrOEdOizmp6S_Knqw&svctype=4&tempid=h5_group_info'
-
 // 左侧导航项。icon 为内联 SVG path（24x24 viewBox）
 const navItems = [
   {
@@ -167,23 +165,21 @@ const navItems = [
 
       <footer class="site-footer">
         <div class="footer-inner">
-          <div class="footer-col">
-            <div class="footer-line">© 2026 洛谷档案馆</div>
-            <div class="footer-line">已运行 {{ runDays }} 天</div>
-            <div class="footer-line">第三方存档，与洛谷官方无关，所有内容版权归原作者</div>
-          </div>
-          <div class="footer-col">
-            <div class="footer-line">
-              <a :href="QQ_GROUP_URL" target="_blank" rel="noopener noreferrer">
-                QQ 群 1059361668
-              </a>
+          <div class="footer-main">
+            <div class="footer-brand-row">
+              <div class="footer-brand">洛谷档案馆</div>
+              <div class="footer-days">已运行 {{ runDays }} 天</div>
             </div>
-            <div class="footer-line">
+            <div class="footer-note">
+              第三方存档，与洛谷官方无关。本站仅做公开内容归档与历史版本追踪，所有内容版权归原作者。
+            </div>
+          </div>
+          <div class="footer-links">
+            <div class="footer-link-title">站点相关</div>
+            <div class="footer-link-list">
               <a href="https://github.com/px-poxiao/luogu-archive" target="_blank" rel="noopener noreferrer">
                 GitHub
               </a>
-            </div>
-            <div class="footer-line">
               <NuxtLink to="/takedown">侵权投诉 / 内容删除</NuxtLink>
             </div>
           </div>
@@ -308,7 +304,7 @@ const navItems = [
 .site-footer {
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding: 14px 0;
+  padding: 28px 0 32px;
   font-size: 14px;
   color: var(--text-muted);
   /* 横跨整个 viewport（拉出 layout-body 的 margin-left:56），
@@ -317,26 +313,70 @@ const navItems = [
   margin-left: -56px;
 }
 .footer-inner {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  align-items: start;
   /* 左 padding = 边栏宽 56 + 53（2 倍行高）；右 53。视觉上左栏离边栏右沿 53px。 */
   padding: 0 53px 0 109px;
-  gap: 16px;
-  flex-wrap: wrap;
+  gap: 42px;
 }
-.footer-col {
+.footer-main {
+  min-width: 0;
+}
+.footer-brand-row {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  text-align: left;
-  line-height: 1.9;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
-.footer-line a {
+.footer-brand {
+  color: var(--text);
+  font-weight: 700;
+  font-size: 18px;
+  white-space: nowrap;
+}
+.footer-days {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.footer-note {
+  max-width: 760px;
+  line-height: 1.85;
+}
+.footer-links {
+  justify-self: end;
+  min-width: 220px;
+}
+.footer-link-title {
+  color: var(--text);
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.footer-link-list {
+  display: grid;
+  gap: 7px;
+  justify-items: start;
+}
+.footer-link-list a {
   color: var(--text-muted);
 }
-.footer-line a:hover {
+.footer-link-list a:hover {
   color: var(--link);
+}
+
+@media (max-width: 768px) {
+  .site-footer {
+    padding: 24px 0 28px;
+  }
+  .footer-inner {
+    grid-template-columns: 1fr;
+    gap: 18px;
+    padding: 0 18px 0 74px;
+  }
+  .footer-links {
+    justify-self: start;
+  }
 }
 
 /* 左侧栏在所有设备（含手机端）保持一致 —— 56px 宽固定贴左

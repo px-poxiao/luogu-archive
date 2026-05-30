@@ -22,7 +22,7 @@ onMounted(async () => {
 
 <template>
   <div>
-    <h1>我的关注</h1>
+    <PageHero title="我的关注" />
     <p class="muted" v-if="auth.isLoggedIn">
       登录邮箱：{{ auth.email }} · 已关注 {{ follows.length }} / 100
     </p>

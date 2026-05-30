@@ -198,6 +198,7 @@ function formatScore(s: number): string {
   <div v-else-if="profile" class="user-page">
     <OriginBanner
       :origin-url="`https://www.luogu.com.cn/user/${uid}`"
+      compact
       :crawled-at="profile.last_crawled_at"
       content-type="user"
       :content-id="String(uid)"

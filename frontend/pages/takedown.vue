@@ -34,11 +34,10 @@ async function submit() {
 
 <template>
   <div class="wrap">
-    <h1>侵权投诉 / 内容删除申请</h1>
-    <p>
-      本站为洛谷社区内容的第三方存档。如果你是原作者，或发现本站收录了侵犯你权益的内容，
-      可以通过此表单申请删除，我们会在 24 小时内处理。
-    </p>
+    <PageHero
+      title="侵权投诉 / 内容删除申请"
+      subtitle="本站为洛谷社区内容的第三方存档。如果你是原作者，或发现本站收录了侵犯你权益的内容，可通过此表单申请删除，我们会在 24 小时内处理。"
+    />
 
     <form v-if="state !== 'success'" @submit.prevent="submit">
       <label>

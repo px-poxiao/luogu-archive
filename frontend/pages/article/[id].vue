@@ -66,24 +66,22 @@ const crawledAtText = computed(() =>
         </div>
 
         <div class="meta-right">
+          <a
+            :href="`https://www.luogu.com.cn/article/${id}`"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="meta-item link"
+          >查看原文</a>
           <span class="meta-item">上次更新 · {{ crawledAtText }}</span>
           <NuxtLink
             v-if="data.version_count > 1"
             :to="`/article/${id}/history`"
             class="meta-item link"
           >{{ data.version_count }} 个历史版本</NuxtLink>
+          <SaveButton content-type="article" :content-id="id" />
         </div>
       </div>
     </header>
-
-    <OriginBanner
-      :origin-url="`https://www.luogu.com.cn/article/${id}`"
-      :author-name="data.author?.name"
-      :author-href="data.author ? `/user/${data.author.uid}` : undefined"
-      :crawled-at="data.crawled_at"
-      content-type="article"
-      :content-id="id"
-    />
 
     <article ref="contentRef" class="lg-content" v-html="html" />
   </div>
@@ -96,24 +94,34 @@ const crawledAtText = computed(() =>
   padding: 0 8px;
 }
 
-/* 洛谷风 Banner：浅色渐变背景 + 标题 + 作者行（深色由 CSS 变量自动切换） */
+/* 蓝色渐变标题头 */
 .article-banner {
-  background: var(--article-banner-bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 28px 32px 20px;
+  position: relative;
+  overflow: hidden;
+  background: var(--hero-bg);
+  border: 1px solid var(--hero-border);
+  border-radius: 12px;
+  padding: 22px 26px 18px;
   margin-bottom: 16px;
+}
+.dark .article-banner {
+  background: var(--hero-bg);
+  border-color: var(--hero-border);
 }
 
 .article-title {
+  position: relative;
+  z-index: 1;
   margin: 0 0 14px;
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 700;
   line-height: 1.35;
   color: var(--text);
 }
 
 .article-meta {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -165,7 +173,8 @@ const crawledAtText = computed(() =>
   flex-wrap: wrap;
 }
 .meta-item { font-size: 13px; }
-.meta-item.link { color: var(--link); }
+.meta-item.link { color: var(--link); text-decoration: none; }
+.meta-item.link:hover { text-decoration: underline; }
 
 .error-box {
   padding: 30px;
@@ -176,8 +185,8 @@ const crawledAtText = computed(() =>
 }
 
 @media (max-width: 640px) {
-  .article-banner { padding: 20px 18px 16px; }
-  .article-title { font-size: 22px; }
+  .article-banner { padding: 18px 16px 14px; }
+  .article-title { font-size: 21px; }
   .meta-right { margin-left: 0; }
 }
 </style>
