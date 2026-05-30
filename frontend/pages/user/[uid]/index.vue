@@ -256,7 +256,13 @@ function formatScore(s: number): string {
               <span class="time">{{ smart(a.time) }}</span>
               <template v-if="a.kind === 'feed'">
                 <div class="lg-content" v-html="feedHtml(a.feed_content || '')" />
-                <div class="feed-id">#{{ a.feed_id }}</div>
+                <div class="feed-foot">
+                  <span class="feed-id">#{{ a.feed_id }}</span>
+                  <FeedReplyButton
+                    :content="a.feed_content || ''"
+                    :sender-name="profile.name_hidden ? `UID ${profile.uid}` : profile.name"
+                  />
+                </div>
               </template>
               <template v-else-if="a.kind === 'article'">
                 <div class="link-line">
@@ -576,8 +582,13 @@ function formatScore(s: number): string {
   color: var(--text-muted);
   font-style: italic;
 }
-.feed-id {
+.feed-foot {
   margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.feed-id {
   font-size: 11px;
   color: var(--text-muted);
   font-family: ui-monospace, "SF Mono", Consolas, monospace;
