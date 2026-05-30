@@ -51,9 +51,9 @@ const navItems = [
 <template>
   <div class="layout-root">
     <aside class="side-nav">
-      <NuxtLink to="/" class="brand" title="洛谷存档">
-        <img src="/favicon.png" alt="洛谷存档" class="brand-logo">
-        <span class="label">洛谷存档</span>
+      <NuxtLink to="/" class="brand" title="洛谷档案馆">
+        <img src="/favicon.png" alt="洛谷档案馆" class="brand-logo">
+        <span class="label">洛谷档案馆</span>
       </NuxtLink>
 
       <nav class="nav-items">
@@ -168,7 +168,7 @@ const navItems = [
       <footer class="site-footer">
         <div class="footer-inner">
           <div class="footer-col">
-            <div class="footer-line">© 2026 洛谷保存站</div>
+            <div class="footer-line">© 2026 洛谷档案馆</div>
             <div class="footer-line">已运行 {{ runDays }} 天</div>
             <div class="footer-line">第三方存档，与洛谷官方无关，所有内容版权归原作者</div>
           </div>

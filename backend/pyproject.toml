@@ -1,7 +1,7 @@
 [project]
 name = "luogu-archive-backend"
 version = "0.1.0"
-description = "洛谷内容爬虫与保存站 —— 后端"
+description = "洛谷档案馆 —— 内容爬虫与存档后端"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 

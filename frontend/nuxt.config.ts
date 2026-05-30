@@ -21,7 +21,7 @@ export default defineNuxtConfig({
     public: {
       // 客户端也可见
       apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL || 'http://localhost:8000',
-      siteName: '洛谷存档',
+      siteName: '洛谷档案馆',
       captchaProvider: process.env.NUXT_PUBLIC_CAPTCHA_PROVIDER || 'turnstile',
       captchaSiteKey: process.env.NUXT_PUBLIC_CAPTCHA_SITE_KEY || '',
     },
@@ -39,12 +39,12 @@ export default defineNuxtConfig({
   app: {
     head: {
       htmlAttrs: { lang: 'zh-CN' },
-      title: '洛谷存档',
+      title: '洛谷档案馆',
       meta: [
         { charset: 'utf-8' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
         { name: 'robots', content: 'noindex,nofollow,noarchive' }, // 合规底线：禁收录
-        { name: 'description', content: '洛谷社区内容存档站 —— 文章 / 剪贴板 / 犇犇 / 陶片放逐 / 题解' },
+        { name: 'description', content: '洛谷档案馆 —— 第三方存档：文章 / 剪贴板 / 犇犇 / 陶片放逐 / 题解' },
       ],
       link: [
         { rel: 'icon', type: 'image/png', href: '/favicon.png' },

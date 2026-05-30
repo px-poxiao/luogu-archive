@@ -103,10 +103,10 @@ async def send_email(
 
 
 async def send_verification_email(to: str, verify_url: str) -> bool:
-    subject = "[洛谷存档] 邮箱验证"
+    subject = "[洛谷档案馆] 邮箱验证"
     text = (
         "你好，\n\n"
-        "感谢注册洛谷存档。请点击以下链接完成邮箱验证（24 小时内有效）：\n"
+        "感谢注册洛谷档案馆。请点击以下链接完成邮箱验证（24 小时内有效）：\n"
         f"{verify_url}\n\n"
         "如果按钮无法点击，请将上面的链接复制到浏览器地址栏打开。\n"
         "如果这不是你本人的操作，请忽略此邮件。\n"
@@ -139,7 +139,7 @@ def _verification_html(verify_url: str) -> str:
           <!-- 顶部品牌条 -->
           <tr>
             <td style="background-color:{brand};padding:24px 32px;text-align:center;">
-              <span style="color:#ffffff;font-size:20px;font-weight:700;letter-spacing:0.5px;">洛谷存档</span>
+              <span style="color:#ffffff;font-size:20px;font-weight:700;letter-spacing:0.5px;">洛谷档案馆</span>
             </td>
           </tr>
           <!-- 正文 -->
@@ -147,7 +147,7 @@ def _verification_html(verify_url: str) -> str:
             <td style="padding:36px 32px 8px;">
               <h1 style="margin:0 0 16px;font-size:21px;color:#1f2328;font-weight:700;">验证你的邮箱</h1>
               <p style="margin:0 0 8px;font-size:15px;line-height:1.7;color:#57606a;">
-                你好，感谢注册<strong style="color:#1f2328;">洛谷存档</strong>。
+                你好，感谢注册<strong style="color:#1f2328;">洛谷档案馆</strong>。
               </p>
               <p style="margin:0 0 28px;font-size:15px;line-height:1.7;color:#57606a;">
                 请点击下方按钮完成邮箱验证。此链接 <strong style="color:#1f2328;">24 小时内</strong> 有效。
@@ -190,7 +190,7 @@ def _verification_html(verify_url: str) -> str:
           </tr>
         </table>
         <p style="max-width:480px;margin:16px auto 0;font-size:11px;color:#b0b7c0;text-align:center;">
-          © 2026 洛谷存档 · 此邮件由系统自动发送，请勿直接回复
+          © 2026 洛谷档案馆 · 此邮件由系统自动发送，请勿直接回复
         </p>
       </td>
     </tr>

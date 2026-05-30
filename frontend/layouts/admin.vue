@@ -11,7 +11,7 @@ function logout() {
   <div class="admin-root">
     <header>
       <div class="inner">
-        <NuxtLink to="/admin" class="brand">洛谷存档 · 管理后台</NuxtLink>
+        <NuxtLink to="/admin" class="brand">洛谷档案馆 · 管理后台</NuxtLink>
         <nav v-if="admin.isLoggedIn">
           <NuxtLink to="/admin">仪表盘</NuxtLink>
           <NuxtLink to="/admin/takedowns">删除申请</NuxtLink>

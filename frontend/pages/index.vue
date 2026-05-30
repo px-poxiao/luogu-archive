@@ -37,7 +37,7 @@ const TYPE_LABELS: Record<JumpType, string> = {
 <template>
   <div>
     <section class="hero">
-      <h1>洛谷存档站</h1>
+      <h1>洛谷档案馆</h1>
       <p class="subtitle">永久保存文章、剪贴板、犇犇、陶片放逐、题目信息</p>
     </section>
 
