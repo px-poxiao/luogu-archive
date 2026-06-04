@@ -75,8 +75,10 @@ function describePermission(bits: number): string[] {
   return out
 }
 
-const { data: profile, error } = await useAsyncData(`user-${uid}`, () =>
+// 用户页不阻塞首屏：资料回来前先显示加载窗口。
+const { data: profile, error, pending: profilePending } = useLazyAsyncData(`user-${uid}`, () =>
   api<UserProfile>(`/user/${uid}`),
+  { server: false },
 )
 
 const includeFeed = ref(true)
@@ -87,25 +89,22 @@ const activityNoMore = ref(false)
 const activityBefore = ref<string | null>(null)
 const PAGE_SIZE = 50
 
-// SSR 首屏：useAsyncData 拿第一页，序列化到 payload，client hydrate 不会重跑。
-// 之前犯的错：把 ref 修改写在 handler 里 —— 那只在 SSR 阶段执行；client
-// 直接读 payload，外部 ref 永远是空。这里改回让 useAsyncData 自管 data ref，
-// 在客户端用 watchEffect 同步到 activity ref 作为初值。
-const { data: firstPage } = await useAsyncData(
+// 活动第一页同样懒加载，避免用户资料页等待活动接口。
+const { data: firstPage, pending: activityInitialPending } = useLazyAsyncData(
   `user-activity-${uid}`,
   () =>
     api<ActivityItem[]>(`/user/${uid}/activity`, {
       query: { include_feed: includeFeed.value ? 'true' : 'false', limit: PAGE_SIZE },
     }),
+  { server: false },
 )
 
-if (firstPage.value && firstPage.value.length) {
-  activity.value = [...firstPage.value]
-  activityBefore.value = firstPage.value[firstPage.value.length - 1].time
-  if (firstPage.value.length < PAGE_SIZE) activityNoMore.value = true
-} else {
-  activityNoMore.value = true
-}
+watch(firstPage, (page) => {
+  if (!page) return
+  activity.value = [...page]
+  activityBefore.value = page.length ? page[page.length - 1].time : null
+  activityNoMore.value = page.length < PAGE_SIZE
+}, { immediate: true })
 
 async function loadMoreActivity() {
   if (activityLoading.value || activityNoMore.value) return
@@ -190,7 +189,9 @@ function formatScore(s: number): string {
 </script>
 
 <template>
-  <div v-if="error" class="error-box">
+  <LoadingPanel v-if="profilePending" title="正在加载用户档案" text="页面已经打开，正在读取用户资料和活动记录…" />
+
+  <div v-else-if="error" class="error-box">
     <h2>{{ error.data?.message || '用户未收录' }}</h2>
     <p>已触发一次爬取，稍等片刻刷新即可。</p>
   </div>
@@ -251,7 +252,13 @@ function formatScore(s: number): string {
               <input type="checkbox" v-model="includeFeed"> 包含动态
             </label>
           </div>
-          <ul v-if="activity && activity.length" class="activity-list">
+          <LoadingPanel
+            v-if="activityInitialPending && !activity.length"
+            title="正在加载活动记录"
+            text="用户资料已经打开，正在读取活动时间线…"
+          />
+
+          <ul v-else-if="activity && activity.length" class="activity-list">
             <li v-for="(a, idx) in activity" :key="idx" :class="`act-${a.kind}`">
               <span class="kind-tag">{{ KIND_LABEL[a.kind] || a.kind }}</span>
               <span class="time">{{ smart(a.time) }}</span>

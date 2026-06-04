@@ -14,8 +14,10 @@ interface ArticleDetail {
   version_count: number
 }
 
-const { data, error } = await useAsyncData(`article-${id}`, () =>
+// 不阻塞页面首屏：先渲染页面骨架，再由浏览器请求后端接口。
+const { data, error, pending } = useLazyAsyncData(`article-${id}`, () =>
   api<ArticleDetail>(`/article/${id}`),
+  { server: false },
 )
 
 const { render } = useMarkdown()
@@ -30,7 +32,9 @@ const crawledAtText = computed(() =>
 </script>
 
 <template>
-  <div v-if="error" class="error-box">
+  <LoadingPanel v-if="pending" title="正在加载文章" text="页面已经打开，正在读取这篇文章的归档内容…" />
+
+  <div v-else-if="error" class="error-box">
     <h2>{{ error.data?.message || '加载失败' }}</h2>
     <p v-if="error.statusCode === 404">
       如果本站从未爬取过这篇文章，刚才已触发一次爬取，稍等片刻刷新即可。

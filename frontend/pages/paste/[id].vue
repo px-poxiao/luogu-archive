@@ -13,8 +13,10 @@ interface PasteDetail {
   version_count: number
 }
 
-const { data, error } = await useAsyncData(`paste-${id}`, () =>
+// 不阻塞页面首屏：剪贴板正文由浏览器端异步请求。
+const { data, error, pending } = useLazyAsyncData(`paste-${id}`, () =>
   api<PasteDetail>(`/paste/${id}`),
+  { server: false },
 )
 
 const { render } = useMarkdown()
@@ -29,7 +31,9 @@ const crawledAtText = computed(() =>
 </script>
 
 <template>
-  <div v-if="error" class="error-box">
+  <LoadingPanel v-if="pending" title="正在加载剪贴板" text="页面已经打开，正在读取剪贴板归档内容…" />
+
+  <div v-else-if="error" class="error-box">
     <h2>{{ error.data?.message || '加载失败' }}</h2>
     <p v-if="error.statusCode === 404">
       刚才已触发一次爬取，稍等片刻刷新即可。

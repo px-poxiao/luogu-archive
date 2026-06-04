@@ -29,24 +29,24 @@ const noMore = ref(false)
 // 游标：取下一页时把这个值塞 ?before=
 const beforeTs = ref<string | null>(null)
 
-// 首屏：useAsyncData 拿第一页，SSR 序列化到 payload，client hydrate 不重跑
-const { data: firstPage } = await useAsyncData('judgement-first', () =>
+// 首屏不等待后端：先显示页面，再拉第一页陶片。
+const { data: firstPage, pending: firstPending } = useLazyAsyncData('judgement-first', () =>
   api<JudgementGroup[]>('/judgement', { query: { limit: PAGE_SIZE } }),
+  { server: false },
 )
-const { data: lastCrawled } = await useAsyncData('judgement-last-crawled', () =>
+const { data: lastCrawled } = useLazyAsyncData('judgement-last-crawled', () =>
   api<{ last_crawled_at: string | null }>('/last-crawled?type=judgement'),
+  { server: false },
 )
 
-if (firstPage.value && firstPage.value.length) {
-  groups.value = [...firstPage.value]
-  // 用 time_end 倒序拿下一页：取最后一组的 time_start 当游标
-  // （服务端按 Judgement.time desc 拉再合并，所以游标是 time_start）
-  beforeTs.value = firstPage.value[firstPage.value.length - 1].time_start
-  // 注意：不能用 length < PAGE_SIZE 判 noMore —— 后端先按 50 条原始
-  // judgement 拉，再合并成 group，组数总是远小于 50。只有真正返回空才算到底。
-} else {
-  noMore.value = true
-}
+watch(firstPage, (page) => {
+  if (!page) return
+  groups.value = [...page]
+  // 用 time_end 倒序拿下一页：取最后一组的 time_start 当游标。
+  // 注意：不能用 length < PAGE_SIZE 判 noMore，后端先拉原始记录再合并分组。
+  beforeTs.value = page.length ? page[page.length - 1].time_start : null
+  noMore.value = page.length === 0
+}, { immediate: true })
 
 async function loadMore() {
   if (loading.value || noMore.value) return
@@ -115,7 +115,9 @@ function formatTime(t: string): string {
       content-id="all"
     />
 
-    <ul v-if="groups.length" class="list">
+    <LoadingPanel v-if="firstPending && !groups.length" title="正在加载陶片放逐" text="页面已经打开，正在读取最新的封禁公示归档…" />
+
+    <ul v-else-if="groups.length" class="list">
       <li v-for="g in groups" :key="g.group_key" class="item">
         <!-- 顶部：权限变更头标 + 时间 -->
         <header class="head">

@@ -11,18 +11,24 @@ interface FeedItem {
   user: { uid: number; name: string; color: string; badge: string | null; avatar: string | null } | null
 }
 
-const { data: firstPage } = await useAsyncData('feed-first', () =>
+// 首屏不等待后端：先显示页面，再拉第一页犇犇。
+const { data: firstPage, pending: firstPending } = useLazyAsyncData('feed-first', () =>
   api<FeedItem[]>('/feed', { query: { limit: PAGE_SIZE } }),
+  { server: false },
 )
 
-const items = ref<FeedItem[]>(firstPage.value ? [...firstPage.value] : [])
+const items = ref<FeedItem[]>([])
 const loading = ref(false)
-const beforeTs = ref<string | null>(
-  firstPage.value && firstPage.value.length
-    ? firstPage.value[firstPage.value.length - 1].time
-    : null,
-)
-const noMore = ref(firstPage.value ? firstPage.value.length === 0 : false)
+const beforeTs = ref<string | null>(null)
+const noMore = ref(false)
+
+// 第一页回来后再填充列表，避免页面导航被接口阻塞。
+watch(firstPage, (page) => {
+  if (!page) return
+  items.value = [...page]
+  beforeTs.value = page.length ? page[page.length - 1].time : null
+  noMore.value = page.length === 0
+}, { immediate: true })
 
 async function loadMore() {
   if (loading.value || noMore.value) return
@@ -56,7 +62,9 @@ useCopyCode(listRef)
       <p>这里汇总本站爬到的所有用户的犇犇，按时间倒序。</p>
     </section>
 
-    <ul ref="listRef" class="feed-list">
+    <LoadingPanel v-if="firstPending && !items.length" title="正在加载犇犇" text="页面已经打开，正在读取最新的“洛谷微博”…" />
+
+    <ul v-else ref="listRef" class="feed-list">
       <li v-for="f in items" :key="f.id" class="feed-item">
         <NuxtLink v-if="f.user" :to="`/user/${f.user.uid}`" class="avatar-link">
           <img

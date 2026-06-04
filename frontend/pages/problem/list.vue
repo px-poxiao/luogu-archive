@@ -19,13 +19,16 @@ interface ProblemDifficultyBucket {
 const PREVIEW_LIMIT = 20
 
 // 总览：每档前 20 条 + 该档总数
-const { data } = await useAsyncData('problem-list', () =>
+// 题目库接口较慢时不阻塞页面打开，先显示加载窗口。
+const { data, pending: listPending } = useLazyAsyncData('problem-list', () =>
   api<Record<string, ProblemDifficultyBucket>>('/problem/list', {
     query: { preview_limit: PREVIEW_LIMIT },
   }),
+  { server: false },
 )
-const { data: lastCrawled } = await useAsyncData('problem-list-last-crawled', () =>
+const { data: lastCrawled } = useLazyAsyncData('problem-list-last-crawled', () =>
   api<{ last_crawled_at: string | null }>('/last-crawled?type=problem_list'),
+  { server: false },
 )
 
 const saveState = ref<'idle' | 'pending' | 'success' | 'failed' | 'cooldown' | 'captcha'>('idle')
@@ -105,7 +108,7 @@ const selectedDiff = computed<string | null>(() => {
 })
 
 // 单档全量数据：仅当 selectedDiff 非空时拉取，切换 query 时自动重拉
-const { data: fullList, pending: fullPending } = await useAsyncData(
+const { data: fullList, pending: fullPending } = useLazyAsyncData(
   'problem-list-full',
   () => {
     if (!selectedDiff.value) return Promise.resolve<ProblemItem[]>([])
@@ -113,7 +116,7 @@ const { data: fullList, pending: fullPending } = await useAsyncData(
       query: { difficulty: selectedDiff.value },
     })
   },
-  { watch: [selectedDiff] },
+  { server: false, watch: [selectedDiff] },
 )
 
 const visibleKeys = computed(() => {
@@ -167,8 +170,14 @@ function totalFor(k: string): number {
       允许提交题解的题目，按洛谷难度分档，每档仅显示前 {{ PREVIEW_LIMIT }} 道，点"查看全部"看完整列表。
     </p>
 
+    <LoadingPanel
+      v-if="listPending && !data"
+      title="正在加载题目库"
+      text="页面已经打开，正在读取题目和题解开放状态…"
+    />
+
     <!-- 单档全量视图 -->
-    <section v-if="selectedDiff" class="diff-section">
+    <section v-else-if="selectedDiff" class="diff-section">
       <h2>
         <span class="lg-name" :data-color="diffColor[selectedDiff] || 'Gray'">{{ selectedDiff }}</span>
         <span class="count">{{ fullList?.length || 0 }}</span>
