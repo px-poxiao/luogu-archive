@@ -2,6 +2,9 @@
 
 :root {
   --bg: #f7f8fa;
+  --page-bg:
+    linear-gradient(180deg, rgba(223, 239, 255, 0.92) 0%, rgba(247, 248, 250, 0.98) 260px),
+    linear-gradient(135deg, #e8f3ff 0%, #f7f8fa 46%, #f7f8fa 100%);
   --surface: #ffffff;
   --text: #1f2328;
   --text-muted: #57606a;
@@ -11,11 +14,14 @@
   --banner-bg: #fff8e1;
   --banner-border: #f0c040;
   /* 文章头 banner（浅色渐变 → 深色渐变） */
-  --article-banner-bg: linear-gradient(135deg, #eaf4ff 0%, #f3f4f6 100%);
+  --article-banner-bg: linear-gradient(135deg, #d9ecff 0%, #f3f8ff 100%);
 
-  /* 页面头图：比背景 (--bg #f7f8fa) 微微发蓝 */
-  --hero-bg: #eef3fb;
-  --hero-border: #dde6f3;
+  --page-max-width: 1180px;
+  --page-gutter: 40px;
+
+  /* 页面头图：浅色模式的蓝更明确一些 */
+  --hero-bg: linear-gradient(135deg, #dcecff 0%, #f4f9ff 100%);
+  --hero-border: #c8dcf5;
   --hero-text: var(--text);
   --hero-text-muted: var(--text-muted);
 
@@ -37,6 +43,9 @@
 
 .dark {
   --bg: #0d1117;
+  --page-bg:
+    linear-gradient(180deg, rgba(13, 27, 48, 0.96) 0%, rgba(13, 17, 23, 0.98) 280px),
+    linear-gradient(135deg, #0e1a2d 0%, #0d1117 54%, #0d1117 100%);
   --surface: #161b22;
   --text: #e6edf3;
   --text-muted: #8b949e;
@@ -45,19 +54,19 @@
   --hover: #1f2937;
   --banner-bg: #3b2f00;
   --banner-border: #8b6e00;
-  --article-banner-bg: linear-gradient(135deg, #1a2a44 0%, #1c2128 100%);
+  --article-banner-bg: linear-gradient(135deg, #172b49 0%, #1c2128 100%);
   /* 黑题在深色模式下用浅蓝，跟洛谷官方一致 */
   --lg-black-name: #accbf4;
-  /* 页面头图：比背景 (--bg #0d1117) 微微发蓝 */
-  --hero-bg: #141c2b;
-  --hero-border: #233044;
+  --hero-bg: linear-gradient(135deg, #14233a 0%, #182130 100%);
+  --hero-border: #29405f;
 }
 
 html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--bg);
+  background: var(--page-bg);
+  background-attachment: fixed;
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -77,14 +86,20 @@ a:hover {
 }
 
 .container {
-  max-width: 1200px;
+  width: min(calc(100% - (var(--page-gutter) * 2)), var(--page-max-width));
+  max-width: none;
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 @media (max-width: 768px) {
+  :root {
+    --page-gutter: 14px;
+  }
+
   .container {
-    padding: 0 14px;
+    width: min(calc(100% - (var(--page-gutter) * 2)), var(--page-max-width));
   }
 }
 

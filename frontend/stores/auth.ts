@@ -2,7 +2,7 @@
  * 认证状态管理（Pinia store）。
  *
  * access token 放内存（刷新页面丢失，靠 refresh cookie 重新换）。
- * 前端初始化时若 localStorage 有"曾经登录过"标记，自动调 /auth/refresh。
+ * 前端初始化时调 /auth/refresh，用 refresh cookie 恢复登录态。
  */
 import { defineStore } from 'pinia'
 
@@ -12,6 +12,7 @@ interface AuthState {
   displayName: string
   email: string
   emailVerified: boolean
+  initialized: boolean
 }
 
 export const useAuthStore = defineStore('auth', {
@@ -21,6 +22,7 @@ export const useAuthStore = defineStore('auth', {
     displayName: '',
     email: '',
     emailVerified: false,
+    initialized: false,
   }),
   getters: {
     isLoggedIn: (s) => !!s.accessToken && s.expiresAt > Date.now(),
@@ -48,19 +50,25 @@ export const useAuthStore = defineStore('auth', {
       this.displayName = ''
       this.email = ''
       this.emailVerified = false
+      this.initialized = true
       if (import.meta.client) {
         localStorage.removeItem('la_logged')
       }
     },
     async tryRefresh() {
       if (import.meta.server) return
-      if (!localStorage.getItem('la_logged')) return
+      if (this.accessToken && this.expiresAt > Date.now()) {
+        this.initialized = true
+        return
+      }
       try {
         const api = useApi()
         const data = await api<any>('/auth/refresh', { method: 'POST' })
         this.setTokens(data)
       } catch {
         this.clear()
+      } finally {
+        this.initialized = true
       }
     },
   },

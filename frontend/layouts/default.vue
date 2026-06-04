@@ -105,7 +105,7 @@ const navItems = [
             <span class="label">登出</span>
           </button>
         </template>
-        <template v-else>
+        <template v-else-if="auth.initialized">
           <NuxtLink to="/login" class="nav-item" title="登录">
             <svg viewBox="0 0 24 24" class="icon">
               <path
@@ -132,6 +132,20 @@ const navItems = [
             </svg>
             <span class="label">注册</span>
           </NuxtLink>
+        </template>
+        <template v-else>
+          <div class="nav-item auth-loading" title="正在恢复登录状态">
+            <svg viewBox="0 0 24 24" class="icon">
+              <path
+                d="M12 3a9 9 0 109 9"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+            <span class="label">登录状态</span>
+          </div>
         </template>
 
         <button class="nav-item as-btn" :title="colorMode.value === 'dark' ? '切换浅色' : '切换深色'" @click="toggle">
@@ -245,6 +259,10 @@ const navItems = [
   background: var(--hover);
   color: var(--link);
 }
+.auth-loading {
+  color: var(--text-muted);
+  cursor: default;
+}
 
 .icon {
   width: 22px;
@@ -299,7 +317,10 @@ const navItems = [
 }
 .main-area {
   flex: 1;
-  padding: 28px 40px 56px;
+  width: min(calc(100% - (var(--page-gutter) * 2)), var(--page-max-width));
+  max-width: none;
+  padding: 28px 0 56px;
+  box-sizing: border-box;
 }
 .site-footer {
   background: var(--surface);

@@ -387,38 +387,17 @@ function formatScore(s: number): string {
 </template>
 
 <style scoped>
-/*
-  用户页要 break out 父级 .container（max-width:1200, margin:auto, padding:28 40 56），
-  让 sidebar 永远紧贴左边栏。在所有分辨率下三段视觉距离都 = 40px：
-    左边栏右沿 → sidebar 左 = 40
-    sidebar 右 → content 左 = 40 (grid gap)
-    content 右 → viewport 右 = 40
-
-  break out 公式：宽 = 100vw - 56(左边栏)；
-  左偏移 = 父 .main-area 自身距 layout-body 左边的距离。
-  .main-area 距 layout-body 左边 = max(0, (100vw-56-1200)/2) + 40px(.main-area padding-left)。
-  右偏移同理（反过来抵消父级 padding-right）。
-*/
 .user-page {
-  width: calc(100vw - 56px);
-  margin-left: calc(-40px - max(0px, (100vw - 56px - 1200px) / 2));
-  margin-right: calc(-40px - max(0px, (100vw - 56px - 1200px) / 2));
-  padding: 0 40px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
   box-sizing: border-box;
-}
-@media (max-width: 768px) {
-  .user-page {
-    width: 100%;
-    margin-left: 0;
-    margin-right: 0;
-    padding: 0;
-  }
 }
 
 .two-col {
   display: grid;
   grid-template-columns: 260px 1fr;
-  gap: 40px;
+  gap: 32px;
   margin-top: 16px;
   align-items: start;
 }

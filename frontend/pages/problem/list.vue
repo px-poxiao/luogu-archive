@@ -303,8 +303,8 @@ function totalFor(k: string): number {
   list-style: none;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 .problem-list li {
   background: var(--surface);
@@ -329,6 +329,9 @@ function totalFor(k: string): number {
 @media (max-width: 768px) {
   .problem-hero {
     padding: 18px 16px;
+  }
+  .problem-list {
+    grid-template-columns: 1fr;
   }
 }
 </style>
