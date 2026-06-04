@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 通用加载窗口：用于页面先渲染、后端接口慢慢返回的场景。
+// 通用加载窗口：所有页面统一显示极简提示，避免文案扰乱界面。
 defineProps<{
   title?: string
   text?: string
@@ -10,10 +10,7 @@ defineProps<{
   <div class="loading-panel" role="status" aria-live="polite">
     <div class="loading-card">
       <div class="spinner" aria-hidden="true" />
-      <div>
-        <div class="loading-title">{{ title || '正在加载档案' }}</div>
-        <p>{{ text || '页面已经打开，正在从后端调取最新数据…' }}</p>
-      </div>
+      <div class="loading-title">loading……</div>
     </div>
   </div>
 </template>
@@ -52,13 +49,6 @@ defineProps<{
 
 .loading-title {
   font-weight: 700;
-  margin-bottom: 3px;
-}
-
-p {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 14px;
 }
 
 @keyframes spin {
