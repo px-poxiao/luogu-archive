@@ -309,7 +309,8 @@ const navItems = [
 
 /* 主体 */
 .layout-body {
-  margin-left: 56px;
+  /* 侧边栏是 content-box：56px 宽 + 左右 8px padding + 1px 边框，总占位 73px。 */
+  margin-left: 73px;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -328,17 +329,17 @@ const navItems = [
   padding: 28px 0 32px;
   font-size: 14px;
   color: var(--text-muted);
-  /* 横跨整个 viewport（拉出 layout-body 的 margin-left:56），
-     左 56 段被 fixed 边栏盖在上面 —— 视觉上 footer 下"穿过"边栏，
+  /* 横跨整个 viewport（拉出 layout-body 的侧栏偏移），
+     左侧区域被 fixed 边栏盖在上面 —— 视觉上 footer 下"穿过"边栏，
      左右各 53px padding 对称（≈ 2 倍行高）。 */
-  margin-left: -56px;
+  margin-left: -73px;
 }
 .footer-inner {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
   align-items: start;
-  /* 左 padding = 边栏宽 56 + 53（2 倍行高）；右 53。视觉上左栏离边栏右沿 53px。 */
-  padding: 0 53px 0 109px;
+  /* 左 padding = 侧边栏真实占位 73px + 53px；右 53px。 */
+  padding: 0 53px 0 126px;
   gap: 42px;
 }
 .footer-main {
@@ -393,13 +394,12 @@ const navItems = [
   .footer-inner {
     grid-template-columns: 1fr;
     gap: 18px;
-    padding: 0 18px 0 74px;
+    padding: 0 18px 0 91px;
   }
   .footer-links {
     justify-self: start;
   }
 }
 
-/* 左侧栏在所有设备（含手机端）保持一致 —— 56px 宽固定贴左
-   layout-body 永远 margin-left:56，footer 已自行 -56 抵消撑满 */
+/* 左侧栏在所有设备（含手机端）保持一致，固定贴左。 */
 </style>

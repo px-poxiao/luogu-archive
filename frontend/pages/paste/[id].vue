@@ -92,9 +92,11 @@ const crawledAtText = computed(() =>
 
 <style scoped>
 .paste-wrap {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 0 8px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 .paste-banner {

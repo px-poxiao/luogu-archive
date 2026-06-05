@@ -95,11 +95,19 @@ a:hover {
 
 @media (max-width: 768px) {
   :root {
-    --page-gutter: 14px;
+    /* 手机端也保留明确边界，避免内容贴到屏幕右侧。 */
+    --page-gutter: 20px;
   }
 
   .container {
     width: min(calc(100% - (var(--page-gutter) * 2)), var(--page-max-width));
+  }
+}
+
+@media (max-width: 380px) {
+  :root {
+    /* 极窄屏稍微收一点边界，优先保证正文还能舒展。 */
+    --page-gutter: 16px;
   }
 }
 

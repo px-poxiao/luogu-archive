@@ -292,11 +292,14 @@ function totalFor(k: string): number {
 .sub { font-size: 18px; font-weight: normal; margin-left: 4px; }
 .diff-section {
   margin-bottom: 24px;
+  min-width: 0;
 }
 .diff-section h2 {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 .count {
   font-size: 13px;
@@ -314,21 +317,33 @@ function totalFor(k: string): number {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  min-width: 0;
 }
 .problem-list li {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 6px 10px;
+  min-width: 0;
+  box-sizing: border-box;
 }
 .problem-list a {
   color: var(--text);
   display: flex;
   gap: 10px;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 .pid { font-family: monospace; font-weight: 600; }
-.title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .more-hint {
   margin: 8px 0 0;
   font-size: 13px;
@@ -341,6 +356,9 @@ function totalFor(k: string): number {
   }
   .problem-list {
     grid-template-columns: 1fr;
+  }
+  .view-all {
+    margin-left: 0;
   }
 }
 </style>
