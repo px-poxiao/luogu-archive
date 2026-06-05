@@ -123,16 +123,21 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = True
 
     # ---------- 人机验证 ----------
-    CAPTCHA_PROVIDER: Literal["turnstile", "hcaptcha", "none"] = "turnstile"
+    CAPTCHA_PROVIDER: Literal["turnstile", "hcaptcha", "aliyun", "none"] = "turnstile"
     CAPTCHA_SITE_KEY: str = ""
     CAPTCHA_SECRET: str = ""
+    CAPTCHA_ALIYUN_ACCESS_KEY_ID: str = ""
+    CAPTCHA_ALIYUN_ACCESS_KEY_SECRET: str = ""
+    CAPTCHA_ALIYUN_SCENE_ID: str = ""
+    CAPTCHA_ALIYUN_REGION: Literal["cn", "sgp"] = "cn"
+    CAPTCHA_ALIYUN_ENDPOINT: str = ""
     CAPTCHA_TRIGGER_SAVE_PER_MIN: int = 3
     CAPTCHA_TRIGGER_SAVE_PER_10MIN: int = 10
     CAPTCHA_TRIGGER_PAGE_PER_HOUR: int = 600
 
     # ---------- 保存按钮限流 ----------
     SAVE_IP_WINDOW_SEC: int = 60
-    SAVE_IP_WINDOW_MAX: int = 5
+    SAVE_IP_WINDOW_MAX: int = 20
     SAVE_IP_HOUR_BREAKER_THRESHOLD: int = 10
     SAVE_IP_HOUR_BREAKER_COOLDOWN_SEC: int = 3600
 

@@ -71,6 +71,7 @@ async def _check_ip_limits(ip: str) -> None:
     limiter = SlidingWindowLimiter(redis)
 
     # 硬限流
+    # 软触发 - 1 分钟
     ok, _count = await limiter.acquire(
         ratelimit_key("save_ip_60s", ip),
         window_sec=settings.SAVE_IP_WINDOW_SEC,
@@ -78,11 +79,10 @@ async def _check_ip_limits(ip: str) -> None:
     )
     if not ok:
         raise RateLimitError(
-            "保存请求过于频繁（60 秒内 5 次）",
+            "保存请求过于频繁（1 分钟内 20 次）",
             retry_after_sec=settings.SAVE_IP_WINDOW_SEC,
         )
 
-    # 软触发 - 1 分钟
     ok_soft_1m, _ = await limiter.acquire(
         ratelimit_key("save_ip_captcha_1m", ip),
         window_sec=60,
@@ -97,6 +97,12 @@ async def _check_ip_limits(ip: str) -> None:
     if not ok_soft_1m or not ok_soft_10m:
         # 打上"需要验证码"标记，10 分钟内所有保存都得验
         await redis.setex(_captcha_required_key(ip), 600, "1")
+
+
+async def _set_captcha_requirement(ip: str) -> None:
+    """主动把当前 IP 标记为需要人机验证。"""
+    redis = get_redis()
+    await redis.setex(_captcha_required_key(ip), 600, "1")
 
 
 async def _need_captcha(ip: str) -> bool:
@@ -208,6 +214,12 @@ async def _try_merge_or_enqueue(
     return task_id, False
 
 
+async def _try_get_pending(content_type: str, ident: str) -> str | None:
+    """只读取 pending 任务，不产生新任务；重复点击同一目标不应消耗限流额度。"""
+    redis = get_redis()
+    return await redis.get(_pending_key(content_type, ident))
+
+
 # ============================================================
 # 端点
 # ============================================================
@@ -216,17 +228,22 @@ async def _try_merge_or_enqueue(
 async def save(req: SaveReq, request: Request) -> SaveResp:
     ip = get_client_ip(request)
 
-    # 1. IP 限流
-    await _check_ip_limits(ip)
+    # 1. 同一目标已在队列中时直接合并返回，不消耗限流额度。
+    old_task_id = await _try_get_pending(req.content_type, req.id)
+    if old_task_id:
+        return SaveResp(task_id=old_task_id, merged=True)
 
-    # 2. 验证码检查
+    # 2. 如果已经进入验证码状态，优先给用户验证机会，避免直接撞 429 冷却。
     if await _need_captcha(ip):
-        if not req.captcha_token:
-            raise CaptchaRequired("请先完成人机验证")
-        ok = await verify_captcha(req.captcha_token, ip=ip)
-        if not ok:
-            raise CaptchaRequired("人机验证失败，请重试")
+        if settings.CAPTCHA_PROVIDER != "none":
+            if not req.captcha_token:
+                raise CaptchaRequired("请先完成人机验证")
+            ok = await verify_captcha(req.captcha_token, ip=ip)
+            if not ok:
+                raise CaptchaRequired("人机验证失败，请重试")
         await _clear_captcha_requirement(ip)
+    else:
+        await _check_ip_limits(ip)
 
     # 3. 请求合并 / 派发
     task_id, merged = await _try_merge_or_enqueue(req.content_type, req.id)

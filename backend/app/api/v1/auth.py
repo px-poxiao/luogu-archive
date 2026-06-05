@@ -28,10 +28,12 @@ from app.api.deps import get_client_ip
 from app.auth.deps import get_current_site_user
 from app.auth.jwt import make_access, make_refresh, safe_decode
 from app.auth.passwords import hash_password, verify_password
+from app.core.captcha import verify_captcha
 from app.core.config import settings
 from app.core.db import get_db
 from app.core.exceptions import (
     AuthError,
+    CaptchaRequired,
     ConflictError,
     NotFoundError,
     RateLimitError,
@@ -58,6 +60,7 @@ class RegisterReq(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     display_name: str = Field(..., min_length=1, max_length=16)
+    captcha_token: str | None = None
 
 
 class LoginReq(BaseModel):
@@ -104,16 +107,24 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     _check_password(req.password)
+    ip = get_client_ip(request)
 
     # 限流：同 IP 每小时最多 5 次注册
     redis = get_redis()
     ok, _ = await SlidingWindowLimiter(redis).acquire(
-        ratelimit_key("register_ip", get_client_ip(request)),
+        ratelimit_key("register_ip", ip),
         window_sec=3600,
         limit=5,
     )
     if not ok:
         raise RateLimitError("注册过于频繁", retry_after_sec=1800)
+
+    # 所有用户注册都必须通过人机验证；provider=none 时跳过，方便本地开发。
+    if settings.CAPTCHA_PROVIDER != "none":
+        if not req.captcha_token:
+            raise CaptchaRequired("请先完成人机验证")
+        if not await verify_captcha(req.captcha_token, ip=ip):
+            raise CaptchaRequired("人机验证失败，请重试")
 
     # 检查邮箱已用
     q = select(SiteUser).where(SiteUser.email == req.email.lower())

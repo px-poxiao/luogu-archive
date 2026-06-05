@@ -1,60 +1,52 @@
-// https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
-  // 开发工具
   devtools: { enabled: true },
-
-  // 渲染模式：SSR（有利于 SEO 展示 + 首屏快）
   ssr: true,
-
-  // 模块
   modules: [
-    '@nuxtjs/color-mode',   // Dark Mode
-    '@pinia/nuxt',          // 全局 store
-    '@vueuse/nuxt',         // composition utilities
+    '@nuxtjs/color-mode',
+    '@pinia/nuxt',
+    '@vueuse/nuxt',
     '@nuxt/fonts',
   ],
-
-  // 环境变量（服务端 + 客户端分开）
   runtimeConfig: {
-    // 仅 Server 可见
-    apiInternalUrl: process.env.NUXT_API_INTERNAL_URL || 'http://127.0.0.1:8000',
+    apiInternalUrl:
+      process.env.NUXT_API_INTERNAL_URL
+      || `http://127.0.0.1:${process.env.WEB_PORT || '8001'}`,
     public: {
-      // 客户端也可见
-      apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL || 'http://localhost:8000',
-      siteName: '洛谷档案馆',
+      apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL || '',
+      siteName: '\u6d1b\u8c37\u6863\u6848\u9986',
       captchaProvider: process.env.NUXT_PUBLIC_CAPTCHA_PROVIDER || 'turnstile',
       captchaSiteKey: process.env.NUXT_PUBLIC_CAPTCHA_SITE_KEY || '',
+      captchaAliyunPrefix: process.env.NUXT_PUBLIC_CAPTCHA_ALIYUN_PREFIX || '',
+      captchaAliyunSceneId: process.env.NUXT_PUBLIC_CAPTCHA_ALIYUN_SCENE_ID || '',
+      captchaAliyunRegion: process.env.NUXT_PUBLIC_CAPTCHA_ALIYUN_REGION || 'cn',
     },
   },
-
   colorMode: {
-    preference: 'system',   // 默认跟随系统
+    preference: 'system',
     fallback: 'light',
-    classSuffix: '',        // dark / light 直接做类名
+    classSuffix: '',
   },
-
   css: ['~/assets/css/base.css', 'katex/dist/katex.min.css'],
-
-  // 站点元信息
   app: {
     head: {
       htmlAttrs: { lang: 'zh-CN' },
-      title: '洛谷档案馆',
+      title: '\u6d1b\u8c37\u6863\u6848\u9986',
       meta: [
         { charset: 'utf-8' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-        { name: 'robots', content: 'noindex,nofollow,noarchive' }, // 合规底线：禁收录
-        { name: 'description', content: '洛谷档案馆 —— 第三方存档：文章 / 剪贴板 / 犇犇 / 陶片放逐 / 题解' },
+        { name: 'robots', content: 'noindex,nofollow,noarchive' },
+        {
+          name: 'description',
+          content: '\u6d1b\u8c37\u6863\u6848\u9986 - \u7b2c\u4e09\u65b9\u5b58\u6863\uff1a\u6587\u7ae0 / \u526a\u8d34\u677f / \u7287\u7287 / \u9676\u7247\u653e\u9010 / \u9898\u89e3',
+        },
       ],
       link: [
         { rel: 'icon', type: 'image/png', href: '/favicon.png' },
       ],
     },
   },
-
   typescript: {
     strict: true,
   },
-
   compatibilityDate: '2026-05-01',
 })

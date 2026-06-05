@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 一键保存/更新按钮。封装 POST /save 逻辑，供各内容页头图复用。
+// 一键保存 / 更新按钮。封装 POST /save，并在需要时弹出人机验证。
 const props = defineProps<{
   contentType: string
   contentId: string
@@ -8,6 +8,8 @@ const props = defineProps<{
 const state = ref<'idle' | 'pending' | 'success' | 'failed' | 'cooldown' | 'captcha'>('idle')
 const message = ref<string>('')
 const captchaToken = ref<string>('')
+const showCaptcha = ref(false)
+const captchaRef = ref<any>(null)
 
 const api = useApi()
 
@@ -27,6 +29,9 @@ async function save() {
         },
       },
     )
+    showCaptcha.value = false
+    captchaToken.value = ''
+    captchaRef.value?.reset?.()
     state.value = 'success'
     message.value = resp.merged ? '已合并到进行中的任务' : '已派发，请稍后刷新'
     setTimeout(() => { state.value = 'idle'; message.value = '' }, 3000)
@@ -34,7 +39,15 @@ async function save() {
     const code = e?.data?.error_code
     if (code === 'captcha_required') {
       state.value = 'captcha'
-      message.value = '请先完成人机验证'
+      showCaptcha.value = true
+      message.value = '请完成人机验证'
+      await nextTick()
+      try {
+        captchaToken.value = await captchaRef.value?.getToken?.()
+        await save()
+      } catch (err: any) {
+        message.value = err?.message || '请先完成人机验证'
+      }
     } else if (code === 'rate_limited') {
       state.value = 'cooldown'
       const s = e?.data?.data?.retry_after_sec || 30
@@ -47,25 +60,44 @@ async function save() {
     }
   }
 }
+
+async function onCaptchaVerified(token: string) {
+  if (state.value !== 'captcha') return
+  captchaToken.value = token
+  await save()
+}
 </script>
 
 <template>
-  <button
-    class="hero-save-btn"
-    :class="{
-      success: state === 'success',
-      error: state === 'failed',
-      cooldown: state === 'cooldown' || state === 'captcha',
-    }"
-    :disabled="state === 'pending'"
-    @click="save"
-  >
-    <span v-if="state === 'idle'">🔄 立即更新</span>
-    <span v-else>{{ message }}</span>
-  </button>
+  <div class="save-action">
+    <button
+      class="hero-save-btn"
+      :class="{
+        success: state === 'success',
+        error: state === 'failed',
+        cooldown: state === 'cooldown' || state === 'captcha',
+      }"
+      :disabled="state === 'pending'"
+      @click="save"
+    >
+      <span v-if="state === 'idle'">立即更新</span>
+      <span v-else>{{ message }}</span>
+    </button>
+    <CaptchaChallenge
+      v-if="showCaptcha"
+      ref="captchaRef"
+      :id-suffix="`save-${contentType}-${contentId}`"
+      @verified="onCaptchaVerified"
+    />
+  </div>
 </template>
 
 <style scoped>
+.save-action {
+  display: grid;
+  gap: 8px;
+}
+
 .hero-save-btn {
   flex-shrink: 0;
   padding: 6px 14px;

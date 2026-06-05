@@ -45,6 +45,9 @@ dependencies = [
     # 邮件
     "aiosmtplib>=3.0.2",
 
+    # 人机验证（阿里云验证码 2.0 服务端校验）
+    "alibabacloud_captcha20230305>=1.1.4",
+
     # 工具
     "python-multipart>=0.0.12",         # FastAPI 文件上传
     "python-dateutil>=2.9.0",

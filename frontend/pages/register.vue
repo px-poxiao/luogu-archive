@@ -3,6 +3,7 @@ const form = ref({ email: '', password: '', display_name: '' })
 const passwordConfirm = ref('')
 const state = ref<'idle' | 'loading' | 'done'>('idle')
 const err = ref('')
+const captchaRef = ref<any>(null)
 
 const api = useApi()
 
@@ -14,10 +15,18 @@ async function submit() {
   }
   state.value = 'loading'
   try {
-    await api('/auth/register', { method: 'POST', body: form.value })
+    const captchaToken = await captchaRef.value?.getToken?.()
+    await api('/auth/register', {
+      method: 'POST',
+      body: {
+        ...form.value,
+        captcha_token: captchaToken || undefined,
+      },
+    })
     state.value = 'done'
   } catch (e: any) {
     err.value = e?.data?.message || '注册失败'
+    captchaRef.value?.reset?.()
     state.value = 'idle'
   }
 }
@@ -35,6 +44,7 @@ async function submit() {
       <input v-model="form.password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required>
       <label>确认密码</label>
       <input v-model="passwordConfirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" required>
+      <CaptchaChallenge ref="captchaRef" id-suffix="register" />
       <button :disabled="state === 'loading'" type="submit">
         {{ state === 'loading' ? '提交中...' : '注册' }}
       </button>

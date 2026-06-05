@@ -33,6 +33,9 @@ const { data: lastCrawled } = useLazyAsyncData('problem-list-last-crawled', () =
 
 const saveState = ref<'idle' | 'pending' | 'success' | 'failed' | 'cooldown' | 'captcha'>('idle')
 const saveMessage = ref('')
+const captchaToken = ref('')
+const showCaptcha = ref(false)
+const captchaRef = ref<any>(null)
 
 const relTime = computed(() =>
   lastCrawled.value?.last_crawled_at ? fromNow(lastCrawled.value.last_crawled_at) : '未知',
@@ -48,8 +51,12 @@ async function saveProblemList() {
       body: {
         content_type: 'problem',
         id: 'list',
+        captcha_token: captchaToken.value || undefined,
       },
     })
+    showCaptcha.value = false
+    captchaToken.value = ''
+    captchaRef.value?.reset?.()
     saveState.value = 'success'
     saveMessage.value = resp.merged ? '已合并到进行中的任务' : '已派发，请稍后刷新'
     setTimeout(() => {
@@ -60,7 +67,15 @@ async function saveProblemList() {
     const code = e?.data?.error_code
     if (code === 'captcha_required') {
       saveState.value = 'captcha'
-      saveMessage.value = '请先完成人机验证'
+      showCaptcha.value = true
+      saveMessage.value = '请完成人机验证'
+      await nextTick()
+      try {
+        captchaToken.value = await captchaRef.value?.getToken?.()
+        await saveProblemList()
+      } catch (err: any) {
+        saveMessage.value = err?.message || '请先完成人机验证'
+      }
     } else if (code === 'rate_limited') {
       saveState.value = 'cooldown'
       const s = e?.data?.data?.retry_after_sec || 30
@@ -75,6 +90,12 @@ async function saveProblemList() {
 }
 
 // 按洛谷难度顺序排序
+async function onCaptchaVerified(token: string) {
+  if (saveState.value !== 'captcha') return
+  captchaToken.value = token
+  await saveProblemList()
+}
+
 const diffOrder = [
   '入门', '普及-', '普及/提高-', '普及+/提高',
   '提高+/省选-', '省选/NOI-', 'NOI/NOI+/CTSC',
@@ -159,6 +180,12 @@ function totalFor(k: string): number {
           <span v-if="saveState === 'idle'">🔄 立即更新</span>
           <span v-else>{{ saveMessage }}</span>
         </button>
+        <CaptchaChallenge
+          v-if="showCaptcha"
+          ref="captchaRef"
+          id-suffix="problem-list-save"
+          @verified="onCaptchaVerified"
+        />
       </div>
     </section>
     <p v-if="selectedDiff" class="note diff-current">
