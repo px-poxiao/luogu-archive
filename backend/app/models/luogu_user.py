@@ -206,9 +206,31 @@ class UserEloHistory(Base):
     )
     rating: Mapped[int] = mapped_column(Integer, nullable=False)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_latest: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    user_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     contest_id: Mapped[int] = mapped_column(Integer, nullable=False)
     contest_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    contest_start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    contest_end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     prev_diff: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # 洛谷返回的 previous 是上一条 Elo 记录快照。预测等级分时需要它校验旧分。
+    previous_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    previous_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    previous_is_latest: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    previous_contest_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    previous_contest_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    previous_contest_start_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    previous_contest_end_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    previous_user_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    previous_diff: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # 保留原始接口字段，避免后续算法需要字段时必须重新爬用户。
+    raw_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     user: Mapped[LuoguUser] = relationship(back_populates="elo_history")
 

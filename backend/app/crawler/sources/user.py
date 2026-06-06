@@ -482,19 +482,80 @@ async def _sync_elo(session: AsyncSession, uid: int, elo_list: list) -> None:
         contest = item.get("contest") if isinstance(item, dict) else None
         if not isinstance(contest, dict):
             continue
+        contest_id = int(contest.get("id") or 0)
+        if contest_id <= 0:
+            continue
+        previous = item.get("previous") if isinstance(item, dict) else None
+        previous_contest = previous.get("contest") if isinstance(previous, dict) else None
         rows.append(
             {
                 "uid": uid,
                 "rating": int(item.get("rating") or 0),
                 "time": _to_dt(item.get("time")) or utcnow(),
-                "contest_id": int(contest.get("id") or 0),
+                "is_latest": bool(item.get("latest")),
+                "user_count": item.get("userCount"),
+                "contest_id": contest_id,
                 "contest_name": contest.get("name") or "",
+                "contest_start_time": _to_dt(contest.get("startTime")),
+                "contest_end_time": _to_dt(contest.get("endTime")),
                 "prev_diff": item.get("prevDiff"),
+                "previous_rating": previous.get("rating") if isinstance(previous, dict) else None,
+                "previous_time": (
+                    _to_dt(previous.get("time")) if isinstance(previous, dict) else None
+                ),
+                "previous_is_latest": (
+                    bool(previous.get("latest")) if isinstance(previous, dict) else None
+                ),
+                "previous_contest_id": (
+                    int(previous_contest.get("id") or 0)
+                    if isinstance(previous_contest, dict) and previous_contest.get("id")
+                    else None
+                ),
+                "previous_contest_name": (
+                    previous_contest.get("name") if isinstance(previous_contest, dict) else None
+                ),
+                "previous_contest_start_time": (
+                    _to_dt(previous_contest.get("startTime"))
+                    if isinstance(previous_contest, dict)
+                    else None
+                ),
+                "previous_contest_end_time": (
+                    _to_dt(previous_contest.get("endTime"))
+                    if isinstance(previous_contest, dict)
+                    else None
+                ),
+                "previous_user_count": (
+                    previous.get("userCount") if isinstance(previous, dict) else None
+                ),
+                "previous_diff": (
+                    previous.get("prevDiff") if isinstance(previous, dict) else None
+                ),
+                "raw_data": item,
             }
         )
     if not rows:
         return
-    stmt = mysql_insert(UserEloHistory).values(rows).prefix_with("IGNORE")
+    stmt = mysql_insert(UserEloHistory).values(rows)
+    stmt = stmt.on_duplicate_key_update(
+        rating=stmt.inserted.rating,
+        time=stmt.inserted.time,
+        is_latest=stmt.inserted.is_latest,
+        user_count=stmt.inserted.user_count,
+        contest_name=stmt.inserted.contest_name,
+        contest_start_time=stmt.inserted.contest_start_time,
+        contest_end_time=stmt.inserted.contest_end_time,
+        prev_diff=stmt.inserted.prev_diff,
+        previous_rating=stmt.inserted.previous_rating,
+        previous_time=stmt.inserted.previous_time,
+        previous_is_latest=stmt.inserted.previous_is_latest,
+        previous_contest_id=stmt.inserted.previous_contest_id,
+        previous_contest_name=stmt.inserted.previous_contest_name,
+        previous_contest_start_time=stmt.inserted.previous_contest_start_time,
+        previous_contest_end_time=stmt.inserted.previous_contest_end_time,
+        previous_user_count=stmt.inserted.previous_user_count,
+        previous_diff=stmt.inserted.previous_diff,
+        raw_data=stmt.inserted.raw_data,
+    )
     await session.execute(stmt)
 
 
