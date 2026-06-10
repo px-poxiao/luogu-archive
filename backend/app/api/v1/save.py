@@ -187,9 +187,11 @@ async def _try_merge_or_enqueue(
             # ident 任意值都忽略
             msg = crawl_judgement_hi.send("manual")
         elif content_type == "problem":
-            # 列表页点保存：默认 ident="list" → 扫前 N 页（发现新题 + 更新难度）
+            # 列表页点保存：ident="list" → 扫前 N 页（发现新题 + 更新难度）
             #               ident=数字 → 只扫这一页（admin 内部 / 调试用）
-            if ident == "list":
+            #               ident=P1001/B2001/CF1A... → 直接检查单题题解开放状态
+            ident_norm = ident.strip()
+            if ident_norm.lower() == "list":
                 # 错峰扫前 30 页（覆盖 1500 道）。每页 11 秒间隔避免 cn 节点限流（0.1 req/s）。
                 # 各 send 都返回 msg；这里取第一个 msg 当返回的 task_id。
                 msg = crawl_problem_list_page_hi.send(1, "manual")
@@ -198,9 +200,11 @@ async def _try_merge_or_enqueue(
                         args=(page, "manual"),
                         delay=(page - 1) * 11_000,
                     )
-            else:
-                page = int(ident)
+            elif ident_norm.isdigit():
+                page = int(ident_norm)
                 msg = crawl_problem_list_page_hi.send(page, "manual")
+            else:
+                msg = crawl_problem_solution_hi.send(ident_norm.upper(), "manual")
         elif content_type == "problem_solution":
             msg = crawl_problem_solution_hi.send(ident, "manual")
         else:

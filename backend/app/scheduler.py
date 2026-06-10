@@ -139,6 +139,7 @@ async def job_problem_tier_hourly() -> None:
     """tier1（入门 / 普及-）：每小时派一次"距上次检查 ≥ 1h"的题。
 
     每小时的目标周期是 1h，所以查 last_solution_check_at < now-1h（含 NULL）的题。
+    只轮询当前仍标记为开放的题；一旦检测到关闭，写回 False 后退出自动观察池。
     11s/题错峰，cn 节点 0.1 req/s 是上限。
     """
     from app.tasks.actors.crawl import crawl_problem_solution
@@ -155,7 +156,10 @@ async def job_problem_tier_hourly() -> None:
                     Problem.last_solution_check_at.is_(None),
                 ),
             )
-            .order_by(Problem.last_solution_check_at.asc().nullsfirst())
+            .order_by(
+                Problem.last_solution_check_at.is_not(None),
+                Problem.last_solution_check_at.asc(),
+            )
         )
         pids = [r[0] for r in (await session.execute(q)).all()]
 
@@ -182,7 +186,10 @@ async def job_problem_tier_daily() -> None:
                     Problem.last_solution_check_at.is_(None),
                 ),
             )
-            .order_by(Problem.last_solution_check_at.asc().nullsfirst())
+            .order_by(
+                Problem.last_solution_check_at.is_not(None),
+                Problem.last_solution_check_at.asc(),
+            )
         )
         pids = [r[0] for r in (await session.execute(q)).all()]
 
@@ -197,6 +204,7 @@ async def job_problem_tier_weekly() -> None:
     """tier3（其他档）：每天派 1/7 的"距上次检查 ≥ 7d"的题，让全周均匀分摊。
 
     覆盖：普及+/提高、提高+/省选-、省选/NOI-、NOI/NOI+/CTSC、暂无评定。
+    只轮询当前仍标记为开放的题；关闭后不再自动复查。
 
     避免周一一次性把全档 1000+ 道题全派进队列堵住其他用户操作。
     取最旧的 ceil(N/7) 条，每天派一次，7 天正好把全档转完一轮。
@@ -237,7 +245,10 @@ async def job_problem_tier_weekly() -> None:
                     Problem.last_solution_check_at.is_(None),
                 ),
             )
-            .order_by(Problem.last_solution_check_at.asc().nullsfirst())
+            .order_by(
+                Problem.last_solution_check_at.is_not(None),
+                Problem.last_solution_check_at.asc(),
+            )
             .limit(daily_quota)
         )
         pids = [r[0] for r in (await session.execute(q)).all()]

@@ -183,9 +183,10 @@ async def _crawl_list_inner(page: int, *, trigger: str) -> None:
         # - solution_open=False 且已检测过的老题不再派（已确认关闭，终态）
         if rows:
             from app.tasks.actors.crawl import crawl_problem_solution
+
             async with db_session() as session:
                 pids_in_batch = [r["pid"] for r in rows]
-                # 已确认关闭的老题排除
+                # 已确认关闭的老题排除，避免关闭题长期占用 API 配额
                 closed_q = (
                     select(Problem.pid)
                     .where(Problem.pid.in_(pids_in_batch))
