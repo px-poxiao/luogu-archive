@@ -43,3 +43,6 @@ secrets/
 # 临时文件
 tmp_*
 *.tmp
+
+# AI 开发辅助文档
+request.md

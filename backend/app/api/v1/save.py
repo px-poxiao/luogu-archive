@@ -12,7 +12,9 @@ Body: { content_type: "article"|"paste"|"user"|"feed"|"judgement"|"problem"|"pro
 """
 from __future__ import annotations
 
+import re
 from typing import Literal
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
@@ -41,7 +43,7 @@ ContentType = Literal[
 
 class SaveReq(BaseModel):
     content_type: ContentType
-    id: str = Field(..., min_length=1, max_length=64)
+    id: str = Field(..., min_length=1, max_length=256)
     captcha_token: str | None = None
 
 
@@ -56,6 +58,41 @@ class SaveResp(BaseModel):
 # ============================================================
 
 _CAPTCHA_REQUIRED_KEY_PREFIX = "save:captcha_required"
+
+_ARTICLE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_ARTICLE_PATH_RE = re.compile(r"^/(?:article|atricle)/([A-Za-z0-9_-]{1,64})/?$", re.IGNORECASE)
+_LUOGU_HOSTS = {
+    "www.luogu.com.cn",
+    "luogu.com.cn",
+    "www.luogu.com",
+    "luogu.com",
+}
+
+
+def _normalize_article_ident(raw: str) -> str:
+    """允许文章保存传入完整链接、路径或纯 article id。"""
+    value = raw.strip()
+    if not value:
+        raise ValidationError("无效的文章 ID")
+
+    if _ARTICLE_ID_RE.fullmatch(value):
+        return value
+
+    if value.startswith(("www.luogu.", "luogu.")):
+        value = f"https://{value}"
+
+    if value.startswith(("http://", "https://")):
+        parsed = urlparse(value)
+        if parsed.netloc.lower() not in _LUOGU_HOSTS:
+            raise ValidationError("只支持洛谷文章链接")
+        path = parsed.path
+    else:
+        path = value
+
+    m = _ARTICLE_PATH_RE.fullmatch(path)
+    if not m:
+        raise ValidationError("文章链接格式应为 /article/{id}")
+    return m.group(1)
 
 
 def _captcha_required_key(ip: str) -> str:
@@ -231,9 +268,10 @@ async def _try_get_pending(content_type: str, ident: str) -> str | None:
 @router.post("/save", response_model=SaveResp)
 async def save(req: SaveReq, request: Request) -> SaveResp:
     ip = get_client_ip(request)
+    ident = _normalize_article_ident(req.id) if req.content_type == "article" else req.id
 
     # 1. 同一目标已在队列中时直接合并返回，不消耗限流额度。
-    old_task_id = await _try_get_pending(req.content_type, req.id)
+    old_task_id = await _try_get_pending(req.content_type, ident)
     if old_task_id:
         return SaveResp(task_id=old_task_id, merged=True)
 
@@ -250,7 +288,7 @@ async def save(req: SaveReq, request: Request) -> SaveResp:
         await _check_ip_limits(ip)
 
     # 3. 请求合并 / 派发
-    task_id, merged = await _try_merge_or_enqueue(req.content_type, req.id)
+    task_id, merged = await _try_merge_or_enqueue(req.content_type, ident)
 
     # 4. 审计
     async with db_session() as session:
@@ -259,7 +297,7 @@ async def save(req: SaveReq, request: Request) -> SaveResp:
                 ip=ip,
                 user_agent=request.headers.get("user-agent", "")[:500],
                 target_type=req.content_type,
-                target_id=req.id,
+                target_id=ident,
                 result="merged" if merged else "ok",
             )
         )

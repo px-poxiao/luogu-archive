@@ -43,6 +43,11 @@ const navItems = [
     label: '题目',
     icon: 'M6 4h10l4 4v12H6V4zM9 14h6M9 18h6',
   },
+  {
+    to: '/solution/fix',
+    label: '题解修',
+    icon: 'M4 5h16M4 9h10M7 13h10l-4 6H7l4-6z',
+  },
 ]
 </script>
 

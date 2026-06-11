@@ -146,6 +146,16 @@ class Settings(BaseSettings):
     IMAGE_MIRROR_PUBLIC_PREFIX: str = "/static/img"
     IMAGE_MIRROR_MAX_SIZE_MB: int = 20
 
+    # ---------- 题解修正 AI ----------
+    # 前端不暴露 provider 选择；这里只配置服务端使用的唯一模型。
+    SOLUTION_FIX_AI_PROVIDER: Literal["openai", "anthropic"] = "openai"
+    SOLUTION_FIX_AI_API_KEY: str = ""
+    SOLUTION_FIX_AI_BASE_URL: str = ""
+    SOLUTION_FIX_AI_MODEL: str = ""
+    SOLUTION_FIX_AI_TIMEOUT_SEC: int = 60
+    SOLUTION_FIX_AI_MAX_INPUT_CHARS: int = 60000
+    SOLUTION_FIX_AI_RATE_LIMIT_PER_HOUR: int = 5
+
     # ---------- 数据目录 ----------
     DATA_DIR: str = "./data"
 
