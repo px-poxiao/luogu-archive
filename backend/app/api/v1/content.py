@@ -242,15 +242,34 @@ async def list_judgement(
     ),
     db: AsyncSession = Depends(get_db),
 ) -> list[JudgementGroup]:
-    q = select(Judgement).order_by(desc(Judgement.time))
-    if before is not None:
-        q = q.where(Judgement.time < before)
-    q = q.limit(limit)
-    rows = (await db.execute(q)).scalars().all()
+    # 这里的 limit 是“合并后的处罚组”数量，而不是原始个人处罚行数量。
+    # 一次同原因批量处罚可能包含上百个用户；若先 LIMIT 原始行再合并，
+    # 首页会被同一组吃掉，用户需要多点几次加载更多才能翻过去。
+    raw_rows: list[Judgement] = []
+    cursor = before
+    batch_size = min(max(limit * 10, 200), 1000)
+    max_raw_rows = max(batch_size, min(20000, limit * 200))
+    has_more = True
 
-    # 分组：reason + 权限位图 + 时间窗
-    groups = await _group_judgements(db, rows)
-    return groups
+    while has_more and len(raw_rows) < max_raw_rows:
+        q = select(Judgement).order_by(desc(Judgement.time)).limit(batch_size)
+        if cursor is not None:
+            q = q.where(Judgement.time < cursor)
+        batch = (await db.execute(q)).scalars().all()
+        if not batch:
+            break
+
+        raw_rows.extend(batch)
+        cursor = batch[-1].time
+        has_more = len(batch) == batch_size
+
+        groups = await _group_judgements(db, raw_rows)
+        # 多拿 1 组作为边界缓冲，减少分页边界切在同一批处罚组里的概率。
+        if len(groups) >= limit + 1:
+            return groups[:limit]
+
+    groups = await _group_judgements(db, raw_rows)
+    return groups[:limit]
 
 
 async def _group_judgements(
