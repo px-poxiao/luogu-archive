@@ -61,6 +61,10 @@ export const useAuthStore = defineStore('auth', {
         this.initialized = true
         return
       }
+      if (!localStorage.getItem('la_logged')) {
+        this.clear()
+        return
+      }
       try {
         const api = useApi()
         const data = await api<any>('/auth/refresh', { method: 'POST' })

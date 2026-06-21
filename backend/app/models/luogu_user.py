@@ -95,6 +95,10 @@ class LuoguUser(Base, TimestampMixin):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    profile_changes: Mapped[list[UserProfileChange]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     intro_versions: Mapped[list[UserIntroVersion]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -141,6 +145,28 @@ class UserNameVersion(Base):
     is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
 
     user: Mapped[LuoguUser] = relationship(back_populates="name_versions")
+
+
+class UserProfileChange(Base):
+    """用户资料字段变更日志。记录从启用该表之后发生的可见字段变化。"""
+
+    __tablename__ = "user_profile_changes"
+    __table_args__ = (
+        Index("ix_upc_uid_time", "uid", "changed_at"),
+    )
+
+    id: Mapped[int] = BigPKColumn()
+    uid: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("luogu_users.uid", ondelete="CASCADE"), nullable=False
+    )
+    field_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    user: Mapped[LuoguUser] = relationship(back_populates="profile_changes")
 
 
 class UserIntroVersion(Base):

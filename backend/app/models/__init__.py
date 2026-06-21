@@ -34,6 +34,7 @@ from app.models.luogu_user import (
     UserNameVersion,
     UserNameViolation,
     UserNumericSnapshot,
+    UserProfileChange,
     UserPrize,
 )
 from app.models.site_user import (
@@ -75,5 +76,6 @@ __all__ = [
     "UserNameVersion",
     "UserNameViolation",
     "UserNumericSnapshot",
+    "UserProfileChange",
     "UserPrize",
 ]

@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import time as _t
 from datetime import datetime, timezone
@@ -48,6 +49,7 @@ from app.models.luogu_user import (
     UserNameVersion,
     UserNameViolation,
     UserNumericSnapshot,
+    UserProfileChange,
     UserPrize,
 )
 
@@ -243,26 +245,44 @@ async def _upsert_user(
     existing = await session.get(LuoguUser, uid)
     color = _to_color(user_obj.get("color"))
     intro = user_obj.get("introduction") or ""
+    new_values = {
+        "name": name,
+        "avatar": user_obj.get("avatar"),
+        "background": user_obj.get("background"),
+        "slogan": user_obj.get("slogan"),
+        "badge": user_obj.get("badge"),
+        "introduction": intro,
+        "color": color.value,
+        "is_admin": bool(user_obj.get("isAdmin")),
+        "is_banned": bool(user_obj.get("isBanned")),
+        "ccf_level": int(user_obj.get("ccfLevel") or 0),
+        "xcpc_level": int(user_obj.get("xcpcLevel") or 0),
+        "following_count": int(user_obj.get("followingCount") or 0),
+        "follower_count": int(user_obj.get("followerCount") or 0),
+        "ranking": _as_optional_int(user_obj.get("ranking")),
+        "passed_problem_count": _as_optional_int(user_obj.get("passedProblemCount")),
+        "submitted_problem_count": _as_optional_int(user_obj.get("submittedProblemCount")),
+    }
 
     if existing is None:
         existing = LuoguUser(
             uid=uid,
-            name=name,
-            avatar=user_obj.get("avatar"),
-            background=user_obj.get("background"),
-            slogan=user_obj.get("slogan"),
-            badge=user_obj.get("badge"),
-            introduction=intro,
+            name=new_values["name"],
+            avatar=new_values["avatar"],
+            background=new_values["background"],
+            slogan=new_values["slogan"],
+            badge=new_values["badge"],
+            introduction=new_values["introduction"],
             color=color,
-            is_admin=bool(user_obj.get("isAdmin")),
-            is_banned=bool(user_obj.get("isBanned")),
-            ccf_level=int(user_obj.get("ccfLevel") or 0),
-            xcpc_level=int(user_obj.get("xcpcLevel") or 0),
-            following_count=int(user_obj.get("followingCount") or 0),
-            follower_count=int(user_obj.get("followerCount") or 0),
-            ranking=user_obj.get("ranking"),
-            passed_problem_count=user_obj.get("passedProblemCount"),
-            submitted_problem_count=user_obj.get("submittedProblemCount"),
+            is_admin=new_values["is_admin"],
+            is_banned=new_values["is_banned"],
+            ccf_level=new_values["ccf_level"],
+            xcpc_level=new_values["xcpc_level"],
+            following_count=new_values["following_count"],
+            follower_count=new_values["follower_count"],
+            ranking=new_values["ranking"],
+            passed_problem_count=new_values["passed_problem_count"],
+            submitted_problem_count=new_values["submitted_problem_count"],
             register_time=_to_dt(user_obj.get("registerTime")),
             first_crawled_at=now,
             last_crawled_at=now,
@@ -283,6 +303,8 @@ async def _upsert_user(
                 )
             )
     else:
+        await _record_profile_changes(session, existing, new_values, now)
+
         # ---- 名字变更检测 ----
         if name != existing.name:
             # 关闭旧版本
@@ -329,35 +351,37 @@ async def _upsert_user(
                 )
 
         # ---- 数值字段时间序列 ----
-        await _snap_numeric(session, uid, "following_count", int(user_obj.get("followingCount") or 0), existing.following_count)
-        await _snap_numeric(session, uid, "follower_count", int(user_obj.get("followerCount") or 0), existing.follower_count)
-        if user_obj.get("ranking") is not None:
-            await _snap_numeric(session, uid, "ranking", int(user_obj["ranking"]), existing.ranking or 0)
+        await _snap_numeric(session, uid, "following_count", new_values["following_count"], existing.following_count)
+        await _snap_numeric(session, uid, "follower_count", new_values["follower_count"], existing.follower_count)
+        if new_values["ranking"] is not None:
+            await _snap_numeric(session, uid, "ranking", new_values["ranking"], existing.ranking or 0)
 
         # ---- 更新主表最新快照 ----
-        existing.name = name
-        existing.avatar = user_obj.get("avatar")
-        existing.background = user_obj.get("background")
-        existing.slogan = user_obj.get("slogan")
-        existing.badge = user_obj.get("badge")
-        existing.introduction = intro
+        existing.name = new_values["name"]
+        existing.avatar = new_values["avatar"]
+        existing.background = new_values["background"]
+        existing.slogan = new_values["slogan"]
+        existing.badge = new_values["badge"]
+        existing.introduction = new_values["introduction"]
         existing.color = color
-        existing.is_admin = bool(user_obj.get("isAdmin"))
-        existing.is_banned = bool(user_obj.get("isBanned"))
-        existing.ccf_level = int(user_obj.get("ccfLevel") or 0)
-        existing.xcpc_level = int(user_obj.get("xcpcLevel") or 0)
-        existing.following_count = int(user_obj.get("followingCount") or 0)
-        existing.follower_count = int(user_obj.get("followerCount") or 0)
-        existing.ranking = user_obj.get("ranking")
-        existing.passed_problem_count = user_obj.get("passedProblemCount")
-        existing.submitted_problem_count = user_obj.get("submittedProblemCount")
+        existing.is_admin = new_values["is_admin"]
+        existing.is_banned = new_values["is_banned"]
+        existing.ccf_level = new_values["ccf_level"]
+        existing.xcpc_level = new_values["xcpc_level"]
+        existing.following_count = new_values["following_count"]
+        existing.follower_count = new_values["follower_count"]
+        existing.ranking = new_values["ranking"]
+        existing.passed_problem_count = new_values["passed_problem_count"]
+        existing.submitted_problem_count = new_values["submitted_problem_count"]
         existing.last_crawled_at = now
 
     # ---------- 用户名违规检测 ----------
     await _check_and_record_name_violation(session, uid, name, now)
 
     # ---------- prizes ----------
-    await _sync_prizes(session, uid, data.get("prizes") or [])
+    prizes = data.get("prizes") or []
+    await _record_prize_changes(session, uid, prizes, now)
+    await _sync_prizes(session, uid, prizes)
 
     # ---------- elo ----------
     await _sync_elo(session, uid, data.get("elo") or [])
@@ -369,6 +393,142 @@ async def _upsert_user(
 
     # ---------- dailyCounts ----------
     await _sync_daily(session, uid, data.get("dailyCounts") or [])
+
+
+def _stringify_change_value(value) -> str | None:  # noqa: ANN001
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return str(value)
+
+
+def _as_optional_int(value) -> int | None:  # noqa: ANN001
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+async def _record_profile_changes(
+    session: AsyncSession,
+    existing: LuoguUser,
+    new_values: dict,
+    now: datetime,
+) -> None:
+    old_values = {
+        "name": existing.name,
+        "avatar": existing.avatar,
+        "background": existing.background,
+        "slogan": existing.slogan,
+        "badge": existing.badge,
+        "introduction": existing.introduction or "",
+        "color": existing.color.value,
+        "is_admin": existing.is_admin,
+        "is_banned": existing.is_banned,
+        "ccf_level": existing.ccf_level,
+        "xcpc_level": existing.xcpc_level,
+        "following_count": existing.following_count,
+        "follower_count": existing.follower_count,
+        "ranking": existing.ranking,
+        "passed_problem_count": existing.passed_problem_count,
+        "submitted_problem_count": existing.submitted_problem_count,
+    }
+
+    for field, new_value in new_values.items():
+        old_value = old_values.get(field)
+        if old_value == new_value:
+            continue
+        session.add(
+            UserProfileChange(
+                uid=existing.uid,
+                field_name=field,
+                old_value=_stringify_change_value(old_value),
+                new_value=_stringify_change_value(new_value),
+                changed_at=now,
+            )
+        )
+
+
+def _normalize_prize_item(item: dict) -> dict | None:
+    p = item.get("prize") if isinstance(item, dict) else None
+    if not isinstance(p, dict):
+        return None
+
+    score_raw = p.get("score")
+    rank_raw = p.get("rank")
+    return {
+        "year": int(p.get("year") or 0),
+        "contest": p.get("contest") or "",
+        "event": p.get("event") or "",
+        "prize": p.get("prize") or "",
+        "score": float(score_raw) if score_raw is not None else None,
+        "rank": int(rank_raw) if rank_raw is not None else None,
+    }
+
+
+def _prize_key(row: dict) -> tuple:
+    return (row["year"], row["contest"], row["event"], row["prize"])
+
+
+def _dump_change_json(value: dict) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+async def _record_prize_changes(
+    session: AsyncSession,
+    uid: int,
+    prizes: list,
+    now: datetime,
+) -> None:
+    normalized = []
+    for item in prizes:
+        row = _normalize_prize_item(item)
+        if row is not None:
+            normalized.append(row)
+    if not normalized:
+        return
+
+    q = select(UserPrize).where(UserPrize.uid == uid)
+    existing_rows = (await session.execute(q)).scalars().all()
+    existing_by_key = {
+        (p.year, p.contest or "", p.event or "", p.prize): p
+        for p in existing_rows
+    }
+
+    for row in normalized:
+        key = _prize_key(row)
+        old = existing_by_key.get(key)
+        if old is None:
+            session.add(
+                UserProfileChange(
+                    uid=uid,
+                    field_name="prize",
+                    old_value=None,
+                    new_value=_dump_change_json(row),
+                    changed_at=now,
+                )
+            )
+            continue
+
+        old_row = {
+            "year": old.year,
+            "contest": old.contest or "",
+            "event": old.event or "",
+            "prize": old.prize,
+            "score": old.score,
+            "rank": old.rank,
+        }
+        if old_row == row:
+            continue
+        session.add(
+            UserProfileChange(
+                uid=uid,
+                field_name="prize",
+                old_value=_dump_change_json(old_row),
+                new_value=_dump_change_json(row),
+                changed_at=now,
+            )
+        )
 
 
 async def _snap_numeric(

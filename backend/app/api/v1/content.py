@@ -69,6 +69,26 @@ class PasteDetail(BaseModel):
     version_count: int
 
 
+class ContentVersionItem(BaseModel):
+    id: int
+    title: str | None = None
+    content_md: str
+    content_hash: str
+    crawled_at: datetime
+    is_current: bool
+
+
+class ArticleHistoryResp(BaseModel):
+    article_id: str
+    title: str
+    versions: list[ContentVersionItem]
+
+
+class PasteHistoryResp(BaseModel):
+    paste_id: str
+    versions: list[ContentVersionItem]
+
+
 class FeedItem(BaseModel):
     id: int
     type: int
@@ -164,6 +184,38 @@ async def get_article(
     )
 
 
+@router.get("/article/{article_id}/history", response_model=ArticleHistoryResp)
+async def get_article_history(
+    article_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> ArticleHistoryResp:
+    art = await db.get(Article, article_id)
+    if art is None:
+        raise NotFoundError("文章未被本站收录")
+
+    q = (
+        select(ArticleVersion)
+        .where(ArticleVersion.article_id == article_id)
+        .order_by(desc(ArticleVersion.crawled_at), desc(ArticleVersion.id))
+    )
+    versions = (await db.execute(q)).scalars().all()
+    return ArticleHistoryResp(
+        article_id=article_id,
+        title=art.title,
+        versions=[
+            ContentVersionItem(
+                id=v.id,
+                title=v.title,
+                content_md=v.content_md,
+                content_hash=v.content_hash,
+                crawled_at=v.crawled_at,
+                is_current=v.id == art.current_version_id,
+            )
+            for v in versions
+        ],
+    )
+
+
 # ============================================================
 # Paste
 # ============================================================
@@ -197,6 +249,37 @@ async def get_paste(
         author=await _user_brief(db, p.author_uid),
         crawled_at=v.crawled_at,
         version_count=versions_count,
+    )
+
+
+@router.get("/paste/{paste_id}/history", response_model=PasteHistoryResp)
+async def get_paste_history(
+    paste_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> PasteHistoryResp:
+    paste = await db.get(Paste, paste_id)
+    if paste is None:
+        raise NotFoundError("剪贴板未被本站收录")
+
+    q = (
+        select(PasteVersion)
+        .where(PasteVersion.paste_id == paste_id)
+        .order_by(desc(PasteVersion.crawled_at), desc(PasteVersion.id))
+    )
+    versions = (await db.execute(q)).scalars().all()
+    return PasteHistoryResp(
+        paste_id=paste_id,
+        versions=[
+            ContentVersionItem(
+                id=v.id,
+                title=None,
+                content_md=v.content_md,
+                content_hash=v.content_hash,
+                crawled_at=v.crawled_at,
+                is_current=v.id == paste.current_version_id,
+            )
+            for v in versions
+        ],
     )
 
 
