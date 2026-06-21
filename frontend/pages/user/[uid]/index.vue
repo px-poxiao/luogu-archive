@@ -156,6 +156,14 @@ const introHtml = computed(() =>
 )
 function feedHtml(c: string) { return render(c) }
 
+const copiedIntroOriginal = ref(false)
+async function copyIntroOriginal() {
+  if (!profile.value?.introduction_md) return
+  await navigator.clipboard.writeText(profile.value.introduction_md)
+  copiedIntroOriginal.value = true
+  setTimeout(() => { copiedIntroOriginal.value = false }, 1400)
+}
+
 const userBrief = computed(() => profile.value ? {
   uid: profile.value.uid,
   name: profile.value.name,
@@ -338,7 +346,21 @@ function formatScore(s: number): string {
 
         <!-- 个人介绍 -->
         <section v-if="activeTab === 'intro'">
-          <h2>个人介绍</h2>
+          <div class="section-head">
+            <h2>个人介绍</h2>
+            <button type="button" class="section-action-btn" @click="copyIntroOriginal">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M8 8h10v12H8zM6 16H4V4h12v2"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <span>{{ copiedIntroOriginal ? '已复制' : '复制原文' }}</span>
+            </button>
+          </div>
           <article class="lg-content" v-html="introHtml" />
         </section>
 
@@ -532,6 +554,30 @@ function formatScore(s: number): string {
 .toggle {
   font-size: 14px;
   color: var(--text-muted);
+}
+.section-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  transition: border-color 0.15s, color 0.15s, transform 0.1s;
+}
+.section-action-btn:hover {
+  border-color: var(--link);
+  color: var(--link);
+  transform: translateY(-1px);
+}
+.section-action-btn svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
 }
 
 .activity-list,

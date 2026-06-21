@@ -25,9 +25,17 @@ const html = computed(() => (data.value ? render(data.value.content_md) : ''))
 const contentRef = ref<HTMLElement | null>(null)
 useCopyCode(contentRef)
 
+const copiedOriginal = ref(false)
 const crawledAtText = computed(() =>
   data.value ? format(data.value.crawled_at) : '',
 )
+
+async function copyOriginalMarkdown() {
+  if (!data.value?.content_md) return
+  await navigator.clipboard.writeText(data.value.content_md)
+  copiedOriginal.value = true
+  setTimeout(() => { copiedOriginal.value = false }, 1400)
+}
 </script>
 
 <template>
@@ -73,8 +81,32 @@ const crawledAtText = computed(() =>
             :href="`https://www.luogu.com.cn/paste/${id}`"
             target="_blank"
             rel="noopener noreferrer"
-            class="meta-item link"
-          >查看原文</a>
+            class="meta-action-btn"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M14 4h6v6M10 14L20 4M20 14v6H4V4h6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>查看原文</span>
+          </a>
+          <button type="button" class="meta-copy-btn" @click="copyOriginalMarkdown">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M8 8h10v12H8zM6 16H4V4h12v2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>{{ copiedOriginal ? '已复制' : '复制原文' }}</span>
+          </button>
           <span class="meta-item">上次更新 · {{ crawledAtText }}</span>
           <NuxtLink
             v-if="data.version_count > 1"
@@ -179,6 +211,37 @@ const crawledAtText = computed(() =>
 .meta-item { font-size: 13px; }
 .meta-item.link { color: var(--link); text-decoration: none; }
 .meta-item.link:hover { text-decoration: underline; }
+.meta-action-btn,
+.meta-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--hero-border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  transition: border-color 0.15s, color 0.15s, transform 0.1s;
+}
+.meta-action-btn {
+  text-decoration: none;
+}
+.meta-action-btn:hover,
+.meta-copy-btn:hover {
+  border-color: var(--link);
+  color: var(--link);
+  transform: translateY(-1px);
+  text-decoration: none;
+}
+.meta-action-btn svg,
+.meta-copy-btn svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
 
 .error-box {
   padding: 30px;

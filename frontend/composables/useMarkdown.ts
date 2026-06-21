@@ -10,6 +10,74 @@ import mdKatex from '@vscode/markdown-it-katex'
 
 let _md: MarkdownIt | null = null
 
+function normalizeDisplayMath(src: string): string {
+  const lines = (src || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const out: string[] = []
+  let inFence = false
+  let fenceMarker = ''
+  let inMath = false
+
+  for (const raw of lines) {
+    const fence = raw.match(/^(\s*)(`{3,}|~{3,})/)
+    if (fence) {
+      const marker = fence[2]
+      if (!inFence) {
+        inFence = true
+        fenceMarker = marker
+      } else if (marker.startsWith(fenceMarker)) {
+        inFence = false
+        fenceMarker = ''
+      }
+      out.push(raw)
+      continue
+    }
+
+    if (inFence) {
+      out.push(raw)
+      continue
+    }
+
+    if (inMath) {
+      const close = raw.indexOf('$$')
+      if (close >= 0) {
+        const before = raw.slice(0, close).trimEnd()
+        const after = raw.slice(close + 2).trim()
+        if (before) out.push(before)
+        out.push('$$')
+        if (after) out.push(after)
+        inMath = false
+      } else {
+        out.push(raw)
+      }
+      continue
+    }
+
+    const open = raw.match(/^(\s*)\$\$(.*)$/)
+    if (!open) {
+      out.push(raw)
+      continue
+    }
+
+    const indent = open[1]
+    const rest = open[2]
+    const close = rest.indexOf('$$')
+    out.push(`${indent}$$`)
+    if (close >= 0) {
+      const body = rest.slice(0, close).trim()
+      const after = rest.slice(close + 2).trim()
+      if (body) out.push(body)
+      out.push(`${indent}$$`)
+      if (after) out.push(after)
+    } else {
+      if (rest.trim()) out.push(rest.trimEnd())
+      inMath = true
+    }
+  }
+
+  if (inMath) out.push('$$')
+  return out.join('\n')
+}
+
 /**
  * 洛谷 container 语法（官方手册）：
  *
@@ -244,6 +312,6 @@ function rewriteLuoguHref(href: string): string {
 
 export function useMarkdown() {
   if (!_md) _md = build()
-  const render = (src: string) => _md!.render(src || '')
+  const render = (src: string) => _md!.render(normalizeDisplayMath(src || ''))
   return { render }
 }
