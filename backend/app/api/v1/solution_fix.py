@@ -70,11 +70,34 @@ _LIST_MARKER_RE = re.compile(r"^\s*(?:[-+*]\s+|\d+[.)]\s+)")
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 
 
-def _next_meaningful_line(lines: list[str], start: int) -> str | None:
-    for raw in lines[start:]:
-        if raw.strip():
-            return raw
-    return None
+@dataclass
+class _InlineToken:
+    kind: str
+    value: str
+
+
+@dataclass
+class _MarkdownBlock:
+    kind: str
+    lines: list[str]
+
+
+_BLOCKS_THAT_MAKE_PREVIOUS_A_LEAD = {
+    "math_block",
+    "fence",
+    "table",
+    "container",
+    "quote_reply",
+    "list",
+}
+
+
+_PROTECTED_SINGLE_LINE_BLOCKS = {
+    "container",
+    "quote_reply",
+    "luogu_bbcode",
+    "cpp_preprocessor",
+}
 
 
 def _line_kind(line: str) -> str:
@@ -101,65 +124,100 @@ def _line_kind(line: str) -> str:
         return "cpp_preprocessor"
     if re.match(r"^#{1,6}(?:\s|$|[^#])", stripped):
         return "heading"
+    if _MEDIA_ONLY_RE.match(stripped):
+        return "media"
     return "paragraph"
 
 
+def _parse_markdown_blocks(lines: list[str], state: _FixState) -> list[_MarkdownBlock]:
+    blocks: list[_MarkdownBlock] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        kind = _line_kind(line)
 
+        if kind == "blank":
+            blocks.append(_MarkdownBlock("blank", [""]))
+            i += 1
+            continue
 
-def _next_block_blocks_period(next_line: str | None) -> bool:
-    if next_line is None:
-        return False
-    return _line_kind(next_line) in {
-        "math_block",
-        "code_fence",
-        "container",
-        "quote_reply",
-        "table",
-        "list",
-    }
+        fence = _FENCE_OPEN_RE.match(line)
+        if fence:
+            marker = fence.group(2)
+            fixed_open = f"{fence.group(1)}{marker}{fence.group(3).strip()}"
+            if fixed_open != line:
+                state.add("已整理代码块语言标记后的多余空格")
+            block_lines = [fixed_open]
+            i += 1
+            closed = False
+            while i < len(lines):
+                block_lines.append(lines[i])
+                close = _FENCE_OPEN_RE.match(lines[i])
+                if close and close.group(2).startswith(marker):
+                    closed = True
+                    i += 1
+                    break
+                i += 1
+            if not closed:
+                block_lines.append(marker)
+                state.add("检测到未闭合代码块，已补齐闭合标记")
+            blocks.append(_MarkdownBlock("fence", block_lines))
+            continue
+
+        if kind == "math_block":
+            block_lines = [line]
+            i += 1
+            while i < len(lines):
+                block_lines.append(lines[i])
+                if lines[i].lstrip().startswith("$$"):
+                    i += 1
+                    break
+                i += 1
+            blocks.append(_MarkdownBlock("math_block", block_lines))
+            continue
+
+        if kind == "table":
+            block_lines = [line]
+            i += 1
+            while i < len(lines) and _line_kind(lines[i]) == "table":
+                block_lines.append(lines[i])
+                i += 1
+            blocks.append(_MarkdownBlock("table", block_lines))
+            continue
+
+        if kind in _PROTECTED_SINGLE_LINE_BLOCKS or kind == "media":
+            blocks.append(_MarkdownBlock(kind, [line]))
+            i += 1
+            continue
+
+        if kind in {"heading", "list", "blockquote"}:
+            blocks.append(_MarkdownBlock(kind, [line]))
+            i += 1
+            continue
+
+        paragraph_lines = [line]
+        i += 1
+        while i < len(lines) and _line_kind(lines[i]) == "paragraph":
+            paragraph_lines.append(lines[i])
+            i += 1
+        blocks.append(_MarkdownBlock("paragraph", paragraph_lines))
+
+    return blocks
 
 
 def _normalize_local(content: str) -> SolutionFixResp:
-    """只做保守的 Markdown 排版修正，避免误伤洛谷扩展语法。"""
+    """按 Markdown 块和行内 token 做保守修正，避免误伤洛谷扩展语法。"""
     state = _FixState(notes=[])
     text = content.replace("\r\n", "\n").replace("\r", "\n")
     if text != content:
         state.add("已统一换行为 LF")
 
-    lines = text.split("\n")
+    blocks = _parse_markdown_blocks(text.split("\n"), state)
     out: list[str] = []
-    in_fence = False
-    fence_marker = ""
     blank_run = 0
 
-    for index, raw in enumerate(lines):
-        line = raw.rstrip() if raw.strip() == "" else raw
-        if line != raw:
-            state.add("已清理空白行中的多余空格")
-
-        fence = _FENCE_OPEN_RE.match(line)
-        if fence:
-            marker = fence.group(2)
-            if not in_fence:
-                info = fence.group(3).strip()
-                fixed = f"{fence.group(1)}{marker}{info}"
-                if fixed != line:
-                    line = fixed
-                    state.add("已整理代码块语言标记后的多余空格")
-                in_fence = True
-                fence_marker = marker
-            elif marker.startswith(fence_marker):
-                in_fence = False
-                fence_marker = ""
-            blank_run = 0
-            out.append(line)
-            continue
-
-        if in_fence:
-            out.append(line)
-            continue
-
-        if line.strip() == "":
+    for index, block in enumerate(blocks):
+        if block.kind == "blank":
             blank_run += 1
             if blank_run <= 2:
                 out.append("")
@@ -168,33 +226,8 @@ def _normalize_local(content: str) -> SolutionFixResp:
             continue
 
         blank_run = 0
-
-        # 按块级类型保护洛谷扩展、公式块、表格和预处理器；普通段落再做行内修正。
-        stripped = line.lstrip()
-        kind = _line_kind(line)
-        protected = kind in {
-            "container",
-            "quote_reply",
-            "math_block",
-            "table",
-            "luogu_bbcode",
-            "cpp_preprocessor",
-        }
-
-        if not protected:
-            fixed = _HEADING_RE.sub(r"\1 \2", line)
-            if fixed != line:
-                line = fixed
-                state.add("已补齐标题标记后的空格")
-            line = _fix_unclosed_inline_latex(line, state)
-            line = _fix_text_spacing(line, state)
-            line = _fix_sentence_period(line, state, _next_meaningful_line(lines, index + 1))
-
-        out.append(line)
-
-    if in_fence:
-        out.append(fence_marker)
-        state.add("检测到未闭合代码块，已补齐闭合标记")
+        next_block = _next_content_block(blocks, index + 1)
+        out.extend(_format_block(block, next_block, state))
 
     fixed_text = "\n".join(out).strip() + "\n"
     if fixed_text != content:
@@ -206,6 +239,176 @@ def _normalize_local(content: str) -> SolutionFixResp:
         changed=state.changed,
         notes=state.notes or [],
     )
+
+
+def _next_content_block(blocks: list[_MarkdownBlock], start: int) -> _MarkdownBlock | None:
+    for block in blocks[start:]:
+        if block.kind != "blank":
+            return block
+    return None
+
+
+def _format_block(
+    block: _MarkdownBlock,
+    next_block: _MarkdownBlock | None,
+    state: _FixState,
+) -> list[str]:
+    if block.kind in {
+        "fence",
+        "math_block",
+        "table",
+        "container",
+        "quote_reply",
+        "luogu_bbcode",
+        "cpp_preprocessor",
+        "media",
+    }:
+        return block.lines
+
+    if block.kind == "heading":
+        return [_format_heading(block.lines[0], state)]
+
+    if block.kind == "list":
+        return [_format_list_item(block.lines[0], state)]
+
+    if block.kind == "blockquote":
+        return [_format_blockquote(block.lines[0], state)]
+
+    lines = [_format_inline_text(line, state) for line in block.lines]
+    if lines and not _should_skip_sentence_period(lines[-1], next_block):
+        lines[-1] = _append_sentence_period(lines[-1], state)
+    return lines
+
+
+def _format_heading(line: str, state: _FixState) -> str:
+    fixed = _HEADING_RE.sub(r"\1 \2", line)
+    if fixed != line:
+        state.add("已补齐标题标记后的空格")
+    match = re.match(r"^(\s*#{1,6}\s+)(.*)$", fixed)
+    if not match:
+        return fixed
+    return f"{match.group(1)}{_format_inline_text(match.group(2), state)}"
+
+
+def _format_list_item(line: str, state: _FixState) -> str:
+    match = re.match(r"^(\s*(?:[-+*]|\d+[.)])\s+)(.*)$", line)
+    if not match:
+        return _format_inline_text(line, state)
+    return f"{match.group(1)}{_format_inline_text(match.group(2), state)}"
+
+
+def _format_blockquote(line: str, state: _FixState) -> str:
+    match = re.match(r"^(\s*>\s?)(.*)$", line)
+    if not match:
+        return _format_inline_text(line, state)
+    return f"{match.group(1)}{_format_inline_text(match.group(2), state)}"
+
+
+def _should_skip_sentence_period(line: str, next_block: _MarkdownBlock | None) -> bool:
+    stripped = line.rstrip()
+    if not stripped:
+        return True
+    if _MEDIA_ONLY_RE.match(stripped):
+        return True
+    if _SENTENCE_END_RE.search(stripped):
+        return True
+    if next_block is not None and next_block.kind in _BLOCKS_THAT_MAKE_PREVIOUS_A_LEAD:
+        return True
+    return False
+
+
+def _append_sentence_period(line: str, state: _FixState) -> str:
+    stripped = line.rstrip()
+    if re.search(r"[\u3400-\u9fffA-Za-z0-9）\])`$]$", stripped):
+        state.add("已为普通段落补齐中文句号")
+        return f"{stripped}。"
+    return line
+
+
+def _tokenize_inline(line: str) -> list[_InlineToken]:
+    tokens: list[_InlineToken] = []
+    pos = 0
+    for match in _INLINE_PROTECTED_RE.finditer(line):
+        if match.start() > pos:
+            tokens.append(_InlineToken("text", line[pos:match.start()]))
+        value = match.group(0)
+        if value.startswith("$"):
+            kind = "math"
+        elif value.startswith("`"):
+            kind = "code"
+        elif value.startswith("!["):
+            kind = "image"
+        elif value.startswith("["):
+            kind = "link"
+        elif value.startswith("http"):
+            kind = "url"
+        else:
+            kind = "mention"
+        tokens.append(_InlineToken(kind, value))
+        pos = match.end()
+    if pos < len(line):
+        tokens.append(_InlineToken("text", line[pos:]))
+    return tokens
+
+
+def _format_inline_text(line: str, state: _FixState) -> str:
+    fixed_line = _fix_unclosed_inline_latex(line, state)
+    tokens = _tokenize_inline(fixed_line)
+    if not tokens:
+        return fixed_line
+
+    formatted: list[_InlineToken] = []
+    for token in tokens:
+        if token.kind == "text":
+            formatted.append(_InlineToken(token.kind, _fix_plain_text_spacing(token.value)))
+        else:
+            formatted.append(token)
+
+    _join_inline_tokens(formatted)
+    result = "".join(token.value for token in formatted)
+    result = re.sub(r"\s+([，。！？；：、])", r"\1", result)
+    result = re.sub(r"([，。！？；：、])\s+", r"\1", result)
+    if result != line:
+        state.add("已按中文与英文、数字或公式之间的空格规范调整")
+    return result
+
+
+def _join_inline_tokens(tokens: list[_InlineToken]) -> None:
+    for i in range(len(tokens) - 1):
+        left = tokens[i]
+        right = tokens[i + 1]
+        if not left.value or not right.value:
+            continue
+        left_tail = left.value[-1]
+        right_head = right.value[0]
+        if left_tail.isspace() or right_head.isspace():
+            continue
+        if left_tail in _CJK_PUNCT or right_head in _CJK_PUNCT:
+            continue
+        if left.kind == "text" and right.kind == "text":
+            if _need_cjk_space(left_tail, right_head):
+                left.value += " "
+            continue
+        if left.kind == "text" and _CJK_RE.search(left_tail):
+            left.value += " "
+            continue
+        if right.kind == "text" and _CJK_RE.search(right_head):
+            left.value += " "
+
+
+def _need_cjk_space(left: str, right: str) -> bool:
+    return (
+        (_CJK_RE.search(left) is not None and _LATIN_DIGIT_RE.search(right) is not None)
+        or (_LATIN_DIGIT_RE.search(left) is not None and _CJK_RE.search(right) is not None)
+    )
+
+
+def _fix_plain_text_spacing(text: str) -> str:
+    text = re.sub(r"([\u3400-\u9fff])([A-Za-z0-9])", r"\1 \2", text)
+    text = re.sub(r"([A-Za-z0-9])([\u3400-\u9fff])", r"\1 \2", text)
+    text = re.sub(r"\s+([，。！？；：、])", r"\1", text)
+    text = re.sub(r"([，。！？；：、])\s+", r"\1", text)
+    return text
 
 
 def _is_text_token(token: str) -> bool:
@@ -225,21 +428,6 @@ def _split_inline_protected(line: str) -> list[str]:
     return parts
 
 
-def _need_cjk_space(left: str, right: str) -> bool:
-    return (
-        (_CJK_RE.search(left) is not None and _LATIN_DIGIT_RE.search(right) is not None)
-        or (_LATIN_DIGIT_RE.search(left) is not None and _CJK_RE.search(right) is not None)
-    )
-
-
-def _fix_plain_text_spacing(text: str) -> str:
-    text = re.sub(r"([\u3400-\u9fff])([A-Za-z0-9])", r"\1 \2", text)
-    text = re.sub(r"([A-Za-z0-9])([\u3400-\u9fff])", r"\1 \2", text)
-    text = re.sub(r"\s+([，。！？；：、])", r"\1", text)
-    text = re.sub(r"([，。！？；：、])\s+", r"\1", text)
-    return text
-
-
 def _fix_unclosed_inline_latex(line: str, state: _FixState) -> str:
     parts = _split_inline_protected(line)
     changed = False
@@ -256,65 +444,6 @@ def _fix_unclosed_inline_latex(line: str, state: _FixState) -> str:
     if changed:
         state.add("已补齐未闭合的紧凑行内 LaTeX 公式")
     return "".join(fixed_parts)
-
-
-def _fix_text_spacing(line: str, state: _FixState) -> str:
-    parts = _split_inline_protected(line)
-    if not parts:
-        return line
-
-    normalized: list[str] = []
-    for part in parts:
-        normalized.append(_fix_plain_text_spacing(part) if _is_text_token(part) else part)
-
-    result = "".join(normalized)
-
-    # 在中文与行内公式/代码/链接边界之间补空格，同时不在中文标点旁保留空格。
-    for i in range(len(normalized) - 1):
-        left = normalized[i]
-        right = normalized[i + 1]
-        if not left or not right:
-            continue
-        left_tail = left[-1]
-        right_head = right[0]
-        if left_tail.isspace() or right_head.isspace():
-            continue
-        if left_tail in _CJK_PUNCT or right_head in _CJK_PUNCT:
-            continue
-        if _need_cjk_space(left_tail, right_head):
-            normalized[i] = f"{left} "
-        elif _CJK_RE.search(left_tail) and not _is_text_token(right):
-            normalized[i] = f"{left} "
-        elif not _is_text_token(left) and _CJK_RE.search(right_head):
-            normalized[i] = f"{left} "
-
-    result = "".join(normalized)
-    result = re.sub(r"\s+([，。！？；：、])", r"\1", result)
-    result = re.sub(r"([，。！？；：、])\s+", r"\1", result)
-    if result != line:
-        state.add("已按中文与英文、数字或公式之间的空格规范调整")
-    return result
-
-
-def _fix_sentence_period(line: str, state: _FixState, next_line: str | None = None) -> str:
-    stripped = line.rstrip()
-    if not stripped:
-        return line
-    if _line_kind(stripped) != "paragraph":
-        return line
-    if _MEDIA_ONLY_RE.match(stripped):
-        return line
-    if _SENTENCE_END_RE.search(stripped):
-        return line
-    # 与 lg-solution-formatter 的思路一致：先尊重 Markdown 块级结构。
-    # 段落后面紧跟公式、代码、表格等块时，当前段通常是引导语，不补句号。
-    if _next_block_blocks_period(next_line):
-        return line
-    if re.search(r"[\u3400-\u9fffA-Za-z0-9）\])`$]$", stripped):
-        state.add("已为普通段落补齐中文句号")
-        return f"{stripped}。"
-    return line
-
 
 @router.post("/local", response_model=SolutionFixResp)
 async def fix_local(req: SolutionFixReq) -> SolutionFixResp:
