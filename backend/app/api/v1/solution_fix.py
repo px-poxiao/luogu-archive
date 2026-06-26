@@ -56,6 +56,9 @@ _INLINE_PROTECTED_RE = re.compile(
     r"(`+[^`]*`+|\$[^$\n]+\$|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|"
     r"https?://[^\s]+|@[^\s]+)",
 )
+_MEDIA_ONLY_RE = re.compile(
+    r"^\s*(?:!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|https?://[^\s]+)\s*$"
+)
 _UNCLOSED_COMPACT_MATH_RE = re.compile(
     r"(?<!\\)\$([A-Za-z0-9_{}\\^+\-*/=<>|.,]+)(?=([\s\u3400-\u9fff，。！？；：、）】》」』]|$))"
 )
@@ -65,10 +68,6 @@ _CJK_PUNCT = "，。！？；：、）】》」』"
 _SENTENCE_END_RE = re.compile(r"[。！？；：.!?;:…）」』）】》]$")
 _LIST_MARKER_RE = re.compile(r"^\s*(?:[-+*]\s+|\d+[.)]\s+)")
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
-_LEADING_TEXT_RE = re.compile(
-    r"(?:如下|如下所示|如下图|代码如下|证明如下|过程如下|"
-    r"为|是|有|即|得到|可得|推出|转移为|转移方程为|方程为|式子为|表达式为|公式为)$"
-)
 
 
 def _next_meaningful_line(lines: list[str], start: int) -> str | None:
@@ -105,10 +104,6 @@ def _line_kind(line: str) -> str:
     return "paragraph"
 
 
-def _looks_like_block_lead(line: str) -> bool:
-    stripped = line.strip()
-    stripped = re.sub(r"[：:]$", "", stripped)
-    return _LEADING_TEXT_RE.search(stripped) is not None
 
 
 def _next_block_blocks_period(next_line: str | None) -> bool:
@@ -307,9 +302,13 @@ def _fix_sentence_period(line: str, state: _FixState, next_line: str | None = No
         return line
     if _line_kind(stripped) != "paragraph":
         return line
+    if _MEDIA_ONLY_RE.match(stripped):
+        return line
     if _SENTENCE_END_RE.search(stripped):
         return line
-    if _next_block_blocks_period(next_line) and _looks_like_block_lead(stripped):
+    # 与 lg-solution-formatter 的思路一致：先尊重 Markdown 块级结构。
+    # 段落后面紧跟公式、代码、表格等块时，当前段通常是引导语，不补句号。
+    if _next_block_blocks_period(next_line):
         return line
     if re.search(r"[\u3400-\u9fffA-Za-z0-9）\])`$]$", stripped):
         state.add("已为普通段落补齐中文句号")
