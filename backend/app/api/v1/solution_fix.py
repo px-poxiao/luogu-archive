@@ -63,6 +63,65 @@ _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _LATIN_DIGIT_RE = re.compile(r"[A-Za-z0-9]")
 _CJK_PUNCT = "，。！？；：、）】》」』"
 _SENTENCE_END_RE = re.compile(r"[。！？；：.!?;:…）」』）】》]$")
+_LIST_MARKER_RE = re.compile(r"^\s*(?:[-+*]\s+|\d+[.)]\s+)")
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
+_LEADING_TEXT_RE = re.compile(
+    r"(?:如下|如下所示|如下图|代码如下|证明如下|过程如下|"
+    r"为|是|有|即|得到|可得|推出|转移为|转移方程为|方程为|式子为|表达式为|公式为)$"
+)
+
+
+def _next_meaningful_line(lines: list[str], start: int) -> str | None:
+    for raw in lines[start:]:
+        if raw.strip():
+            return raw
+    return None
+
+
+def _line_kind(line: str) -> str:
+    stripped = line.lstrip()
+    if not stripped:
+        return "blank"
+    if stripped.startswith(("```", "~~~")):
+        return "code_fence"
+    if stripped.startswith("$$"):
+        return "math_block"
+    if stripped.startswith(":::"):
+        return "container"
+    if stripped.startswith("|| "):
+        return "quote_reply"
+    if stripped.startswith("|") or _TABLE_SEPARATOR_RE.match(stripped):
+        return "table"
+    if _LIST_MARKER_RE.match(stripped):
+        return "list"
+    if stripped.startswith(">"):
+        return "blockquote"
+    if stripped.startswith(("[user]", "[color=", "[template]")):
+        return "luogu_bbcode"
+    if _CPP_PREPROCESSOR_RE.match(stripped) is not None:
+        return "cpp_preprocessor"
+    if re.match(r"^#{1,6}(?:\s|$|[^#])", stripped):
+        return "heading"
+    return "paragraph"
+
+
+def _looks_like_block_lead(line: str) -> bool:
+    stripped = line.strip()
+    stripped = re.sub(r"[：:]$", "", stripped)
+    return _LEADING_TEXT_RE.search(stripped) is not None
+
+
+def _next_block_blocks_period(next_line: str | None) -> bool:
+    if next_line is None:
+        return False
+    return _line_kind(next_line) in {
+        "math_block",
+        "code_fence",
+        "container",
+        "quote_reply",
+        "table",
+        "list",
+    }
 
 
 def _normalize_local(content: str) -> SolutionFixResp:
@@ -78,7 +137,7 @@ def _normalize_local(content: str) -> SolutionFixResp:
     fence_marker = ""
     blank_run = 0
 
-    for raw in lines:
+    for index, raw in enumerate(lines):
         line = raw.rstrip() if raw.strip() == "" else raw
         if line != raw:
             state.add("已清理空白行中的多余空格")
@@ -115,18 +174,17 @@ def _normalize_local(content: str) -> SolutionFixResp:
 
         blank_run = 0
 
-        # 洛谷容器、引用回复、LaTeX 块、BBCode、用户/题目链接等保持原样。
+        # 按块级类型保护洛谷扩展、公式块、表格和预处理器；普通段落再做行内修正。
         stripped = line.lstrip()
-        protected = (
-            stripped.startswith(":::")
-            or stripped.startswith("|| ")
-            or stripped.startswith("$$")
-            or stripped.startswith("|")
-            or stripped.startswith("[user]")
-            or stripped.startswith("[color=")
-            or stripped.startswith("[template]")
-            or _CPP_PREPROCESSOR_RE.match(stripped) is not None
-        )
+        kind = _line_kind(line)
+        protected = kind in {
+            "container",
+            "quote_reply",
+            "math_block",
+            "table",
+            "luogu_bbcode",
+            "cpp_preprocessor",
+        }
 
         if not protected:
             fixed = _HEADING_RE.sub(r"\1 \2", line)
@@ -135,7 +193,7 @@ def _normalize_local(content: str) -> SolutionFixResp:
                 state.add("已补齐标题标记后的空格")
             line = _fix_unclosed_inline_latex(line, state)
             line = _fix_text_spacing(line, state)
-            line = _fix_sentence_period(line, state)
+            line = _fix_sentence_period(line, state, _next_meaningful_line(lines, index + 1))
 
         out.append(line)
 
@@ -243,18 +301,15 @@ def _fix_text_spacing(line: str, state: _FixState) -> str:
     return result
 
 
-def _fix_sentence_period(line: str, state: _FixState) -> str:
+def _fix_sentence_period(line: str, state: _FixState, next_line: str | None = None) -> str:
     stripped = line.rstrip()
     if not stripped:
         return line
-    leading = stripped.lstrip()
-    if (
-        leading.startswith("#")
-        or leading.startswith("```")
-        or leading.startswith("~~~")
-    ):
+    if _line_kind(stripped) != "paragraph":
         return line
     if _SENTENCE_END_RE.search(stripped):
+        return line
+    if _next_block_blocks_period(next_line) and _looks_like_block_lead(stripped):
         return line
     if re.search(r"[\u3400-\u9fffA-Za-z0-9）\])`$]$", stripped):
         state.add("已为普通段落补齐中文句号")
@@ -292,7 +347,7 @@ def _system_prompt() -> str:
 5. 普通中文正文句末应有中文句号、问号或叹号；不要给标题、代码、表格分隔行、容器标记强行加句号。
 6. 中文和英文、数字或行内公式之间应使用半角空格，例如“等于 $k$ 的”；中文标点与英文、数字或公式之间不应有空格。
 7. 如果行内 LaTeX 明显未闭合，例如“$k 的取值”，应修为“$k$ 的取值”；不要误改块级 $$...$$。
-8. 如果发现内容质量问题，只能做轻微润色，不要重写为另一篇题解。
+8. 如果发现内容质量问题，你不应进行更改，你只需要关注格式信息。
 9. 如果无需修改，原样输出。
 """
 

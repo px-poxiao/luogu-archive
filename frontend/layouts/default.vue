@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 const colorMode = useColorMode()
 const auth = useAuthStore()
 const api = useApi()
@@ -47,6 +47,11 @@ const navItems = [
     to: '/solution/fix',
     label: '题解修',
     icon: 'M4 5h16M4 9h10M7 13h10l-4 6H7l4-6z',
+  },
+  {
+    to: '/site/overview',
+    label: '站点概览',
+    icon: 'M4 19V5M9 19v-8M14 19v-5M19 19V9M3 19h18',
   },
 ]
 </script>
@@ -408,3 +413,4 @@ const navItems = [
 
 /* 左侧栏在所有设备（含手机端）保持一致，固定贴左。 */
 </style>
+
