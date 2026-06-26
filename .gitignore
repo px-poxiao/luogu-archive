@@ -46,3 +46,5 @@ tmp_*
 
 # AI 开发辅助文档
 request.md
+# 本地题解修正 smoke 样例
+backend/tests/.local/
