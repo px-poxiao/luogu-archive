@@ -52,15 +52,23 @@ const KIND_LABEL: Record<string, string> = {
 
 // 陶片权限位图（沿用陶片页的常量，单点维护建议后续抽 composable）
 const PERMISSION_MAP: Array<[number, string]> = [
+  [1, '登录授权'],
   [2, '进入主站'],
   [4, '进入后台'],
   [8, '题目管理'],
+  [16, '团队管理'],
+  [32, '比赛管理'],
+  [64, '讨论管理'],
+  [256, '用户管理'],
+  [512, '专栏管理'],
   [32768, '自由发言'],
   [65536, '发送私信'],
   [131072, '使用专栏'],
   [524288, '使用图床'],
+  [2097152, '题目志愿者'],
   [4194304, '专栏志愿者'],
 ]
+
 function describePermission(bits: number): string[] {
   if (!bits) return []
   const out: string[] = []
