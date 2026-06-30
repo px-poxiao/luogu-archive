@@ -1,6 +1,8 @@
 ﻿"""SVG information cards generated from archived Luogu feed data."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import html
 import random
 import re
@@ -8,6 +10,7 @@ from collections import Counter
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import httpx
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +23,9 @@ from app.models.luogu_user import LuoguUser
 router = APIRouter(prefix="/image/feed", tags=["image-card"])
 
 CARD_CACHE_SECONDS = 600
+AVATAR_CACHE_SECONDS = 86400
+MAX_AVATAR_BYTES = 512 * 1024
+ALLOWED_AVATAR_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 WEEKDAY_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
@@ -54,15 +60,24 @@ def _avatar_letter(user: LuoguUser | None, uid: int) -> str:
 
 
 
-def _avatar_svg(user: LuoguUser | None, uid: int, *, cx: int, cy: int, r: int, clip_id: str, font_size: int) -> str:
-    """Render a circular avatar. Keep the letter fallback underneath external images."""
+def _avatar_svg(
+    user: LuoguUser | None,
+    uid: int,
+    *,
+    cx: int,
+    cy: int,
+    r: int,
+    clip_id: str,
+    font_size: int,
+    avatar_href: str | None,
+) -> str:
+    """Render a circular avatar. The optional image must be an embedded data URI."""
     letter = _xml(_avatar_letter(user, uid))
     image = ""
-    avatar = (user.avatar if user else None) or ""
-    if avatar.startswith(("http://", "https://")):
+    if avatar_href:
         size = r * 2
         image = (
-            f'<image href="{_xml(avatar)}" x="{cx - r}" y="{cy - r}" width="{size}" height="{size}" '
+            f'<image href="{_xml(avatar_href)}" x="{cx - r}" y="{cy - r}" width="{size}" height="{size}" '
             f'clip-path="url(#{clip_id})" preserveAspectRatio="xMidYMid slice"/>'
         )
     return (
@@ -148,10 +163,40 @@ async def _cache_get(key: str) -> str | None:
 
 
 async def _cache_set(key: str, value: str) -> None:
+    await _cache_set_ttl(key, value, CARD_CACHE_SECONDS)
+
+
+async def _cache_set_ttl(key: str, value: str, ttl: int) -> None:
     try:
-        await get_redis().setex(key, CARD_CACHE_SECONDS, value)
+        await get_redis().setex(key, ttl, value)
     except Exception:
         pass
+
+
+async def _avatar_data_uri(user: LuoguUser | None) -> str | None:
+    avatar = (user.avatar if user else None) or ""
+    if not avatar.startswith(("http://", "https://")):
+        return None
+
+    cache_key = f"image:avatar_data:{hashlib.sha256(avatar.encode('utf-8')).hexdigest()}"
+    cached = await _cache_get(cache_key)
+    if cached:
+        return cached
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
+            resp = await client.get(avatar, headers={"User-Agent": "luogu-archive/1.0"})
+        if resp.status_code != 200 or len(resp.content) > MAX_AVATAR_BYTES:
+            return None
+        content_type = resp.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if content_type not in ALLOWED_AVATAR_TYPES:
+            return None
+        data = base64.b64encode(resp.content).decode("ascii")
+        uri = f"data:{content_type};base64,{data}"
+        await _cache_set_ttl(cache_key, uri, AVATAR_CACHE_SECONDS)
+        return uri
+    except Exception:
+        return None
 
 
 def _svg_response(svg: str) -> Response:
@@ -229,9 +274,9 @@ def _activity_stats(rows: list[Feed], now: datetime) -> dict[str, object]:
     }
 
 
-def _activity_svg(uid: int, user: LuoguUser | None, stats: dict[str, object], now: datetime) -> str:
+def _activity_svg(uid: int, user: LuoguUser | None, stats: dict[str, object], now: datetime, avatar_href: str | None) -> str:
     name = _xml(_display_name(user, uid))
-    avatar = _avatar_svg(user, uid, cx=70, cy=70, r=70, clip_id="avatarClipLarge", font_size=48)
+    avatar = _avatar_svg(user, uid, cx=70, cy=70, r=70, clip_id="avatarClipLarge", font_size=48, avatar_href=avatar_href)
     generated_at = _xml(_format_generated_at(now))
     daily = list(stats["daily"])
     dates = list(stats["dates"])
@@ -294,9 +339,9 @@ def _activity_svg(uid: int, user: LuoguUser | None, stats: dict[str, object], no
 </svg>'''
 
 
-def _random_svg(uid: int, user: LuoguUser | None, feed: Feed | None, now: datetime) -> str:
+def _random_svg(uid: int, user: LuoguUser | None, feed: Feed | None, now: datetime, avatar_href: str | None) -> str:
     name = _xml(_display_name(user, uid))
-    avatar = _avatar_svg(user, uid, cx=31, cy=31, r=31, clip_id="avatarClipSmall", font_size=23)
+    avatar = _avatar_svg(user, uid, cx=31, cy=31, r=31, clip_id="avatarClipSmall", font_size=23, avatar_href=avatar_href)
     generated_time = _xml(_format_time_only(now))
     generated_at = _xml(_format_generated_at(now))
 
@@ -343,7 +388,7 @@ def _random_svg(uid: int, user: LuoguUser | None, feed: Feed | None, now: dateti
 
 @router.get("/activity/{uid}.svg")
 async def feed_activity_card(uid: int, db: AsyncSession = Depends(get_db)) -> Response:
-    cache_key = f"image:feed_activity:{uid}:v2"
+    cache_key = f"image:feed_activity:{uid}:v3"
     cached = await _cache_get(cache_key)
     if cached:
         return _svg_response(cached)
@@ -352,14 +397,15 @@ async def feed_activity_card(uid: int, db: AsyncSession = Depends(get_db)) -> Re
     since = datetime.combine((now.date() - timedelta(days=89)), time.min, tzinfo=SHANGHAI).astimezone(timezone.utc)
     user = await _load_user(db, uid)
     rows = await _load_feeds_since(db, uid, since)
-    svg = _activity_svg(uid, user, _activity_stats(rows, now), now)
+    avatar_href = await _avatar_data_uri(user)
+    svg = _activity_svg(uid, user, _activity_stats(rows, now), now, avatar_href)
     await _cache_set(cache_key, svg)
     return _svg_response(svg)
 
 
 @router.get("/random/{uid}.svg")
 async def feed_random_card(uid: int, db: AsyncSession = Depends(get_db)) -> Response:
-    cache_key = f"image:feed_random:{uid}:v2"
+    cache_key = f"image:feed_random:{uid}:v3"
     cached = await _cache_get(cache_key)
     if cached:
         return _svg_response(cached)
@@ -374,6 +420,7 @@ async def feed_random_card(uid: int, db: AsyncSession = Depends(get_db)) -> Resp
     )
     rows = list((await db.execute(q)).scalars().all())
     feed = random.choice(rows) if rows else None
-    svg = _random_svg(uid, user, feed, now)
+    avatar_href = await _avatar_data_uri(user)
+    svg = _random_svg(uid, user, feed, now, avatar_href)
     await _cache_set(cache_key, svg)
     return _svg_response(svg)
