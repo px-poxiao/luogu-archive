@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 const route = useRoute()
 const api = useApi()
 const { smart, format } = useTime()
@@ -237,6 +237,19 @@ function formatScore(s: number): string {
           </div>
 
           <FollowButton :uid="profile.uid" />
+          <NuxtLink :to="`/user/${profile.uid}/card`" class="card-link-btn">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M4 19V5M9 19v-8M14 19v-5M19 19V9M3 19h18"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>图卡</span>
+          </NuxtLink>
 
           <dl class="stats">
             <div><dt>关注</dt><dd>{{ profile.following_count }}</dd></div>
@@ -494,6 +507,30 @@ function formatScore(s: number): string {
 .tag.banned { background: #ffecec; color: var(--lg-red); }
 .tag.admin { background: #e9f5ff; color: var(--lg-blue); }
 
+.card-link-btn {
+  width: fit-content;
+  margin: 10px auto 0;
+  padding: 6px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  font-size: 14px;
+}
+.card-link-btn:hover {
+  border-color: var(--link);
+  color: var(--link);
+  text-decoration: none;
+}
+.card-link-btn svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
 .stats {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
