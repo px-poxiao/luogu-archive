@@ -53,6 +53,27 @@ def _avatar_letter(user: LuoguUser | None, uid: int) -> str:
     return str(uid)[0]
 
 
+
+def _avatar_svg(user: LuoguUser | None, uid: int, *, cx: int, cy: int, r: int, clip_id: str, font_size: int) -> str:
+    """Render a circular avatar. Keep the letter fallback underneath external images."""
+    letter = _xml(_avatar_letter(user, uid))
+    image = ""
+    avatar = (user.avatar if user else None) or ""
+    if avatar.startswith(("http://", "https://")):
+        size = r * 2
+        image = (
+            f'<image href="{_xml(avatar)}" x="{cx - r}" y="{cy - r}" width="{size}" height="{size}" '
+            f'clip-path="url(#{clip_id})" preserveAspectRatio="xMidYMid slice"/>'
+        )
+    return (
+        f'<clipPath id="{clip_id}"><circle cx="{cx}" cy="{cy}" r="{r}"/></clipPath>'
+        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="url(#avatar)"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="{max(0, r - 6)}" fill="#fff" opacity="0.18"/>'
+        f'<text x="{cx}" y="{cy + int(font_size * 0.35)}" text-anchor="middle" fill="#fff" font-size="{font_size}" font-weight="900">{letter}</text>'
+        f'{image}'
+    )
+
+
 def _display_name(user: LuoguUser | None, uid: int) -> str:
     name = (user.name if user else "").strip()
     return name or f"UID {uid}"
@@ -81,8 +102,14 @@ def _wrap_text(text: str, *, line_chars: int, max_lines: int) -> list[str]:
 
     def width_of(ch: str) -> float:
         if ch.isspace():
+            return 0.35
+        if ord(ch) < 128:
+            if ch.isalnum() or ch in "@_:/\\":
+                return 0.72
             return 0.5
-        return 0.55 if ord(ch) < 128 else 1.0
+        if ch in "，。！？、；：（）《》“”‘’":
+            return 0.72
+        return 1.08
 
     for ch in text:
         w = width_of(ch)
@@ -204,7 +231,7 @@ def _activity_stats(rows: list[Feed], now: datetime) -> dict[str, object]:
 
 def _activity_svg(uid: int, user: LuoguUser | None, stats: dict[str, object], now: datetime) -> str:
     name = _xml(_display_name(user, uid))
-    letter = _xml(_avatar_letter(user, uid))
+    avatar = _avatar_svg(user, uid, cx=70, cy=70, r=70, clip_id="avatarClipLarge", font_size=48)
     generated_at = _xml(_format_generated_at(now))
     daily = list(stats["daily"])
     dates = list(stats["dates"])
@@ -246,7 +273,7 @@ def _activity_svg(uid: int, user: LuoguUser | None, stats: dict[str, object], no
   <rect x="66" y="66" width="360" height="388" rx="28" fill="#fff" fill-opacity="0.52" stroke="#e1edf7"/>
   <rect x="454" y="66" width="680" height="388" rx="28" fill="#fff" fill-opacity="0.44" stroke="#e1edf7"/>
   <g transform="translate(102 104)">
-    <circle cx="70" cy="70" r="70" fill="url(#avatar)"/><circle cx="70" cy="70" r="64" fill="#fff" opacity="0.18"/><text x="70" y="88" text-anchor="middle" fill="#fff" font-size="48" font-weight="900">{letter}</text>
+    {avatar}
     <text x="0" y="184" class="name">{name}</text><text x="0" y="218" class="muted">UID {uid}</text>
     <g transform="translate(0 276)"><text x="0" y="0" class="label">近 7 天</text><text x="0" y="42" class="value">{stats['total_7']}</text></g>
     <g transform="translate(124 276)"><text x="0" y="0" class="label">连续活跃</text><text x="0" y="42" class="value">{_xml(stats['streak'])} 天</text></g>
@@ -261,14 +288,15 @@ def _activity_svg(uid: int, user: LuoguUser | None, stats: dict[str, object], no
     <path d="{path}" fill="none" stroke="url(#line)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
     {circles}
     {labels}
-    <text x="1060" y="420" text-anchor="end" class="muted">生成于 {generated_at}</text>
+    <text x="1060" y="400" text-anchor="end" class="muted">生成于 {generated_at}</text>
+    <text x="1060" y="428" text-anchor="end" class="muted">由洛谷档案馆生成 · luogu.ac.cn</text>
   </g>
 </svg>'''
 
 
 def _random_svg(uid: int, user: LuoguUser | None, feed: Feed | None, now: datetime) -> str:
     name = _xml(_display_name(user, uid))
-    letter = _xml(_avatar_letter(user, uid))
+    avatar = _avatar_svg(user, uid, cx=31, cy=31, r=31, clip_id="avatarClipSmall", font_size=23)
     generated_time = _xml(_format_time_only(now))
     generated_at = _xml(_format_generated_at(now))
 
@@ -277,12 +305,12 @@ def _random_svg(uid: int, user: LuoguUser | None, feed: Feed | None, now: dateti
         feed_date = now.strftime("%Y-%m-%d")
         feed_id = "暂无 ID"
     else:
-        quote_lines = _wrap_text(_strip_markdown(feed.content_md), line_chars=28, max_lines=3)
+        quote_lines = _wrap_text(_strip_markdown(feed.content_md), line_chars=20, max_lines=3)
         feed_date = _to_shanghai(feed.time).strftime("%Y-%m-%d")
         feed_id = f"#{feed.id}"
 
     quote_svg = "\n".join(
-        f'<text x="72" y="{72 + idx * 52}" class="quote">{_xml(line)}</text>'
+        f'<text x="72" y="{72 + idx * 46}" class="quote">{_xml(line)}</text>'
         for idx, line in enumerate(quote_lines)
     )
 
@@ -291,7 +319,7 @@ def _random_svg(uid: int, user: LuoguUser | None, feed: Feed | None, now: dateti
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f8fbff"/><stop offset="0.56" stop-color="#eef7ff"/><stop offset="1" stop-color="#ecfdf5"/></linearGradient>
     <linearGradient id="avatar" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#10b981"/></linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#0f172a" flood-opacity="0.14"/></filter>
-    <style>text{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif}}.quote{{fill:#102033;font-size:36px;font-weight:780}}.mark{{fill:#bfdbfe;font-size:120px;font-weight:900}}.name{{fill:#0f172a;font-size:24px;font-weight:850}}.meta{{fill:#64748b;font-size:16px;font-weight:560}}.small{{fill:#64748b;font-size:15px;font-weight:520}}</style>
+    <style>text{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif}}.quote{{fill:#102033;font-size:31px;font-weight:780}}.mark{{fill:#bfdbfe;font-size:120px;font-weight:900}}.name{{fill:#0f172a;font-size:24px;font-weight:850}}.meta{{fill:#64748b;font-size:16px;font-weight:560}}.small{{fill:#64748b;font-size:15px;font-weight:520}}</style>
   </defs>
   <rect width="960" height="420" rx="30" fill="url(#bg)"/>
   <circle cx="825" cy="80" r="132" fill="#bfdbfe" opacity="0.34"/><circle cx="118" cy="372" r="128" fill="#bbf7d0" opacity="0.32"/>
@@ -302,7 +330,7 @@ def _random_svg(uid: int, user: LuoguUser | None, feed: Feed | None, now: dateti
   </g>
   <line x1="82" y1="246" x2="878" y2="246" stroke="#dbeafe" stroke-width="2"/>
   <g transform="translate(82 286)">
-    <circle cx="31" cy="31" r="31" fill="url(#avatar)"/><text x="31" y="42" text-anchor="middle" fill="#fff" font-size="23" font-weight="900">{letter}</text>
+    {avatar}
     <text x="78" y="27" class="name">{name}</text><text x="78" y="54" class="meta">UID {uid}</text>
   </g>
   <g transform="translate(878 292)">
@@ -315,7 +343,7 @@ def _random_svg(uid: int, user: LuoguUser | None, feed: Feed | None, now: dateti
 
 @router.get("/activity/{uid}.svg")
 async def feed_activity_card(uid: int, db: AsyncSession = Depends(get_db)) -> Response:
-    cache_key = f"image:feed_activity:{uid}:v1"
+    cache_key = f"image:feed_activity:{uid}:v2"
     cached = await _cache_get(cache_key)
     if cached:
         return _svg_response(cached)
@@ -331,7 +359,7 @@ async def feed_activity_card(uid: int, db: AsyncSession = Depends(get_db)) -> Re
 
 @router.get("/random/{uid}.svg")
 async def feed_random_card(uid: int, db: AsyncSession = Depends(get_db)) -> Response:
-    cache_key = f"image:feed_random:{uid}:v1"
+    cache_key = f"image:feed_random:{uid}:v2"
     cached = await _cache_get(cache_key)
     if cached:
         return _svg_response(cached)
