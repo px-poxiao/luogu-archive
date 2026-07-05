@@ -111,17 +111,22 @@ def _extract_problem_items(kind: str, data: dict) -> list[dict]:
 async def _crawl_list_inner(page: int, *, trigger: str) -> None:
     redis = get_redis()
     url_path = "/problem/list"
+    list_params = {"page": page, "orderBy": "pid", "order": "desc"}
     # 列表页强制走 .com.cn（_resolve_url 已处理）；fetch_anon 自动选 cn 节点
     task_id = await record_task_start(
         "problem_list",
-        f"{url_path}?page={page}",
+        f"{url_path}?page={page}&orderBy=pid&order=desc",
         trigger=trigger_from(trigger),
         node_id=None,  # 节点 ID 在 fetch_anon 内部确定，这里 placeholder
     )
     start = _t.monotonic()
     try:
+        # 洛谷题库默认顺序从 P1000 系老题开始，扫前 20 页会漏掉新题。
         result = await fetch_anon(
-            url_path, redis=redis, params={"page": page}, parse="html"
+            url_path,
+            redis=redis,
+            params=list_params,
+            parse="html",
         )
         kind, page_data = extract_page_data(result.body_text)
         items = _extract_problem_items(kind, page_data)
@@ -398,3 +403,4 @@ def _extract_problem_tags(body_text: str) -> list[int] | None:
     if not isinstance(raw, list):
         return None
     return [int(t) for t in raw if isinstance(t, (int, str)) and str(t).isdigit()]
+
