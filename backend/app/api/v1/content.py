@@ -122,6 +122,26 @@ class ProblemDifficultyBucket(BaseModel):
     total: int
 
 
+_PROBLEM_DIFFICULTY_ALIASES = {
+    "普及/提高-": "普及",
+    "普及+/提高": "普及+/提高-",
+    "NOI/NOI+/CTSC": "NOI/NOI+/CTS",
+}
+_PROBLEM_DIFFICULTY_REVERSE_ALIASES: dict[str, list[str]] = defaultdict(list)
+for _old_diff, _new_diff in _PROBLEM_DIFFICULTY_ALIASES.items():
+    _PROBLEM_DIFFICULTY_REVERSE_ALIASES[_new_diff].append(_old_diff)
+
+
+def _problem_difficulty_name(value: str | None) -> str:
+    name = value or "暂无评定"
+    return _PROBLEM_DIFFICULTY_ALIASES.get(name, name)
+
+
+def _problem_difficulty_values(name: str) -> list[str]:
+    canonical = _problem_difficulty_name(name)
+    return [canonical, *_PROBLEM_DIFFICULTY_REVERSE_ALIASES.get(canonical, [])]
+
+
 # ============================================================
 # Helpers
 # ============================================================
@@ -435,7 +455,8 @@ async def problem_list_by_difficulty(
     """
     base_filter = [] if include_closed else [Problem.solution_open.is_(True)]
 
-    # 一次查全量再 group by 内存里切，省去对每个档单独打两遍 SQL
+    # 一次查全量再 group by 内存里切，省去对每个档单独打两遍 SQL。
+    # 分桶时归一化旧难度名，避免旧库数据和新难度体系拆成两栏。
     q = select(Problem).order_by(Problem.difficulty, Problem.pid)
     for f in base_filter:
         q = q.where(f)
@@ -443,11 +464,12 @@ async def problem_list_by_difficulty(
 
     buckets: dict[str, list[ProblemItem]] = defaultdict(list)
     for p in rows:
-        buckets[p.difficulty or "暂无评定"].append(
+        diff_name = _problem_difficulty_name(p.difficulty)
+        buckets[diff_name].append(
             ProblemItem(
                 pid=p.pid,
                 title=p.title,
-                difficulty=p.difficulty,
+                difficulty=diff_name,
                 tags=p.tags or [],
                 solution_open=p.solution_open,
             )
@@ -468,13 +490,17 @@ async def problem_list_full_by_difficulty(
     include_closed: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ) -> list[ProblemItem]:
-    """单档全量。'暂无评定' 同时匹配 difficulty IS NULL 和字符串 '暂无评定'
-    —— 爬虫对 difficulty=0 的题会存成字符串，老数据可能是 NULL，两种都得包进来。"""
+    """单档全量。'暂无评定' 同时匹配 difficulty IS NULL 和字符串 '暂无评定'。
+
+    旧难度名会归并到公告里的新难度名，例如“普及/提高-”归入“普及”。
+    """
     q = select(Problem).order_by(Problem.pid)
-    if difficulty == "暂无评定":
-        q = q.where(or_(Problem.difficulty.is_(None), Problem.difficulty == "暂无评定"))
+    diff_name = _problem_difficulty_name(difficulty)
+    diff_values = _problem_difficulty_values(diff_name)
+    if diff_name == "暂无评定":
+        q = q.where(or_(Problem.difficulty.is_(None), Problem.difficulty.in_(diff_values)))
     else:
-        q = q.where(Problem.difficulty == difficulty)
+        q = q.where(Problem.difficulty.in_(diff_values))
     if not include_closed:
         q = q.where(Problem.solution_open.is_(True))
     rows = (await db.execute(q)).scalars().all()
@@ -482,7 +508,7 @@ async def problem_list_full_by_difficulty(
         ProblemItem(
             pid=p.pid,
             title=p.title,
-            difficulty=p.difficulty,
+            difficulty=diff_name,
             tags=p.tags or [],
             solution_open=p.solution_open,
         )

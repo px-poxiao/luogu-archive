@@ -46,18 +46,26 @@ _DIFF_MAP = {
     0: "暂无评定",
     1: "入门",
     2: "普及-",
-    3: "普及/提高-",
-    4: "普及+/提高",
-    5: "提高+/省选-",
-    6: "省选/NOI-",
-    7: "NOI/NOI+/CTSC",
+    3: "普及",
+    4: "普及+/提高-",
+    5: "提高",
+    6: "提高+/省选-",
+    7: "省选/NOI-",
+    8: "NOI/NOI+/CTS",
 }
 
 _DIFF_STRING_NORMALIZE = {v: v for v in _DIFF_MAP.values()}
+_DIFF_STRING_NORMALIZE.update(
+    {
+        "普及/提高-": "普及",
+        "普及+/提高": "普及+/提高-",
+        "NOI/NOI+/CTSC": "NOI/NOI+/CTS",
+    }
+)
 
 
 def _diff_text(v) -> str | None:
-    """归一化 difficulty 字段为中文文本。lentille 现在返 int(0-7)。"""
+    """归一化 difficulty 字段为中文文本。lentille 现在返 int(0-8)。"""
     if v is None:
         return None
     if isinstance(v, int):

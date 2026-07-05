@@ -171,7 +171,7 @@ async def job_problem_tier_hourly() -> None:
 
 
 async def job_problem_tier_daily() -> None:
-    """tier2（普及/提高-）：每天派一次"距上次检查 ≥ 24h"的题。"""
+    """tier2（普及）：每天派一次"距上次检查 ≥ 24h"的题。"""
     from app.tasks.actors.crawl import crawl_problem_solution
     now = utcnow()
 
@@ -180,7 +180,7 @@ async def job_problem_tier_daily() -> None:
             select(Problem.pid)
             .where(
                 Problem.solution_open.is_(True),
-                Problem.difficulty == "普及/提高-",
+                Problem.difficulty.in_(["普及", "普及/提高-"]),
                 or_(
                     Problem.last_solution_check_at < now - timedelta(hours=24),
                     Problem.last_solution_check_at.is_(None),
@@ -203,7 +203,7 @@ async def job_problem_tier_daily() -> None:
 async def job_problem_tier_weekly() -> None:
     """tier3（其他档）：每天派 1/7 的"距上次检查 ≥ 7d"的题，让全周均匀分摊。
 
-    覆盖：普及+/提高、提高+/省选-、省选/NOI-、NOI/NOI+/CTSC、暂无评定。
+    覆盖：普及+/提高-、提高、提高+/省选-、省选/NOI-、NOI/NOI+/CTS、暂无评定。
     只轮询当前仍标记为开放的题；关闭后不再自动复查。
 
     避免周一一次性把全档 1000+ 道题全派进队列堵住其他用户操作。
@@ -214,7 +214,7 @@ async def job_problem_tier_weekly() -> None:
     now = utcnow()
 
     other_diffs = [
-        "普及+/提高", "提高+/省选-", "省选/NOI-", "NOI/NOI+/CTSC", "暂无评定",
+        "普及+/提高-", "普及+/提高", "提高", "提高+/省选-", "省选/NOI-", "NOI/NOI+/CTS", "NOI/NOI+/CTSC", "暂无评定",
     ]
     async with db_session() as session:
         # 总数（用于今日配额计算）

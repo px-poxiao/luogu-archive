@@ -97,11 +97,10 @@ async function onCaptchaVerified(token: string) {
 }
 
 const diffOrder = [
-  '入门', '普及-', '普及/提高-', '普及+/提高',
-  '提高+/省选-', '省选/NOI-', 'NOI/NOI+/CTSC',
+  '入门', '普及-', '普及', '普及+/提高-',
+  '提高', '提高+/省选-', '省选/NOI-', 'NOI/NOI+/CTS',
   '暂无评定',
 ]
-
 const sortedKeys = computed(() => {
   if (!data.value) return []
   return Object.keys(data.value).sort((a, b) => {
@@ -114,14 +113,17 @@ const sortedKeys = computed(() => {
 const diffColor: Record<string, string> = {
   '入门': 'Red',
   '普及-': 'Orange',
+  '普及': 'Yellow',
   '普及/提高-': 'Yellow',
+  '普及+/提高-': 'Green',
   '普及+/提高': 'Green',
+  '提高': 'Cyan',
   '提高+/省选-': 'Blue',
   '省选/NOI-': 'Purple',
+  'NOI/NOI+/CTS': 'Black',
   'NOI/NOI+/CTSC': 'Black',
   '暂无评定': 'Gray',
 }
-
 // 通过 ?difficulty=xxx 切到单档全列表视图
 const selectedDiff = computed<string | null>(() => {
   const d = route.query.difficulty

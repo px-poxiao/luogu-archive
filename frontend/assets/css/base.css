@@ -27,15 +27,15 @@
 
   /* 洛谷难度 / 用户颜色（沿用官方色值） */
   --lg-gray: #bfbfbf;
-  --lg-blue: #0e90d2;
-  --lg-green: #5eb95e;
-  --lg-orange: #f4a629;
+  --lg-blue: #3498db;
+  --lg-green: #53c41a;
+  --lg-orange: #f39c11;
   --lg-yellow: #ffc629;
-  --lg-red: #e74c3c;
-  --lg-purple: #9b59b6;
-  --lg-cyan: #3498db;
-  --lg-black: #0a0a0a;
-  /* 洛谷"黑题"在深色模式下用浅蓝（与官方一致），浅色模式仍用 #0a0a0a */
+  --lg-red: #fe4c61;
+  --lg-purple: #9c3dcf;
+  --lg-cyan: #13c2c2;
+  --lg-black: #0e1d69;
+  /* 洛谷"黑题"在深色模式下用浅蓝（与官方一致），浅色模式使用公告里的深蓝色 */
   --lg-black-name: var(--lg-black);
   --lg-cheater: #ffdd54;          /* 棕名：名字色 */
   --lg-cheater-tag: #bb9915;      /* 棕名：tag 背景色 */
