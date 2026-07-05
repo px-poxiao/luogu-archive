@@ -199,14 +199,24 @@ async def _avatar_data_uri(user: LuoguUser | None) -> str | None:
         return None
 
 
-def _svg_response(svg: str) -> Response:
+def _svg_response(svg: str, *, cache_seconds: int | None = CARD_CACHE_SECONDS) -> Response:
+    if cache_seconds is None:
+        headers = {
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Robots-Tag": "noindex, nofollow, noarchive",
+        }
+    else:
+        headers = {
+            "Cache-Control": f"public, max-age={cache_seconds}",
+            "X-Robots-Tag": "noindex, nofollow, noarchive",
+        }
+
     return Response(
         content=svg,
         media_type="image/svg+xml; charset=utf-8",
-        headers={
-            "Cache-Control": f"public, max-age={CARD_CACHE_SECONDS}",
-            "X-Robots-Tag": "noindex, nofollow, noarchive",
-        },
+        headers=headers,
     )
 
 
@@ -405,11 +415,7 @@ async def feed_activity_card(uid: int, db: AsyncSession = Depends(get_db)) -> Re
 
 @router.get("/random/{uid}.svg")
 async def feed_random_card(uid: int, db: AsyncSession = Depends(get_db)) -> Response:
-    cache_key = f"image:feed_random:{uid}:v3"
-    cached = await _cache_get(cache_key)
-    if cached:
-        return _svg_response(cached)
-
+    # 随机语录每次访问都重新抽取；这里不能走 Redis / 浏览器缓存。
     now = _now_shanghai()
     user = await _load_user(db, uid)
     q = (
@@ -422,5 +428,4 @@ async def feed_random_card(uid: int, db: AsyncSession = Depends(get_db)) -> Resp
     feed = random.choice(rows) if rows else None
     avatar_href = await _avatar_data_uri(user)
     svg = _random_svg(uid, user, feed, now, avatar_href)
-    await _cache_set(cache_key, svg)
-    return _svg_response(svg)
+    return _svg_response(svg, cache_seconds=None)

@@ -38,9 +38,8 @@ const imageUrl = computed(() => {
 })
 const previewSrc = computed(() => `${cardPath.value}?t=${imageNonce.value}`)
 const markdown = computed(() => {
-  const name = profile.value?.name_hidden ? `UID ${profile.value.uid}` : profile.value?.name || `UID ${uid}`
-  const label = selected.value === 'activity' ? '犇犇统计' : '随机犇犇'
-  return `![${name} 的${label}](${imageUrl.value})`
+  // 嵌入用 Markdown 保持最短格式，避免把用户名和图卡类型带到正文里。
+  return `![](${imageUrl.value})`
 })
 
 const cardKinds: Array<{ key: CardKind; label: string }> = [
