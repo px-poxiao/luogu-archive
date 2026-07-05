@@ -239,6 +239,66 @@ function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+function bilibiliEmbedUrl(src: string): string | null {
+  const raw = (src || '').trim()
+  if (!raw.toLowerCase().startsWith('bilibili:')) return null
+
+  let body = raw.slice('bilibili:'.length).trim()
+  if (!body) return null
+
+  let query = ''
+  const queryIndex = body.indexOf('?')
+  if (queryIndex >= 0) {
+    query = body.slice(queryIndex + 1)
+    body = body.slice(0, queryIndex)
+  }
+
+  let bvid = ''
+  let aid = ''
+  let cid = ''
+  let page = '1'
+
+  const applyQuery = (q: string) => {
+    const params = new URLSearchParams(q)
+    bvid = params.get('bvid') || params.get('BV') || bvid
+    aid = params.get('aid') || params.get('av') || aid
+    cid = params.get('cid') || cid
+    page = params.get('p') || params.get('page') || page
+  }
+
+  if (/^https?:\/\//i.test(body) || body.startsWith('//')) {
+    try {
+      const url = new URL(body.startsWith('//') ? `https:${body}` : body)
+      const pathMatch = url.pathname.match(/\/video\/(BV[0-9A-Za-z]{10,}|av\d+)/i)
+      if (pathMatch) body = pathMatch[1]
+      applyQuery(url.search.slice(1))
+    } catch {
+      return null
+    }
+  }
+  if (query) applyQuery(query)
+
+  const bvMatch = body.match(/^(BV[0-9A-Za-z]{10,})$/i)
+  const avMatch = body.match(/^(?:av)?(\d+)$/i)
+  if (bvMatch) {
+    bvid = bvMatch[1]
+  } else if (avMatch) {
+    aid = avMatch[1]
+  }
+
+  if (!bvid && !aid) return null
+
+  const params = new URLSearchParams({
+    isOutside: 'true',
+    autoplay: '0',
+    page: String(Math.max(1, Number.parseInt(page, 10) || 1)),
+  })
+  if (bvid) params.set('bvid', bvid)
+  if (aid) params.set('aid', aid)
+  if (cid) params.set('cid', cid)
+  return `https://player.bilibili.com/player.html?${params.toString()}`
+}
+
 function build(): MarkdownIt {
   const md = new MarkdownIt({
     html: false,
@@ -286,6 +346,24 @@ function build(): MarkdownIt {
       }
     }
     return origLinkOpen(tokens, idx, opts, env, self)
+  }
+
+  const origImage = md.renderer.rules.image ||
+    ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts))
+  md.renderer.rules.image = (tokens, idx, opts, env, self) => {
+    const src = tokens[idx].attrGet('src') || ''
+    const embedUrl = bilibiliEmbedUrl(src)
+    if (!embedUrl) return origImage(tokens, idx, opts, env, self)
+
+    const alt = self.renderInlineAsText(tokens[idx].children || [], opts, env)
+    const title = tokens[idx].attrGet('title') || alt || 'Bilibili video'
+    return `<span class="lg-bilibili" role="group" aria-label="${escapeAttr(title)}">`
+      + '<span class="lg-bilibili-frame">'
+      + `<iframe src="${escapeAttr(embedUrl)}" title="${escapeAttr(title)}" loading="lazy" `
+      + 'allow="fullscreen; picture-in-picture" allowfullscreen></iframe>'
+      + '</span>'
+      + (alt ? `<span class="lg-bilibili-caption">${md.utils.escapeHtml(alt)}</span>` : '')
+      + '</span>'
   }
 
   return md
