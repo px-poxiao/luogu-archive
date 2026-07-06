@@ -122,6 +122,7 @@ const diffColor: Record<string, string> = {
   '省选/NOI-': 'Purple',
   'NOI/NOI+/CTS': 'Black',
   'NOI/NOI+/CTSC': 'Black',
+  'unknown_8': 'Black',
   '暂无评定': 'Gray',
 }
 // 通过 ?difficulty=xxx 切到单档全列表视图

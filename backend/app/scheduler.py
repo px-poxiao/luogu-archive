@@ -214,7 +214,7 @@ async def job_problem_tier_weekly() -> None:
     now = utcnow()
 
     other_diffs = [
-        "普及+/提高-", "普及+/提高", "提高", "提高+/省选-", "省选/NOI-", "NOI/NOI+/CTS", "NOI/NOI+/CTSC", "暂无评定",
+        "普及+/提高-", "普及+/提高", "提高", "提高+/省选-", "省选/NOI-", "NOI/NOI+/CTS", "NOI/NOI+/CTSC", "unknown_8", "暂无评定",
     ]
     async with db_session() as session:
         # 总数（用于今日配额计算）

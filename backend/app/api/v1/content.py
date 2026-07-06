@@ -126,6 +126,7 @@ _PROBLEM_DIFFICULTY_ALIASES = {
     "普及/提高-": "普及",
     "普及+/提高": "普及+/提高-",
     "NOI/NOI+/CTSC": "NOI/NOI+/CTS",
+    "unknown_8": "NOI/NOI+/CTS",
 }
 _PROBLEM_DIFFICULTY_REVERSE_ALIASES: dict[str, list[str]] = defaultdict(list)
 for _old_diff, _new_diff in _PROBLEM_DIFFICULTY_ALIASES.items():
