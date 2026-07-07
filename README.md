@@ -103,7 +103,7 @@ luogu-archive/
 
 ### 任务队列优先级
 
-Dramatiq 使用 3 条队列，worker 按优先级消费（实际部署：1 进程 × 4 线程，监听全部队列）：
+Dramatiq 使用 3 条队列，`scripts.priority_worker` 监督进程按严格顺序消费：只有 `crawler.hi` 为空时才跑 `crawler.mid`，只有 `crawler.mid` 也为空时才跑 `crawler.low`。
 
 | 队列 | 内容 |
 |---|---|
@@ -172,7 +172,7 @@ python -m scripts.create_admin     # 交互式创建管理员，记下 TOTP secr
 
 # 三个进程分别起：
 uvicorn app.main:app --reload --port 8000
-dramatiq app.tasks.actors.crawl --queues crawler.hi crawler.mid crawler.low
+python -m scripts.priority_worker
 python -m app.scheduler            # 可选，开发期可手动触发
 ```
 

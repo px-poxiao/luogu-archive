@@ -5,7 +5,7 @@
 - crawler.mid   普通后台任务：发现、访问触发刷新、级联、定时犇犇 / 陶片
 - crawler.low   题目任务：题目列表页轮询、题解开放状态检测
 
-每个队列通过 worker 启动参数 `--queues` 指定。
+实际消费由 `scripts.priority_worker` 监督进程按 hi -> mid -> low 严格切换。
 
 - broker.py   broker 实例化
 - asyncio_runner.py   在同步 actor 里调度 async 函数

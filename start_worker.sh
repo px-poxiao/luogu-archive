@@ -53,10 +53,8 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
 fi
 
 cd "$BACKEND"
-setsid "$DRAMATIQ" \
-    app.tasks.actors.crawl \
-    --queues crawler.hi crawler.mid crawler.low \
-    --processes 1 --threads 4 \
+export DRAMATIQ_BIN="$DRAMATIQ"
+setsid "$PY" -m scripts.priority_worker \
     >> "$LOGFILE" 2>&1 < /dev/null &
 echo $! > "$PIDFILE"
 

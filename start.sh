@@ -103,10 +103,8 @@ start_backend() {
 
 start_worker() {
     cd "$BACKEND"
-    start_one worker "$DRAMATIQ" \
-        app.tasks.actors.crawl \
-        --queues crawler.hi crawler.mid crawler.low \
-        --processes 1 --threads 4
+    export DRAMATIQ_BIN="$DRAMATIQ"
+    start_one worker "$PY" -m scripts.priority_worker
 }
 
 start_scheduler() {
