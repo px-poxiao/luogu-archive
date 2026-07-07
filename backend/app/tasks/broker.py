@@ -33,4 +33,3 @@ def get_broker() -> RedisBroker:
 QUEUE_CRAWL_HI = "crawler.hi"
 QUEUE_CRAWL_MID = "crawler.mid"
 QUEUE_CRAWL_LOW = "crawler.low"
-QUEUE_CRAWL_FEED = "crawler.feed"

@@ -103,16 +103,15 @@ luogu-archive/
 
 ### 任务队列优先级
 
-Dramatiq 4 条队列，worker 按优先级消费（实际部署：1 进程 × 4 线程，监听全部队列）：
+Dramatiq 使用 3 条队列，worker 按优先级消费（实际部署：1 进程 × 4 线程，监听全部队列）：
 
 | 队列 | 内容 |
 |---|---|
-| `crawler.hi` | **用户主动保存**（文章/剪贴板/用户/犇犇/陶片/题目）—— 全部走 hi |
-| `crawler.feed` | 犇犇定时 / 被动轮询 |
-| `crawler.mid` | 题解状态检测（定时 / 级联） |
-| `crawler.low` | 列表页扫描、入口页发现 |
+| `crawler.hi` | 用户正在等待的任务：手动保存、首次访问未收录内容、管理员强制爬取 |
+| `crawler.mid` | 普通后台任务：发现、访问触发刷新、级联、定时犇犇 / 陶片 |
+| `crawler.low` | 所有题目相关任务：题目列表页轮询、题解开放状态检测 |
 
-用户保存触发的任务有独立的 `*_hi` actor（`crawl_judgement_hi` / `crawl_user_feeds_hi` / `crawl_problem_list_page_hi` / `crawl_problem_solution_hi`），确保「访问新用户主页 → 保存犇犇」不会卡在定时任务队列后面。
+用户手动保存用户主页时，`crawl_user_manual` 会在同一条 hi 任务里连续刷新用户主页和犇犇第一页，避免主页已更新但犇犇还卡在后台队列。题目任务即使由手动保存触发也统一走 low，避免一次列表刷新污染 hi 队列。
 
 ### 题目分层扫描
 
@@ -173,7 +172,7 @@ python -m scripts.create_admin     # 交互式创建管理员，记下 TOTP secr
 
 # 三个进程分别起：
 uvicorn app.main:app --reload --port 8000
-dramatiq app.tasks.actors.crawl --queues crawler.hi crawler.mid crawler.low crawler.feed
+dramatiq app.tasks.actors.crawl --queues crawler.hi crawler.mid crawler.low
 python -m app.scheduler            # 可选，开发期可手动触发
 ```
 

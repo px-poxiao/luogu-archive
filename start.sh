@@ -105,7 +105,7 @@ start_worker() {
     cd "$BACKEND"
     start_one worker "$DRAMATIQ" \
         app.tasks.actors.crawl \
-        --queues crawler.hi crawler.mid crawler.low crawler.feed \
+        --queues crawler.hi crawler.mid crawler.low \
         --processes 1 --threads 4
 }
 

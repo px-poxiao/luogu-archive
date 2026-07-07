@@ -1,4 +1,4 @@
-"""用户主页爬虫。
+r"""用户主页爬虫。
 
 从 `https://<base>/user/<uid>` 取 HTML，提取 lentille-context 里的 data.user
 + data.prizes + data.elo + data.gu + data.dailyCounts 全字段入库。
@@ -7,7 +7,7 @@
 - 不需要登录
 - 判重：introduction 走版本化；name 走 name_versions；数值字段走时间序列
 - 用户名违规检测：
-  1) 系统格式正则（_user_\d+ / 违规用户名\d+）
+  1) 系统格式正则（_user_\\d+ / 违规用户名\d+）
   2) 匹配即写 user_name_violation → 隐藏 triggered_at 之前所有 name_versions
 """
 from __future__ import annotations
@@ -94,7 +94,7 @@ async def _enqueue_articles_pastes_cascade(uid: int) -> None:
     仅在 manual 或首次入库时调用，避免 passive 反复刷新把节点打爆。
     """
     from app.models.luogu_content import Article, Paste
-    from app.tasks.actors.crawl import crawl_article, crawl_paste
+    from app.tasks.actors.crawl import crawl_article_bg, crawl_paste_bg
 
     PER_TASK_DELAY_MS = 2000
     MAX_TASKS_PER_TYPE = 30
@@ -111,7 +111,7 @@ async def _enqueue_articles_pastes_cascade(uid: int) -> None:
             )).scalars().all()
         for i, aid in enumerate(arts):
             try:
-                crawl_article.send_with_options(
+                crawl_article_bg.send_with_options(
                     args=(aid, "cascaded_from_user"),
                     delay=i * PER_TASK_DELAY_MS,
                 )
@@ -119,7 +119,7 @@ async def _enqueue_articles_pastes_cascade(uid: int) -> None:
                 log.warning("crawl_user.cascade_article_failed", aid=aid, error=str(e))
         for i, pid in enumerate(pastes):
             try:
-                crawl_paste.send_with_options(
+                crawl_paste_bg.send_with_options(
                     args=(pid, "cascaded_from_user"),
                     delay=(len(arts) + i) * PER_TASK_DELAY_MS,
                 )
@@ -162,7 +162,13 @@ def _to_dt(unix_sec: int | float | None) -> datetime | None:
     return datetime.fromtimestamp(int(unix_sec), tz=timezone.utc)
 
 
-async def crawl_one(uid: int, *, trigger: str = "scheduled") -> None:
+async def crawl_one(
+    uid: int,
+    *,
+    trigger: str = "scheduled",
+    enqueue_feed: bool = True,
+    enqueue_content: bool = True,
+) -> None:
     """爬取一个用户的主页。"""
     async with task_lock("user", str(uid)) as got:
         if not got:
@@ -171,12 +177,26 @@ async def crawl_one(uid: int, *, trigger: str = "scheduled") -> None:
             # 否则用户点"立即更新"时，正好撞上 passive 刷新，犇犇/文章/剪贴板
             # 的级联派发就被静默吞掉，前端一直看不到更新。
             if trigger == "manual":
-                await _enqueue_user_cascades(uid)
+                if enqueue_feed:
+                    await _enqueue_feed_cascade(uid, trigger=trigger)
+                if enqueue_content:
+                    await _enqueue_articles_pastes_cascade(uid)
             return
-        await _crawl_one_inner(uid, trigger=trigger)
+        await _crawl_one_inner(
+            uid,
+            trigger=trigger,
+            enqueue_feed=enqueue_feed,
+            enqueue_content=enqueue_content,
+        )
 
 
-async def _crawl_one_inner(uid: int, *, trigger: str) -> None:
+async def _crawl_one_inner(
+    uid: int,
+    *,
+    trigger: str,
+    enqueue_feed: bool = True,
+    enqueue_content: bool = True,
+) -> None:
     node = get_default_node(NodeKind.ANON)
     redis = get_redis()
     url_path = f"/user/{uid}"
@@ -216,8 +236,9 @@ async def _crawl_one_inner(uid: int, *, trigger: str) -> None:
         #   从没有 feed 入库过的用户永远轮询不到 → 必须靠访问触发兜底。
         # - 文章/剪贴板：仅 manual 或首次入库派，避免 passive 把节点打爆
         #   （文章/剪贴板还有 discovery 列表页轮询兜底）
-        await _enqueue_feed_cascade(uid, trigger=trigger)
-        if trigger == "manual" or was_first_time:
+        if enqueue_feed:
+            await _enqueue_feed_cascade(uid, trigger=trigger)
+        if enqueue_content and (trigger == "manual" or was_first_time):
             await _enqueue_articles_pastes_cascade(uid)
     except Exception as e:
         dur = int((_t.monotonic() - start) * 1000)

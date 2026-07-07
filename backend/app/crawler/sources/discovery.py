@@ -130,10 +130,10 @@ async def _schedule_article_crawl(article_ids: list[str]) -> None:
     if not to_crawl:
         return
 
-    from app.tasks.actors.crawl import crawl_article
+    from app.tasks.actors.crawl import crawl_article_bg
 
     for article_id in to_crawl:
-        crawl_article.send(article_id, "discovery")
+        crawl_article_bg.send(article_id, "discovery")
     log.info("discovery.enqueued_article_crawl", count=len(to_crawl))
 
 
@@ -163,8 +163,8 @@ async def _schedule_user_crawl(uids: list[int]) -> None:
         return
 
     # 延迟 import，避免循环依赖
-    from app.tasks.actors.crawl import crawl_user
+    from app.tasks.actors.crawl import crawl_user_bg
 
     for uid in to_crawl:
-        crawl_user.send(uid, "discovery")
+        crawl_user_bg.send(uid, "discovery")
     log.info("discovery.enqueued_user_crawl", count=len(to_crawl))

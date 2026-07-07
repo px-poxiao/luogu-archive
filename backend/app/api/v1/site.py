@@ -106,7 +106,6 @@ async def site_overview(
         ("crawler.hi", "高优先级"),
         ("crawler.mid", "常规爬取"),
         ("crawler.low", "低优先级"),
-        ("crawler.feed", "犇犇专用"),
     ]
 
     recent_q = (

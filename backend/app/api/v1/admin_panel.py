@@ -456,7 +456,7 @@ async def crawler_stats(
     # Dramatiq 不同版本下 redis broker 的 key 类型可能是 list / hash / zset。
     # 用 TYPE 探测后再调对应的查长度命令；探测失败统一记 0，避免炸接口。
     redis = get_redis()
-    queues = ["crawler.hi", "crawler.mid", "crawler.low", "crawler.feed"]
+    queues = ["crawler.hi", "crawler.mid", "crawler.low"]
     queue_lens = {}
     for q_name in queues:
         ln = 0

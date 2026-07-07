@@ -25,15 +25,15 @@ def is_stale(last_crawled_at: datetime | None, *, stale_after_sec: int = 60) -> 
 
 
 async def schedule_refresh_article(article_id: str) -> None:
-    from app.tasks.actors.crawl import crawl_article
-    crawl_article.send(article_id, "passive")
+    from app.tasks.actors.crawl import crawl_article_bg
+    crawl_article_bg.send(article_id, "passive")
 
 
 async def schedule_refresh_paste(paste_id: str) -> None:
-    from app.tasks.actors.crawl import crawl_paste
-    crawl_paste.send(paste_id, "passive")
+    from app.tasks.actors.crawl import crawl_paste_bg
+    crawl_paste_bg.send(paste_id, "passive")
 
 
 async def schedule_refresh_user(uid: int) -> None:
-    from app.tasks.actors.crawl import crawl_user
-    crawl_user.send(uid, "passive")
+    from app.tasks.actors.crawl import crawl_user_bg
+    crawl_user_bg.send(uid, "passive")

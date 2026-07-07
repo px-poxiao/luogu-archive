@@ -412,8 +412,8 @@ async def follow(
     await db.commit()
 
     # 触发一次用户主页爬取（把目标 uid 拉到本站）
-    from app.tasks.actors.crawl import crawl_user
-    crawl_user.send(req.uid, "manual")
+    from app.tasks.actors.crawl import crawl_user_manual
+    crawl_user_manual.send(req.uid)
     return {"message": "已关注"}
 
 

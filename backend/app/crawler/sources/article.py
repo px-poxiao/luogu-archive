@@ -104,8 +104,8 @@ async def _crawl_inner(article_id: str, *, trigger: str) -> None:
         # 额外派一次完整用户爬取（带去重锁，不会重复）
         if fields.get("author_uid"):
             try:
-                from app.tasks.actors.crawl import crawl_user
-                crawl_user.send(fields["author_uid"], "cascaded_from_article")
+                from app.tasks.actors.crawl import crawl_user_bg
+                crawl_user_bg.send(fields["author_uid"], "cascaded_from_article")
             except Exception as e:
                 log.warning("crawl_article.cascade_user_failed", error=str(e))
 

@@ -175,27 +175,13 @@ async def _try_merge_or_enqueue(
         crawl_article,
         crawl_judgement_hi,
         crawl_paste,
-        crawl_problem_list_page_hi,
-        crawl_problem_solution_hi,
-        crawl_user,
+        crawl_problem_list_page,
+        crawl_problem_solution,
+        crawl_user_manual,
         crawl_user_feeds_hi,
     )
 
     redis = get_redis()
-
-    # ---- user 类型兜底：独立派一次 crawl_user_feeds_hi ----
-    # crawl_user 自带 task_lock + cascade，链路里任何一环（passive 抢锁 / fetch
-    # 失败 / cascade 静默吞错）都可能让犇犇任务丢失。这里在 dedupe 之前**绕开**
-    # 整条链直接派 feed，60s NX 去重防 spam（feed 任务自身也还有 task_lock）。
-    if content_type == "user":
-        feed_extra_key = f"save:feed_extra_dedup:user:{ident}"
-        if await redis.set(feed_extra_key, "1", ex=60, nx=True):
-            try:
-                crawl_user_feeds_hi.send(int(ident), 1, "manual_save")
-            except Exception as e:
-                log.warning(
-                    "save.feed_extra_dispatch_failed", uid=ident, error=str(e)
-                )
 
     key = _pending_key(content_type, ident)
 
@@ -211,7 +197,7 @@ async def _try_merge_or_enqueue(
         elif content_type == "paste":
             msg = crawl_paste.send(ident, "manual")
         elif content_type == "user":
-            msg = crawl_user.send(int(ident), "manual")
+            msg = crawl_user_manual.send(int(ident))
         elif content_type == "feed":
             # feed 的 ident 格式 "<uid>" 或 "<uid>:<page>"
             if ":" in ident:
@@ -231,19 +217,19 @@ async def _try_merge_or_enqueue(
             if ident_norm.lower() == "list":
                 # 错峰扫前 30 页（覆盖 1500 道）。每页 11 秒间隔避免 cn 节点限流（0.1 req/s）。
                 # 各 send 都返回 msg；这里取第一个 msg 当返回的 task_id。
-                msg = crawl_problem_list_page_hi.send(1, "manual")
+                msg = crawl_problem_list_page.send(1, "manual")
                 for page in range(2, 31):
-                    crawl_problem_list_page_hi.send_with_options(
+                    crawl_problem_list_page.send_with_options(
                         args=(page, "manual"),
                         delay=(page - 1) * 11_000,
                     )
             elif ident_norm.isdigit():
                 page = int(ident_norm)
-                msg = crawl_problem_list_page_hi.send(page, "manual")
+                msg = crawl_problem_list_page.send(page, "manual")
             else:
-                msg = crawl_problem_solution_hi.send(ident_norm.upper(), "manual")
+                msg = crawl_problem_solution.send(ident_norm.upper(), "manual")
         elif content_type == "problem_solution":
-            msg = crawl_problem_solution_hi.send(ident, "manual")
+            msg = crawl_problem_solution.send(ident, "manual")
         else:
             raise ValidationError("未知的 content_type")
     except ValueError as e:

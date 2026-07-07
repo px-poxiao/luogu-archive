@@ -104,7 +104,7 @@ async def get_user(
     if user is None:
         # 未收录 → 高优先级拉一次
         from app.tasks.actors.crawl import crawl_user
-        crawl_user.send(uid, "passive")
+        crawl_user.send(uid, "first_time")
         raise NotFoundError("用户未被本站收录，已触发爬取")
 
     if is_stale(user.last_crawled_at):

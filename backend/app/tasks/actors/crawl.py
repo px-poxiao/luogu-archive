@@ -1,12 +1,9 @@
-"""爬虫任务 actor 样板。
+"""Crawler task actors.
 
-每个具体数据源的 actor 在这里声明：接收参数 → 调用 app.crawler.sources.*.crawl_one →
-async 运行 → 错误转成可读信息。
-
-所有 source 模块必须**在 module 顶层完成 import**：dramatiq worker 多线程同时
-触发 actor 时，延迟 import 会撞 sqlalchemy 子模块的 import lock race，把模块
-半初始化标记为"已导入" → 之后所有调用都看到坏模块。改为顶层 import 后这条路径
-单线程在 worker 启动时就跑完。
+Queue policy:
+- crawler.hi: user-facing jobs that should complete quickly.
+- crawler.mid: normal background jobs, discovery, stale refresh and cascades.
+- crawler.low: all problem-list and problem-solution state jobs.
 """
 from __future__ import annotations
 
@@ -16,36 +13,30 @@ from app.core.exceptions import CrawlerAccountInvalid, CrawlerNotFound
 from app.core.logging import get_logger
 from app.tasks.asyncio_runner import run_async
 from app.tasks.broker import (
-    QUEUE_CRAWL_FEED,
     QUEUE_CRAWL_HI,
     QUEUE_CRAWL_LOW,
     QUEUE_CRAWL_MID,
     get_broker,
 )
 
-# 触发 broker 初始化
 get_broker()
 
-# ===== source 顶层 import（避免线程并发懒 import 触发 race） =====
 from app.crawler.sources.article import crawl_one as _crawl_article_one
-from app.crawler.sources.paste import crawl_one as _crawl_paste_one
-from app.crawler.sources.user import crawl_one as _crawl_user_one
-from app.crawler.sources.feed import crawl_user_page as _crawl_feed_user_page
-from app.crawler.sources.judgement import crawl_all as _crawl_judgement_all
-from app.crawler.sources.problem import (
-    crawl_list_page as _crawl_problem_list_page,
-    crawl_solution_state as _crawl_problem_solution_state,
-)
 from app.crawler.sources.discovery import (
     from_article_list as _discover_from_article_list,
     from_discuss as _discover_from_discuss,
 )
+from app.crawler.sources.feed import crawl_user_page as _crawl_feed_user_page
+from app.crawler.sources.judgement import crawl_all as _crawl_judgement_all
+from app.crawler.sources.paste import crawl_one as _crawl_paste_one
+from app.crawler.sources.problem import (
+    crawl_list_page as _crawl_problem_list_page,
+    crawl_solution_state as _crawl_problem_solution_state,
+)
+from app.crawler.sources.user import crawl_one as _crawl_user_one
 
 log = get_logger(__name__)
 
-
-# 通用重试策略：3 次指数退避，最长 1 分钟。
-# CrawlerNotFound（404）/ CrawlerAccountInvalid 走 throws，dramatiq 不重试。
 _RETRY = {
     "max_retries": 3,
     "min_backoff": 5_000,
@@ -54,49 +45,90 @@ _RETRY = {
 }
 
 
+async def _crawl_user_and_feed(uid: int) -> None:
+    """Manual user refresh: crawl profile and first feed page in one hi job."""
+    await _crawl_user_one(
+        uid,
+        trigger="manual",
+        enqueue_feed=False,
+        enqueue_content=True,
+    )
+    await _crawl_feed_user_page(uid, page=1, trigger="manual_save")
+
+
 @dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
 def crawl_article(article_id: str, trigger: str = "manual") -> None:
-    """爬取单篇文章。手动保存按钮默认走这里。"""
+    """User-facing article crawl: manual save or first unarchived visit."""
     log.info("actor.crawl_article", article_id=article_id, trigger=trigger)
+    run_async(_crawl_article_one(article_id, trigger=trigger))
+
+
+@dramatiq.actor(queue_name=QUEUE_CRAWL_MID, **_RETRY)
+def crawl_article_bg(article_id: str, trigger: str = "passive") -> None:
+    """Background article crawl: stale refresh, discovery or cascade."""
+    log.info("actor.crawl_article_bg", article_id=article_id, trigger=trigger)
     run_async(_crawl_article_one(article_id, trigger=trigger))
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
 def crawl_paste(paste_id: str, trigger: str = "manual") -> None:
+    """User-facing paste crawl: manual save or first unarchived visit."""
     log.info("actor.crawl_paste", paste_id=paste_id, trigger=trigger)
+    run_async(_crawl_paste_one(paste_id, trigger=trigger))
+
+
+@dramatiq.actor(queue_name=QUEUE_CRAWL_MID, **_RETRY)
+def crawl_paste_bg(paste_id: str, trigger: str = "passive") -> None:
+    """Background paste crawl: stale refresh or cascade."""
+    log.info("actor.crawl_paste_bg", paste_id=paste_id, trigger=trigger)
     run_async(_crawl_paste_one(paste_id, trigger=trigger))
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
 def crawl_user(uid: int, trigger: str = "manual") -> None:
+    """User-facing user profile crawl, for first unarchived visits."""
     log.info("actor.crawl_user", uid=uid, trigger=trigger)
     run_async(_crawl_user_one(uid, trigger=trigger))
 
 
-@dramatiq.actor(queue_name=QUEUE_CRAWL_FEED, **_RETRY)
+@dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
+def crawl_user_manual(uid: int) -> None:
+    """Manual user refresh: profile plus feed page 1 in the same hi task."""
+    log.info("actor.crawl_user_manual", uid=uid)
+    run_async(_crawl_user_and_feed(uid))
+
+
+@dramatiq.actor(queue_name=QUEUE_CRAWL_MID, **_RETRY)
+def crawl_user_bg(uid: int, trigger: str = "passive") -> None:
+    """Background user profile crawl: stale refresh, discovery or cascade."""
+    log.info("actor.crawl_user_bg", uid=uid, trigger=trigger)
+    run_async(_crawl_user_one(uid, trigger=trigger))
+
+
+@dramatiq.actor(queue_name=QUEUE_CRAWL_MID, **_RETRY)
 def crawl_user_feeds(uid: int, page: int = 1, trigger: str = "scheduled") -> None:
-    """用 Cookie 账号爬某用户的犇犇（定时 / 入口页发现走这里）。"""
+    """Scheduled, passive or cascaded feed crawl."""
     log.info("actor.crawl_user_feeds", uid=uid, page=page, trigger=trigger)
     run_async(_crawl_feed_user_page(uid, page=page, trigger=trigger))
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
 def crawl_user_feeds_hi(uid: int, page: int = 1, trigger: str = "manual") -> None:
-    """用户主动保存触发的犇犇爬取，走 hi 队列优先。"""
+    """Manual single-page feed crawl."""
     log.info("actor.crawl_user_feeds_hi", uid=uid, page=page, trigger=trigger)
     run_async(_crawl_feed_user_page(uid, page=page, trigger=trigger))
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_MID, **_RETRY)
 def crawl_judgement(trigger: str = "scheduled") -> None:
-    """爬全站陶片放逐 500 条（定时任务走这里）。"""
+    """Scheduled global judgement crawl."""
     log.info("actor.crawl_judgement", trigger=trigger)
     run_async(_crawl_judgement_all(trigger=trigger))
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
 def crawl_judgement_hi(trigger: str = "manual") -> None:
-    """用户主动保存触发的陶片爬取，走 hi 队列优先。"""
+    """Manual judgement crawl."""
     log.info("actor.crawl_judgement_hi", trigger=trigger)
     run_async(_crawl_judgement_all(trigger=trigger))
 
@@ -107,34 +139,34 @@ def crawl_problem_list_page(page: int, trigger: str = "scheduled") -> None:
     run_async(_crawl_problem_list_page(page, trigger=trigger))
 
 
-@dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
+@dramatiq.actor(queue_name=QUEUE_CRAWL_LOW, **_RETRY)
 def crawl_problem_list_page_hi(page: int, trigger: str = "manual") -> None:
-    """用户主动保存（题目列表保存按钮）触发的列表页爬取。"""
+    """Compatibility actor for old messages; problem list jobs now use low."""
     log.info("actor.crawl_problem_list_page_hi", page=page, trigger=trigger)
     run_async(_crawl_problem_list_page(page, trigger=trigger))
 
 
-@dramatiq.actor(queue_name=QUEUE_CRAWL_MID, **_RETRY)
+@dramatiq.actor(queue_name=QUEUE_CRAWL_LOW, **_RETRY)
 def crawl_problem_solution(pid: str, trigger: str = "scheduled") -> None:
-    """定时 / cascade 触发的题解检测，走 mid 队列。"""
+    """Problem solution-state checks always use low."""
     log.info("actor.crawl_problem_solution", pid=pid, trigger=trigger)
     run_async(_crawl_problem_solution_state(pid, trigger=trigger))
 
 
-@dramatiq.actor(queue_name=QUEUE_CRAWL_HI, **_RETRY)
+@dramatiq.actor(queue_name=QUEUE_CRAWL_LOW, **_RETRY)
 def crawl_problem_solution_hi(pid: str, trigger: str = "manual") -> None:
-    """用户主动保存（单题）触发的题解检测，走 hi 队列优先。"""
+    """Compatibility actor for old messages; problem checks now use low."""
     log.info("actor.crawl_problem_solution_hi", pid=pid, trigger=trigger)
     run_async(_crawl_problem_solution_state(pid, trigger=trigger))
 
 
-@dramatiq.actor(queue_name=QUEUE_CRAWL_LOW, **_RETRY)
+@dramatiq.actor(queue_name=QUEUE_CRAWL_MID, **_RETRY)
 def discover_from_discuss(trigger: str = "scheduled") -> None:
     log.info("actor.discover_from_discuss", trigger=trigger)
     run_async(_discover_from_discuss(trigger=trigger))
 
 
-@dramatiq.actor(queue_name=QUEUE_CRAWL_LOW, **_RETRY)
+@dramatiq.actor(queue_name=QUEUE_CRAWL_MID, **_RETRY)
 def discover_from_article_list(trigger: str = "scheduled") -> None:
     log.info("actor.discover_from_article_list", trigger=trigger)
     run_async(_discover_from_article_list(trigger=trigger))
