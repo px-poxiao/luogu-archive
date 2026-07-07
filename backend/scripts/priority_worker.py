@@ -1,16 +1,16 @@
-"""Strict-priority Dramatiq worker supervisor.
+"""严格优先级 Dramatiq worker 监督进程。
 
-Dramatiq can listen to multiple queues in one worker, but that does not provide
-a hard scheduling guarantee between queue names.  This supervisor enforces the
-project policy by running exactly one single-queue Dramatiq child at a time:
+Dramatiq 可以让一个 worker 同时监听多条队列，但这不能保证队列之间的严格调度顺序。
+这里一次只运行一个单队列 Dramatiq 子进程，并按下面的顺序选择队列：
 
     crawler.hi -> crawler.mid -> crawler.low
 
-When a higher-priority queue becomes non-empty, the current child is asked to
-shut down gracefully and a child for the higher queue is started.
+注意：Dramatiq 的延迟队列 ``<queue>.DQ`` 里可能有未来才重试的消息。未来消息不能
+阻塞低优先级队列，否则一个高优先级重试任务就会让普通队列长期饿死。
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -38,6 +38,7 @@ POLL_SEC = max(1, _env_int("PRIORITY_WORKER_POLL_SEC", 2))
 GRACE_SEC = max(1, _env_int("PRIORITY_WORKER_GRACE_SEC", 300))
 PROCESSES = max(1, _env_int("PRIORITY_WORKER_PROCESSES", 1))
 THREADS = max(1, _env_int("PRIORITY_WORKER_THREADS", 4))
+DELAY_SCAN_LIMIT = max(1, _env_int("PRIORITY_WORKER_DELAY_SCAN_LIMIT", 500))
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -82,22 +83,60 @@ def _key_count(redis: Redis, key: str) -> int:
         if key_type == "stream":
             return int(redis.xlen(key))
         return 1
-    except Exception as exc:  # pragma: no cover - defensive runtime logging
+    except Exception as exc:  # pragma: no cover - 运行时兜底日志
         _log(f"failed to inspect redis key {key}: {exc}")
         return 0
 
 
+def _message_eta_ms(raw: str | bytes | None) -> int | None:
+    """从 Dramatiq 消息体里读取 eta；没有 eta 的延迟消息按已到期处理。"""
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        payload = json.loads(raw)
+        options = payload.get("options") if isinstance(payload, dict) else None
+        eta = options.get("eta") if isinstance(options, dict) else None
+        return int(eta) if eta is not None else None
+    except Exception:
+        return None
+
+
+def _due_delayed_count(redis: Redis, queue: str, now_ms: int) -> int:
+    """统计已经到期的延迟消息，避免未来重试消息长期压住普通队列。"""
+    delayed_queue = f"dramatiq:{queue}.DQ"
+    messages_key = f"{delayed_queue}.msgs"
+    try:
+        if redis.type(delayed_queue) != "list":
+            return 0
+
+        message_ids = redis.lrange(delayed_queue, 0, DELAY_SCAN_LIMIT - 1)
+        if not message_ids:
+            return 0
+
+        raw_messages = redis.hmget(messages_key, message_ids)
+        due = 0
+        for raw in raw_messages:
+            eta = _message_eta_ms(raw)
+            if eta is None or eta <= now_ms:
+                due += 1
+        return due
+    except Exception as exc:  # pragma: no cover - 运行时兜底日志
+        _log(f"failed to inspect delayed queue {queue}: {exc}")
+        return 0
+
+
 def _queue_pending(redis: Redis, queue: str) -> int:
-    base = f"dramatiq:{queue}"
-    keys = (
-        base,
-        f"{base}.msgs",
-        f"{base}.DQ",
-        f"{base}.dq",
-        f"{base}.XQ",
-        f"{base}.xq",
-    )
-    return max(_key_count(redis, key) for key in keys)
+    # RedisBroker 结构：
+    #   dramatiq:<queue>      ready message id list
+    #   dramatiq:<queue>.msgs message body hash
+    #   dramatiq:<queue>.DQ   delayed message id list
+    # 不能把 .msgs / .DQ / .XQ 总量当作 pending，否则未来重试和死信会阻塞低优先级。
+    now_ms = int(time.time() * 1000)
+    ready = _key_count(redis, f"dramatiq:{queue}")
+    due_delayed = _due_delayed_count(redis, queue, now_ms)
+    return ready + due_delayed
 
 
 def _choose_queue(redis: Redis) -> tuple[str | None, dict[str, int]]:
