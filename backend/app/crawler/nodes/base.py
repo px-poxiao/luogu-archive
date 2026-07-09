@@ -9,7 +9,7 @@
 
 保号原则（详见 3.md 七.6）：
 - 游客节点可以高频
-- 认证节点 1 req/6s，单账号每小时 ≤ 300
+- 认证节点默认 1 req/s，单账号每小时配额由 CRAWLER_AUTH_QPH_PER_ACCOUNT 控制
 - 任何节点 403/429 → 该节点冷却；连续 3 节点被封 → 全局冷却
 """
 from __future__ import annotations
@@ -61,6 +61,8 @@ class CrawlerNode:
     burst_capacity: int = 1
     # 出口 IP：None = 使用系统默认路由
     bind_ip: str | None = None
+    # 可选：多个节点共享同一个限流桶，例如单 worker 内 luogu.com.cn 域名级 10s/req。
+    rate_limit_scope: str | None = None
     # 可选额外 header
     extra_headers: dict[str, str] = field(default_factory=dict)
 
@@ -77,7 +79,7 @@ class CrawlerNode:
             return False, max(ttl, 1) * 1000
 
         limiter = TokenBucketLimiter(redis)
-        key = ratelimit_key("crawler_node", self.node_id)
+        key = ratelimit_key("crawler_node", self.rate_limit_scope or self.node_id)
         return await limiter.acquire(
             key,
             rate_per_sec=self.rate_per_sec,

@@ -84,7 +84,7 @@ async def lease_account():
     """上下文管理器：租用一个账号（多账号轮询）。
 
     注意：已**移除**单账号串行锁，多个 worker 可以并发使用同一账号 cookie。
-    全局速率仍由节点级 token bucket（CRAWLER_AUTH_RATE_PER_SEC ≈ 6s/req）控制。
+    全局速率仍由节点级 token bucket（luogu.com 域名桶 1s/req）控制。
 
     选号策略：用 redis INCR 做全局 round-robin，每次 +1 % len(accounts) 选下一个，
     多 worker 高并发时也能均匀分摊到所有账号上 —— 不再都涌向"最久未用"那一个。

@@ -1,13 +1,12 @@
-"""默认本机节点。
+"""Default local crawler nodes.
 
-单机部署：NODE_ID 留空。
-多机部署：每台 worker 在 .env 设 `NODE_ID=worker-X`，节点 ID 自动派生：
-    海外镜像（luogu.com）  → anon / authed
-    主站（luogu.com.cn）   → anon-cn / authed-cn
+Rate limits are per worker and per target domain:
+- luogu.com.cn: 1 request / 10 seconds.
+- luogu.com: 1 request / 1 second.
 
-主站的速率比海外镜像严得多（洛谷官方限制 0.1 req/s = 10s/req），
-所以主站走独立节点，独立 token bucket、独立熔断状态，
-不会因为海外镜像高频访问把主站计数器搞乱。
+Within the same worker, anonymous and authenticated nodes share the same domain
+bucket.  Different workers must use different NODE_ID values, so their buckets
+remain independent.
 """
 from __future__ import annotations
 
@@ -16,11 +15,15 @@ from app.crawler.nodes.base import CrawlerNode, NodeKind
 
 
 class LocalNode(CrawlerNode):
-    """本机节点。"""
+    """Local crawler node."""
 
 
-# .com.cn 主站速率上限（与海外镜像独立）
 _CN_RATE_PER_SEC = 0.1
+_COM_RATE_PER_SEC = 1.0
+
+
+def _worker_scope_id() -> str:
+    return settings.NODE_ID.strip() or "local"
 
 
 def _resolve_node_id(kind: NodeKind, *, cn: bool) -> str:
@@ -32,33 +35,27 @@ def _resolve_node_id(kind: NodeKind, *, cn: bool) -> str:
     return f"{base}-{suffix_kind}{suffix_domain}"
 
 
-# 进程级单例缓存：4 个节点（anon / authed × 海外 / 主站）
+def _domain_rate_limit_scope(*, cn: bool) -> str:
+    domain = "luogu.com.cn" if cn else "luogu.com"
+    return f"{_worker_scope_id()}:domain:{domain}"
+
+
 _nodes: dict[tuple[NodeKind, bool], CrawlerNode] = {}
 
 
 def get_default_node(kind: NodeKind = NodeKind.ANON, *, cn: bool = False) -> CrawlerNode:
-    """返回当前进程的对应节点。
-
-    cn=True → 走 luogu.com.cn 主站，速率 0.1 req/s（10s/req）
-    cn=False → 走海外镜像 luogu.com，速率取 settings.CRAWLER_*_RATE_PER_SEC
-    """
+    """Return the local node for this worker, identity kind and domain."""
     key = (kind, cn)
     cached = _nodes.get(key)
     if cached is not None:
         return cached
 
-    if cn:
-        rate = _CN_RATE_PER_SEC
-    elif kind == NodeKind.ANON:
-        rate = settings.CRAWLER_ANON_RATE_PER_SEC
-    else:
-        rate = settings.CRAWLER_AUTH_RATE_PER_SEC
-
     node = LocalNode(
         node_id=_resolve_node_id(kind, cn=cn),
         kind=kind,
-        rate_per_sec=rate,
+        rate_per_sec=_CN_RATE_PER_SEC if cn else _COM_RATE_PER_SEC,
         burst_capacity=1,
+        rate_limit_scope=_domain_rate_limit_scope(cn=cn),
     )
     _nodes[key] = node
     return node
