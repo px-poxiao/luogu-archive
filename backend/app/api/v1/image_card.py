@@ -101,7 +101,9 @@ def _strip_markdown(md: str) -> str:
     text = re.sub(r"```[\s\S]*?```", " 代码片段 ", text)
     text = re.sub(r"`([^`]*)`", r"\1", text)
     text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"[#>*_~\-]+", " ", text)
+    # Underscores are valid content in usernames, identifiers and code-like text.
+    # Removing them as generic Markdown punctuation corrupts the quoted feed.
+    text = re.sub(r"[#>*~\-]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text or "这条犇犇暂时没有可展示的文字。"
 
