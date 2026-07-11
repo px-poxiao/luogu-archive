@@ -128,12 +128,20 @@ function formatTime(t: string): string {
       <li v-for="g in groups" :key="g.group_key" class="item">
         <!-- 顶部：权限变更头标 + 时间 -->
         <header class="head">
-          <span class="action-tag" :class="g.revoked_permission > 0 ? 'revoked' : 'added'">
+          <span
+            class="action-tag"
+            :class="g.revoked_permission === 0 && g.added_permission === 0
+              ? 'cheater'
+              : (g.revoked_permission > 0 ? 'revoked' : 'added')"
+          >
             <template v-if="g.revoked_permission > 0 && g.added_permission === 0">
               撤销权限
             </template>
             <template v-else-if="g.added_permission > 0 && g.revoked_permission === 0">
               授予权限
+            </template>
+            <template v-else-if="g.revoked_permission === 0 && g.added_permission === 0">
+              棕名惩罚
             </template>
             <template v-else>
               权限变更
@@ -234,6 +242,10 @@ function formatTime(t: string): string {
 }
 .action-tag.added {
   color: var(--lg-green);
+  background: transparent;
+}
+.action-tag.cheater {
+  color: var(--lg-cheater-tag);
   background: transparent;
 }
 .count {

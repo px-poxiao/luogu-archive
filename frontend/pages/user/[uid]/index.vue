@@ -316,13 +316,18 @@ function formatScore(s: number): string {
                   <header class="head">
                     <span
                       class="action-tag"
-                      :class="(a.judgement_revoked ?? 0) > 0 ? 'revoked' : 'added'"
+                      :class="(a.judgement_revoked ?? 0) === 0 && (a.judgement_added ?? 0) === 0
+                        ? 'cheater'
+                        : ((a.judgement_revoked ?? 0) > 0 ? 'revoked' : 'added')"
                     >
                       <template v-if="(a.judgement_revoked ?? 0) > 0 && (a.judgement_added ?? 0) === 0">
                         撤销权限
                       </template>
                       <template v-else-if="(a.judgement_added ?? 0) > 0 && (a.judgement_revoked ?? 0) === 0">
                         授予权限
+                      </template>
+                      <template v-else-if="(a.judgement_revoked ?? 0) === 0 && (a.judgement_added ?? 0) === 0">
+                        棕名惩罚
                       </template>
                       <template v-else>
                         权限变更
@@ -692,6 +697,7 @@ function formatScore(s: number): string {
 }
 .judgement-card .action-tag.revoked { color: var(--lg-red); }
 .judgement-card .action-tag.added { color: var(--lg-green); }
+.judgement-card .action-tag.cheater { color: var(--lg-cheater-tag); }
 .judgement-card .perm-row {
   display: flex;
   align-items: center;
