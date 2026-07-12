@@ -2,43 +2,25 @@
 
 第三方爬虫与存档站，长期保存洛谷社区的**文章 / 剪贴板 / 犇犇 / 陶片放逐 / 题目**信息，并对用户名、难度、题解开放状态等做版本与时间序列追踪。
 
-> 本站为第三方存档，与洛谷官方无关，所有内容版权归原作者。全站 `robots.txt` 禁收录，并提供 `/takedown` 侵权删除入口。**服务器部署在境外，不备案。**
 
----
-
-## 目录
-
-- [技术栈](#技术栈)
-- [目录结构](#目录结构)
-- [架构要点](#架构要点)
-  - [爬虫节点与限流](#爬虫节点与限流)
-  - [任务队列优先级](#任务队列优先级)
-  - [题目分层扫描](#题目分层扫描)
-  - [邮箱验证](#邮箱验证)
-  - [数据版本与隐藏规则](#数据版本与隐藏规则)
-- [本地开发](#本地开发)
-- [生产部署](#生产部署)
-- [运维手册](#运维手册)
-- [配置项参考](#配置项参考)
-- [License](#license)
 
 ---
 
 ## 技术栈
 
-| 层 | 选型 |
-|---|---|
-| 后端 | Python 3.11+ / FastAPI / SQLAlchemy 2.0 (async) |
-| 数据库 | MySQL 8（aiomysql 异步 + pymysql 同步兜底） |
-| 任务队列 | Dramatiq + Redis（4 条优先级队列） |
-| 定时调度 | APScheduler |
-| 爬虫 | httpx (HTTP/2) + lentille-context / `_feInjection` SSR 提取 |
-| 渲染 | 前端 markdown-it + KaTeX；后端 markdown-it-py 管线 + 洛谷语法插件 |
-| 前端 | Nuxt 3（Vue 3 + SSR）+ Pinia |
-| 认证 | argon2（密码）+ TOTP（管理员 2FA）+ JWT（站内用户） |
-| 邮件 | Resend HTTP API（推荐）/ SMTP |
-| 反代 | Nginx（宝塔或裸机均可） |
-| 进程管理 | `start.sh` / `stop.sh`（后台进程 + pid 文件）或 systemd |
+| 层    | 选型                                                        |
+| ---- | --------------------------------------------------------- |
+| 后端   | Python 3.11+ / FastAPI / SQLAlchemy 2.0 (async)           |
+| 数据库  | MySQL 8（aiomysql 异步 + pymysql 同步兜底）                       |
+| 任务队列 | Dramatiq + Redis（4 条优先级队列）                                |
+| 定时调度 | APScheduler                                               |
+| 爬虫   | httpx (HTTP/2) + lentille-context / `_feInjection` SSR 提取 |
+| 渲染   | 前端 markdown-it + KaTeX；后端 markdown-it-py 管线 + 洛谷语法插件      |
+| 前端   | Nuxt 3（Vue 3 + SSR）+ Pinia                                |
+| 认证   | argon2（密码）+ TOTP（管理员 2FA）+ JWT（站内用户）                      |
+| 邮件   | Resend HTTP API（推荐）/ SMTP                                 |
+| 反代   | Nginx（宝塔或裸机均可）                                            |
+| 进程管理 | `start.sh` / `stop.sh`（后台进程 + pid 文件）或 systemd            |
 
 ---
 
@@ -88,12 +70,12 @@ luogu-archive/
 
 爬虫按「单 worker × 目标域名」限速；同一 worker 内 anon/authed 共用域名令牌桶，但熔断状态仍按节点身份记录：
 
-| 节点 ID | 用途 | 速率 |
-|---|---|---|
-| `local-anon` | 海外镜像 luogu.com：犇犇接口、发现页 | 与 `local-authed` 共用单 worker `luogu.com` 桶：1 req/s |
-| `local-authed` | 海外镜像：带 Cookie 认证请求 | 与 `local-anon` 共用单 worker `luogu.com` 桶：1 req/s |
-| `local-anon-cn` | 主站 luogu.com.cn：题目、陶片、标签字典 | 与 `local-authed-cn` 共用单 worker `luogu.com.cn` 桶：0.1 req/s |
-| `local-authed-cn` | 主站：认证请求 | 与 `local-anon-cn` 共用单 worker `luogu.com.cn` 桶：0.1 req/s |
+| 节点 ID             | 用途                         | 速率                                                        |
+| ----------------- | -------------------------- | --------------------------------------------------------- |
+| `local-anon`      | 海外镜像 luogu.com：犇犇接口、发现页    | 与 `local-authed` 共用单 worker `luogu.com` 桶：1 req/s         |
+| `local-authed`    | 海外镜像：带 Cookie 认证请求         | 与 `local-anon` 共用单 worker `luogu.com` 桶：1 req/s           |
+| `local-anon-cn`   | 主站 luogu.com.cn：题目、陶片、标签字典 | 与 `local-authed-cn` 共用单 worker `luogu.com.cn` 桶：0.1 req/s |
+| `local-authed-cn` | 主站：认证请求                    | 与 `local-anon-cn` 共用单 worker `luogu.com.cn` 桶：0.1 req/s   |
 
 `/judgement`、`/problem`、`/_lfe` 等路径在 `crawler/http.py:_resolve_url` 里**强制走主站**，对应也必须用 `cn=True` 的节点取得方式（`get_default_node(kind, cn=True)`）。节点与域名错配会导致海外节点的限流计数被主站 0.1 req/s 污染、被错误熔断 —— 这是历史上"陶片保存不了"的根因。
 
@@ -105,11 +87,11 @@ luogu-archive/
 
 Dramatiq 使用 3 条队列，`scripts.priority_worker` 监督进程按严格顺序消费：只有 `crawler.hi` 为空时才跑 `crawler.mid`，只有 `crawler.mid` 也为空时才跑 `crawler.low`。
 
-| 队列 | 内容 |
-|---|---|
-| `crawler.hi` | 用户正在等待的任务：手动保存、首次访问未收录内容、管理员强制爬取 |
-| `crawler.mid` | 普通后台任务：发现、访问触发刷新、级联、定时犇犇 / 陶片 |
-| `crawler.low` | 所有题目相关任务：题目列表页轮询、题解开放状态检测 |
+| 队列            | 内容                               |
+| ------------- | -------------------------------- |
+| `crawler.hi`  | 用户正在等待的任务：手动保存、首次访问未收录内容、管理员强制爬取 |
+| `crawler.mid` | 普通后台任务：发现、访问触发刷新、级联、定时犇犇 / 陶片    |
+| `crawler.low` | 所有题目相关任务：题目列表页轮询、题解开放状态检测        |
 
 用户手动保存用户主页时，`crawl_user_manual` 会在同一条 hi 任务里连续刷新用户主页和犇犇第一页，避免主页已更新但犇犇还卡在后台队列。题目任务即使由手动保存触发也统一走 low，避免一次列表刷新污染 hi 队列。
 
@@ -133,8 +115,6 @@ Dramatiq 使用 3 条队列，`scripts.priority_worker` 监督进程按严格顺
 ```
 
 支持「重发验证邮件」（`POST /auth/resend-verification`，同邮箱 60s 冷却 + 同 IP 每小时 5 次，不泄露邮箱是否存在）。邮件后端可选 Resend HTTP API（推荐）或 SMTP。
-
-> 注意：从 MySQL 读回的 `DateTime` 是 naive（无时区），与 `utcnow()`（aware）比较前必须补 `tzinfo=timezone.utc`，否则抛 `TypeError` → 500。
 
 ### 数据版本与隐藏规则
 
@@ -307,48 +287,38 @@ redis-cli -a <密码> DEL save:pending:judgement:all lk:crawl:judgement:all
 
 `scripts/backup-mysql.sh` 做 mysqldump，建议挂 cron 每天跑一次。
 
-### 常见故障
-
-| 症状 | 排查 |
-|---|---|
-| 保存按钮没反应 | worker 是否在跑；mid/hi 队列是否堆积；`save:pending:*` 去重锁是否卡住 |
-| 陶片/题目爬取超时 | cn 节点队列是否被全量任务堆满；`crawler:breaker:*` 是否残留 |
-| 邮件发了收不到 | Resend 后台看投递状态；域名是否验证（SPF/DKIM）；`MAIL_FROM` 是否在验证域名下 |
-| 验证链接 500 | naive/aware datetime 比较（见上）；看 `backend.log` traceback |
-| 队列越堆越多 | 检查 cascade 去重是否生效；分层扫描配额是否过大 |
-
 ---
 
 ## 配置项参考
 
 后端 `.env`（完整见 `backend/.env.example`）：
 
-| 变量 | 说明 |
-|---|---|
-| `APP_ENV` / `APP_DEBUG` | 生产填 `production` / `false` |
-| `DB_*` | MySQL 连接 |
-| `REDIS_URL` | Redis（含密码，如 `redis://:pass@127.0.0.1:6379/0`） |
-| `CRAWLER_BASE_URL` | 默认 `https://www.luogu.com.cn` |
-| `CRAWLER_ANON_RATE_PER_SEC` / `CRAWLER_AUTH_RATE_PER_SEC` | 兼容旧配置；当前本地节点按单 worker 域名桶固定：luogu.com 1 req/s，luogu.com.cn 0.1 req/s |
-| `NODE_ID` | 多机部署时每台 worker 填唯一值，单机留空 |
-| `JWT_SECRET` | 站内用户 JWT 密钥（256bit hex） |
-| `ADMIN_TOTP_ENCRYPTION_KEY` | 管理员 TOTP secret 加密用 Fernet key |
-| `WEB_PUBLIC_ORIGIN` | 对外域名，**邮件验证链接靠它拼，务必填对** |
-| `WEB_CORS_ORIGINS` | 允许的前端来源，逗号分隔 |
-| `MAIL_PROVIDER` | `resend` 或 `smtp` |
-| `RESEND_API_KEY` / `MAIL_FROM` | Resend：`MAIL_FROM` 须为已验证域名地址 |
-| `SMTP_*` | SMTP 配置 |
-| `CAPTCHA_PROVIDER` / `CAPTCHA_SITE_KEY` / `CAPTCHA_SECRET` | Turnstile / hCaptcha |
-| `SAVE_IP_WINDOW_*` | 保存按钮 IP 限流 |
-| `IMAGE_MIRROR_*` | 图片镜像存储 |
+| 变量                                                         | 说明                                                                   |
+| ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| `APP_ENV` / `APP_DEBUG`                                    | 生产填 `production` / `false`                                           |
+| `DB_*`                                                     | MySQL 连接                                                             |
+| `REDIS_URL`                                                | Redis（含密码，如 `redis://:pass@127.0.0.1:6379/0`）                        |
+| `CRAWLER_BASE_URL`                                         | 默认 `https://www.luogu.com.cn`                                        |
+| `CRAWLER_ANON_RATE_PER_SEC` / `CRAWLER_AUTH_RATE_PER_SEC`  | 兼容旧配置；当前本地节点按单 worker 域名桶固定：luogu.com 1 req/s，luogu.com.cn 0.1 req/s |
+| `NODE_ID`                                                  | 多机部署时每台 worker 填唯一值，单机留空                                             |
+| `JWT_SECRET`                                               | 站内用户 JWT 密钥（256bit hex）                                              |
+| `ADMIN_TOTP_ENCRYPTION_KEY`                                | 管理员 TOTP secret 加密用 Fernet key                                       |
+| `WEB_PUBLIC_ORIGIN`                                        | 对外域名，**邮件验证链接靠它拼，务必填对**                                              |
+| `WEB_CORS_ORIGINS`                                         | 允许的前端来源，逗号分隔                                                         |
+| `MAIL_PROVIDER`                                            | `resend` 或 `smtp`                                                    |
+| `RESEND_API_KEY` / `MAIL_FROM`                             | Resend：`MAIL_FROM` 须为已验证域名地址                                         |
+| `SMTP_*`                                                   | SMTP 配置                                                              |
+| `CAPTCHA_PROVIDER` / `CAPTCHA_SITE_KEY` / `CAPTCHA_SECRET` | Turnstile / hCaptcha                                                 |
+| `SAVE_IP_WINDOW_*`                                         | 保存按钮 IP 限流                                                           |
+| `IMAGE_MIRROR_*`                                           | 图片镜像存储                                                               |
 
 前端 `.env`：
 
-| 变量 | 说明 |
-|---|---|
-| `NUXT_API_INTERNAL_URL` | SSR 服务端访问后端的内网地址（如 `http://127.0.0.1:8000`） |
-| `NUXT_PUBLIC_API_BASE_URL` | 浏览器访问后端的地址（生产填对外域名） |
-| `NUXT_PUBLIC_CAPTCHA_PROVIDER` / `NUXT_PUBLIC_CAPTCHA_SITE_KEY` | 人机验证 |
+| 变量                                                              | 说明                                          |
+| --------------------------------------------------------------- | ------------------------------------------- |
+| `NUXT_API_INTERNAL_URL`                                         | SSR 服务端访问后端的内网地址（如 `http://127.0.0.1:8000`） |
+| `NUXT_PUBLIC_API_BASE_URL`                                      | 浏览器访问后端的地址（生产填对外域名）                         |
+| `NUXT_PUBLIC_CAPTCHA_PROVIDER` / `NUXT_PUBLIC_CAPTCHA_SITE_KEY` | 人机验证                                        |
 
 ---
 

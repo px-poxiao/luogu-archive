@@ -51,3 +51,6 @@ backend/tests/.local/
 
 # 死妈搜狗输入法我操你妈
 %SystemDrive%/
+
+# 测试文件
+test/
