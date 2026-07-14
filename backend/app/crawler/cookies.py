@@ -93,7 +93,12 @@ async def lease_account():
         async with lease_account() as cookies:
             if cookies is None:
                 return   # 没启用账号
-            result = await fetch_authed(url, cookies=cookies.as_cookie_dict(), ...)
+            result = await fetch_authed(
+                url,
+                cookies=cookies.as_cookie_dict(),
+                account_id=cookies.account_id,
+                ...,
+            )
     """
     async with db_session() as session:
         q = (

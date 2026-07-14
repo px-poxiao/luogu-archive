@@ -300,6 +300,7 @@ redis-cli -a <密码> DEL save:pending:judgement:all lk:crawl:judgement:all
 | `REDIS_URL`                                                | Redis（含密码，如 `redis://:pass@127.0.0.1:6379/0`）                        |
 | `CRAWLER_BASE_URL`                                         | 默认 `https://www.luogu.com.cn`                                        |
 | `CRAWLER_ANON_RATE_PER_SEC` / `CRAWLER_AUTH_RATE_PER_SEC`  | 兼容旧配置；当前本地节点按单 worker 域名桶固定：luogu.com 1 req/s，luogu.com.cn 0.1 req/s |
+| `CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC`                        | 同一 Cookie 账号的请求最小间隔，默认 5 秒；Redis 跨线程、进程和 worker 共享                |
 | `NODE_ID`                                                  | 多机部署时每台 worker 填唯一值，单机留空                                             |
 | `JWT_SECRET`                                               | 站内用户 JWT 密钥（256bit hex）                                              |
 | `ADMIN_TOTP_ENCRYPTION_KEY`                                | 管理员 TOTP secret 加密用 Fernet key                                       |

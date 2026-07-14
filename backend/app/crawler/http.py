@@ -30,6 +30,7 @@ from app.core.exceptions import (
     CrawlerTimeoutError,
 )
 from app.core.logging import get_logger
+from app.core.ratelimit import TokenBucketLimiter, ratelimit_key
 from app.crawler.lentille import extract_lentille_context
 from app.crawler.nodes.base import CrawlerNode, NodeKind
 
@@ -206,6 +207,33 @@ async def _wait_for_slot(
         if time.monotonic() * 1000 + retry_after_ms > deadline:
             raise CrawlerBlockedError(
                 f"爬虫节点 {node.node_id} 限流/熔断中（等待 {retry_after_ms}ms 超时）",
+            )
+        await asyncio.sleep(retry_after_ms / 1000)
+
+
+async def _wait_for_account_slot(
+    account_id: int,
+    redis: Redis,
+    *,
+    max_wait_ms: int = 120_000,
+) -> None:
+    """Wait for the per-account request bucket shared by all workers."""
+    interval_sec = max(float(settings.CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC), 0.001)
+    limiter = TokenBucketLimiter(redis)
+    key = ratelimit_key("crawler_account_request", str(account_id))
+    deadline = time.monotonic() * 1000 + max_wait_ms
+
+    while True:
+        allowed, retry_after_ms = await limiter.acquire(
+            key,
+            rate_per_sec=1.0 / interval_sec,
+            capacity=1,
+        )
+        if allowed:
+            return
+        if time.monotonic() * 1000 + retry_after_ms > deadline:
+            raise CrawlerBlockedError(
+                f"爬取账号 {account_id} 请求限流中（等待 {retry_after_ms}ms 超时）"
             )
         await asyncio.sleep(retry_after_ms / 1000)
 
@@ -407,6 +435,7 @@ async def fetch_authed(
     node: CrawlerNode | None = None,
     redis: Redis,
     cookies: dict[str, str],
+    account_id: int,
     params: dict[str, Any] | None = None,
     accept_json: bool = True,   # 鉴权接口通常要 JSON
     parse: Literal["html", "json", "auto"] = "auto",
@@ -421,6 +450,7 @@ async def fetch_authed(
 
     if "_uid" not in cookies or "__client_id" not in cookies:
         raise ValueError("cookies 必须含 _uid 和 __client_id")
+    await _wait_for_account_slot(account_id, redis)
     url = _resolve_url(path_or_url)
     if node is None:
         cn = "luogu.com.cn" in url

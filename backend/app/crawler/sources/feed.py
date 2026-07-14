@@ -92,6 +92,7 @@ async def _crawl_inner(uid: int, page: int, *, trigger: str) -> None:
                 node=node,
                 redis=redis,
                 cookies=acc.as_cookie_dict(),
+                account_id=acc.account_id,
                 params={"user": uid, "page": page},
                 accept_json=True,
                 parse="json",
