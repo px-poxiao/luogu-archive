@@ -36,8 +36,10 @@ def _env_int(name: str, default: int) -> int:
 
 POLL_SEC = max(1, _env_int("PRIORITY_WORKER_POLL_SEC", 2))
 GRACE_SEC = max(1, _env_int("PRIORITY_WORKER_GRACE_SEC", 300))
-PROCESSES = max(1, _env_int("PRIORITY_WORKER_PROCESSES", 1))
-THREADS = max(1, _env_int("PRIORITY_WORKER_THREADS", 4))
+# 严格优先级和“任务完成后冷却”都要求同一时刻只执行一个 actor。
+# 不允许环境变量误把并发重新调高；横向扩容仍由 Redis 限流门兜底。
+PROCESSES = 1
+THREADS = 1
 DELAY_SCAN_LIMIT = max(1, _env_int("PRIORITY_WORKER_DELAY_SCAN_LIMIT", 500))
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]

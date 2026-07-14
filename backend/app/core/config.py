@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     CRAWLER_AUTH_QPH_PER_ACCOUNT: int = 2000
     CRAWLER_BREAKER_COOLDOWN_SEC: int = 300
     CRAWLER_GLOBAL_BREAKER_NODE_THRESHOLD: int = 3
-    CRAWLER_TASK_LOCK_TTL_SEC: int = 30
+    CRAWLER_TASK_LOCK_TTL_SEC: int = 300
     CRAWLER_REQUEST_TIMEOUT_SEC: int = 15
 
     # ---------- 节点身份（多 worker 部署） ----------

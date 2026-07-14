@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from datetime import timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -18,6 +19,8 @@ from sqlalchemy import and_, func, or_, select
 
 from app.core.db import db_session
 from app.core.logging import get_logger, setup_logging
+from app.core.locks import DistributedLock
+from app.core.redis_client import get_redis
 from app.models._common import utcnow
 from app.models.luogu_content import Problem
 from app.models.luogu_user import LuoguUser
@@ -59,7 +62,7 @@ async def job_feed_tiered_polling() -> None:
     """
     from app.tasks.actors.crawl import crawl_user_feeds
     now = utcnow()
-    # 计算各桶的"上次爬取时间应早于"阈值（用 last_crawled_at 近似）
+    # 计算各桶的"上次犇犇爬取时间应早于"阈值。
     async with db_session() as session:
         # S 桶：最近 3h 发过犇犇 & 上次爬虫 > 10 min 前
         q = (
@@ -68,8 +71,8 @@ async def job_feed_tiered_polling() -> None:
                 LuoguUser.last_active_feed_at.is_not(None),
                 LuoguUser.last_active_feed_at >= now - timedelta(hours=3),
                 or_(
-                    LuoguUser.last_crawled_at < now - timedelta(minutes=10),
-                    LuoguUser.last_crawled_at.is_(None),
+                    LuoguUser.last_feed_crawled_at < now - timedelta(minutes=10),
+                    LuoguUser.last_feed_crawled_at.is_(None),
                 ),
             )
             .limit(500)
@@ -83,8 +86,8 @@ async def job_feed_tiered_polling() -> None:
                 LuoguUser.last_active_feed_at < now - timedelta(hours=3),
                 LuoguUser.last_active_feed_at >= now - timedelta(days=1),
                 or_(
-                    LuoguUser.last_crawled_at < now - timedelta(hours=1),
-                    LuoguUser.last_crawled_at.is_(None),
+                    LuoguUser.last_feed_crawled_at < now - timedelta(hours=1),
+                    LuoguUser.last_feed_crawled_at.is_(None),
                 ),
             )
             .limit(500)
@@ -98,8 +101,8 @@ async def job_feed_tiered_polling() -> None:
                 LuoguUser.last_active_feed_at < now - timedelta(days=1),
                 LuoguUser.last_active_feed_at >= now - timedelta(days=2),
                 or_(
-                    LuoguUser.last_crawled_at < now - timedelta(hours=2, minutes=30),
-                    LuoguUser.last_crawled_at.is_(None),
+                    LuoguUser.last_feed_crawled_at < now - timedelta(hours=2, minutes=30),
+                    LuoguUser.last_feed_crawled_at.is_(None),
                 ),
             )
             .limit(500)
@@ -113,18 +116,32 @@ async def job_feed_tiered_polling() -> None:
                 LuoguUser.last_active_feed_at < now - timedelta(days=2),
                 LuoguUser.last_active_feed_at >= now - timedelta(days=7),
                 or_(
-                    LuoguUser.last_crawled_at < now - timedelta(days=1),
-                    LuoguUser.last_crawled_at.is_(None),
+                    LuoguUser.last_feed_crawled_at < now - timedelta(days=1),
+                    LuoguUser.last_feed_crawled_at.is_(None),
                 ),
             )
             .limit(500)
         )
         c_bucket = [row[0] for row in (await session.execute(q)).all()]
 
+    redis = get_redis()
+    lock = DistributedLock(redis)
     total = 0
+    deduped = 0
     for uid in s_bucket + a_bucket + b_bucket + c_bucket:
-        crawl_user_feeds.send(uid, 1, "scheduled")
-        total += 1
+        dedup_key = f"scheduler:feed:queued:{uid}"
+        token = secrets.token_urlsafe(18)
+        # 成功任务会主动释放；失败/丢失消息最多阻塞半小时，覆盖重试窗口即可。
+        queued = await redis.set(dedup_key, token, nx=True, ex=30 * 60)
+        if not queued:
+            deduped += 1
+            continue
+        try:
+            crawl_user_feeds.send(uid, 1, "scheduled", token)
+            total += 1
+        except Exception:
+            await lock.release(dedup_key, token)
+            raise
     log.info(
         "feed_polling.enqueued",
         s=len(s_bucket),
@@ -132,6 +149,7 @@ async def job_feed_tiered_polling() -> None:
         b=len(b_bucket),
         c=len(c_bucket),
         total=total,
+        deduped=deduped,
     )
 
 

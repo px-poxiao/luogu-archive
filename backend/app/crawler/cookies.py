@@ -83,8 +83,8 @@ async def pick_account(session: AsyncSession) -> AccountCookies | None:
 async def lease_account():
     """上下文管理器：租用一个账号（多账号轮询）。
 
-    注意：已**移除**单账号串行锁，多个 worker 可以并发使用同一账号 cookie。
-    全局速率仍由节点级 token bucket（luogu.com 域名桶 1s/req）控制。
+    同一账号跨 worker 严格串行；调用方退出上下文（包括写库和审计完成）后，
+    才开始 CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC 冷却。
 
     选号策略：用 redis INCR 做全局 round-robin，每次 +1 % len(accounts) 选下一个，
     多 worker 高并发时也能均匀分摊到所有账号上 —— 不再都涌向"最久未用"那一个。
@@ -126,7 +126,13 @@ async def lease_account():
             client_id=decrypt_cookie(acc.client_id_encrypted),
             c3vk=decrypt_cookie(acc.c3vk_encrypted) if acc.c3vk_encrypted else None,
         )
-        yield cookies
+        # 延迟导入避免 cookies -> http -> crawler 模块初始化环。
+        from app.crawler.http import crawler_task_cooldown
+        from app.crawler.nodes import NodeKind, get_default_node
+
+        node = get_default_node(NodeKind.AUTHED)
+        async with crawler_task_cooldown(node, redis, account_id=acc.id):
+            yield cookies
 
 
 async def mark_account_failed(

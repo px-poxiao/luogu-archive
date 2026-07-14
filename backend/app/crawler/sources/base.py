@@ -40,7 +40,9 @@ async def task_lock(scope: str, ident: str, *, ttl_sec: int | None = None):
     redis = get_redis()
     lock = DistributedLock(redis)
     key = lock_key(f"crawl:{scope}", ident)
-    async with lock.guard(key, ttl_sec=ttl_sec or settings.CRAWLER_TASK_LOCK_TTL_SEC) as got:
+    # 正常任务可能包含解析、批量写库和审计；锁不能早于任务级限流租约失效。
+    effective_ttl = max(ttl_sec or settings.CRAWLER_TASK_LOCK_TTL_SEC, 300)
+    async with lock.guard(key, ttl_sec=effective_ttl) as got:
         yield got
 
 

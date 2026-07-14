@@ -107,19 +107,24 @@ async def _crawl_inner(uid: int, page: int, *, trigger: str) -> None:
             async with db_session() as session:
                 inserted = await _insert_feeds(session, results)
                 await _sync_users_from_feeds(session, results)
-                # 若是 page=1 且有数据，更新该用户 last_active_feed_at
-                if page == 1 and results:
-                    latest_time = max(int(r.get("time") or 0) for r in results if isinstance(r, dict))
+                target_user = await session.get(LuoguUser, uid)
+                if target_user is not None:
+                    target_user.last_feed_crawled_at = utcnow()
+
+                # 若是 page=1 且有数据，更新该用户 last_active_feed_at。
+                if page == 1 and results and target_user is not None:
+                    latest_time = max(
+                        (int(r.get("time") or 0) for r in results if isinstance(r, dict)),
+                        default=0,
+                    )
                     if latest_time > 0:
-                        u = await session.get(LuoguUser, uid)
-                        if u is not None:
-                            new_dt = datetime.fromtimestamp(latest_time, tz=timezone.utc)
-                            # MySQL 拿出来是 naive，强制补 UTC 再比较
-                            cur = u.last_active_feed_at
-                            if cur is not None and cur.tzinfo is None:
-                                cur = cur.replace(tzinfo=timezone.utc)
-                            if cur is None or cur < new_dt:
-                                u.last_active_feed_at = new_dt
+                        new_dt = datetime.fromtimestamp(latest_time, tz=timezone.utc)
+                        # MySQL 拿出来是 naive，强制补 UTC 再比较
+                        cur = target_user.last_active_feed_at
+                        if cur is not None and cur.tzinfo is None:
+                            cur = cur.replace(tzinfo=timezone.utc)
+                        if cur is None or cur < new_dt:
+                            target_user.last_active_feed_at = new_dt
                 await session.commit()
 
             dur = int((_t.monotonic() - start) * 1000)

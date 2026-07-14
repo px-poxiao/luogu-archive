@@ -50,8 +50,12 @@ def _shutdown() -> None:
         _thread.join(timeout=5)
 
 
-def run_async(coro: Coroutine[None, None, T], *, timeout: float | None = 60.0) -> T:
-    """在后台 loop 上执行协程，阻塞当前（worker）线程等待结果。"""
+def run_async(coro: Coroutine[None, None, T], *, timeout: float | None = None) -> T:
+    """在后台 loop 上执行协程，并等待它真实结束。
+
+    HTTP 层已有独立超时。这里不能设置较短的总超时：
+    ``Future.result`` 超时不会取消后台协程，Dramatiq 重试后会与原任务重叠执行。
+    """
     loop = _ensure_loop()
     fut = asyncio.run_coroutine_threadsafe(coro, loop)
     return fut.result(timeout=timeout)

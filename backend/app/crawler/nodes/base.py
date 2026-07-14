@@ -66,7 +66,8 @@ class CrawlerNode:
     # 可选额外 header
     extra_headers: dict[str, str] = field(default_factory=dict)
 
-    def _rate_limit_key(self) -> str:
+    @property
+    def rate_limit_key(self) -> str:
         return ratelimit_key("crawler_node", self.rate_limit_scope or self.node_id)
 
     @property
@@ -92,14 +93,14 @@ class CrawlerNode:
 
         limiter = CompletionCooldownLimiter(redis)
         return await limiter.acquire(
-            self._rate_limit_key(),
+            self.rate_limit_key,
             lease_sec=lease_sec,
         )
 
     async def finish_request(self, redis: Redis, token: str) -> bool:
         """请求结束后进入本节点冷却。"""
         return await CompletionCooldownLimiter(redis).finish(
-            self._rate_limit_key(),
+            self.rate_limit_key,
             token,
             cooldown_sec=self.cooldown_sec,
         )
@@ -107,7 +108,7 @@ class CrawlerNode:
     async def cancel_request(self, redis: Redis, token: str) -> bool:
         """请求尚未发出时取消占用，不产生冷却。"""
         return await CompletionCooldownLimiter(redis).release(
-            self._rate_limit_key(),
+            self.rate_limit_key,
             token,
         )
 

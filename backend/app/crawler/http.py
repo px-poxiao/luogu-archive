@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -43,6 +44,10 @@ log = get_logger(__name__)
 # 单进程共享一个 httpx.AsyncClient（连接池）。
 # 多账号不共享同一个 client.cookies，因为我们每次请求显式传 cookies 参数。
 _http_client: httpx.AsyncClient | None = None
+_active_cooldown_keys: ContextVar[frozenset[str]] = ContextVar(
+    "crawler_active_cooldown_keys",
+    default=frozenset(),
+)
 
 
 def _build_default_headers(node: CrawlerNode) -> dict[str, str]:
@@ -193,12 +198,12 @@ async def _wait_for_slot(
     redis: Redis,
     *,
     deadline: float,
+    lease_sec: float,
 ) -> str:
     """等待并占用节点完成冷却门。
 
     若等不到（比如熔断中）→ 抛 CrawlerBlockedError。
     """
-    lease_sec = max(float(settings.CRAWLER_REQUEST_TIMEOUT_SEC) + 30.0, 60.0)
     while True:
         token, retry_after_ms = await node.try_acquire(redis, lease_sec=lease_sec)
         if token is not None:
@@ -263,44 +268,96 @@ async def _request_slots(
     redis: Redis,
     *,
     account_id: int | None = None,
+    lease_sec: float | None = None,
 ):
-    """在一次 HTTP 请求期间占用账号门和域名门，结束后分别开始冷却。"""
+    """占用账号门和域名门，退出上下文后分别开始冷却。"""
+    active_keys = _active_cooldown_keys.get()
+    account_key = (
+        ratelimit_key("crawler_account_request", str(account_id))
+        if account_id is not None
+        else None
+    )
+    need_account_slot = account_key is not None and account_key not in active_keys
+    need_node_slot = node.rate_limit_key not in active_keys
+
     account_cooldown_sec = (
         max(float(settings.CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC), 0.001)
-        if account_id is not None
+        if need_account_slot
         else 0.0
     )
-    max_wait_sec = max(node.cooldown_sec, account_cooldown_sec)
+    max_wait_sec = max(node.cooldown_sec if need_node_slot else 0.0, account_cooldown_sec)
+    if max_wait_sec <= 0:
+        yield
+        return
+
     deadline = time.monotonic() + max_wait_sec
-    # 账号门先获取，租约需覆盖剩余等待预算、请求超时和清理余量。
-    account_lease_sec = max_wait_sec + float(settings.CRAWLER_REQUEST_TIMEOUT_SEC) + 30.0
+    # 普通请求覆盖 HTTP 超时；任务级上下文使用更长租约覆盖解析和写库。
+    effective_lease_sec = max(
+        float(lease_sec or 0),
+        max_wait_sec + float(settings.CRAWLER_REQUEST_TIMEOUT_SEC) + 30.0,
+        60.0,
+    )
 
     account_slot: tuple[str, str] | None = None
-    if account_id is not None:
+    if need_account_slot and account_id is not None:
         account_slot = await _wait_for_account_slot(
             account_id,
             redis,
             deadline=deadline,
-            lease_sec=account_lease_sec,
+            lease_sec=effective_lease_sec,
         )
 
-    try:
-        node_token = await _wait_for_slot(node, redis, deadline=deadline)
-    except BaseException:
-        if account_slot is not None:
-            await _cancel_account_slot(redis, account_slot)
-        raise
+    node_token: str | None = None
+    if need_node_slot:
+        try:
+            node_token = await _wait_for_slot(
+                node,
+                redis,
+                deadline=deadline,
+                lease_sec=effective_lease_sec,
+            )
+        except BaseException:
+            if account_slot is not None:
+                await _cancel_account_slot(redis, account_slot)
+            raise
+
+    acquired_keys = set(active_keys)
+    if account_slot is not None:
+        acquired_keys.add(account_slot[0])
+    if node_token is not None:
+        acquired_keys.add(node.rate_limit_key)
+    context_token = _active_cooldown_keys.set(frozenset(acquired_keys))
 
     try:
         yield
     finally:
-        finish_calls = [node.finish_request(redis, node_token)]
+        _active_cooldown_keys.reset(context_token)
+        finish_calls = []
+        if node_token is not None:
+            finish_calls.append(node.finish_request(redis, node_token))
         if account_slot is not None:
             finish_calls.append(_finish_account_slot(redis, account_slot))
         results = await asyncio.gather(*finish_calls, return_exceptions=True)
         for result in results:
             if isinstance(result, BaseException):
                 log.error("crawler.cooldown_finish_failed", error=str(result))
+
+
+@asynccontextmanager
+async def crawler_task_cooldown(
+    node: CrawlerNode,
+    redis: Redis,
+    *,
+    account_id: int | None = None,
+):
+    """占用限流门直到整个爬虫任务完成，随后才开始冷却。"""
+    async with _request_slots(
+        node,
+        redis,
+        account_id=account_id,
+        lease_sec=300.0,
+    ):
+        yield
 
 
 async def _do_request(

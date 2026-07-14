@@ -89,6 +89,10 @@ class LuoguUser(Base, TimestampMixin):
     last_active_feed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    # 最近一次完成犇犇页抓取的时间；与用户主页 last_crawled_at 分开。
+    last_feed_crawled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     # 关系
     name_versions: Mapped[list[UserNameVersion]] = relationship(
