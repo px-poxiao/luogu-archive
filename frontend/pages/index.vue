@@ -2,31 +2,37 @@
 definePageMeta({ layout: 'default' })
 
 type JumpType = 'article' | 'paste' | 'user'
+type Announcement = {
+  id: number
+  title: string
+  summary: string
+  content: string
+  published_at: string
+}
 
 const inputId = ref('')
 const selectedType = ref<JumpType>('article')
 const showAllAnnouncements = ref(false)
-const expandedAnnouncementId = ref<string | null>(null)
+const expandedAnnouncementId = ref<number | null>(null)
+const api = useApi()
 
-const announcements = [
-  {
-    id: 'problem-difficulty-20260714',
-    title: '关于题目难度标签更新的说明',
-    summary: '洛谷近期调整了题目难度分级，档案馆已完成标签兼容与历史数据清理。',
-    detail: '新的题目难度标签现已正常展示，原有的未知难度记录也已完成清理。后续抓取到的新题会直接使用新的难度分级。',
-    date: '2026-07-14',
+const { data: announcementData } = await useAsyncData<Announcement[]>(
+  'home-announcements',
+  async () => {
+    try {
+      return await api<Announcement[]>('/site/announcements', {
+        query: { limit: 10 },
+      })
+    } catch {
+      return []
+    }
   },
-  {
-    id: 'crawler-priority-20260710',
-    title: '爬取队列优先级调整完成',
-    summary: '爬取任务现按高、中、低优先级严格处理，手动任务将优先响应。',
-    detail: '用户主动触发的保存和更新任务进入高优先级队列，常规抓取进入中优先级队列，题目轮询进入低优先级队列。',
-    date: '2026-07-10',
-  },
-]
+)
+
+const announcements = computed(() => announcementData.value || [])
 
 const visibleAnnouncements = computed(() => (
-  showAllAnnouncements.value ? announcements : announcements.slice(0, 1)
+  showAllAnnouncements.value ? announcements.value : announcements.value.slice(0, 1)
 ))
 
 const jumpTypes: Array<{
@@ -98,8 +104,12 @@ function go(type?: JumpType) {
   navigateTo(`/${targetType}/${encodeURIComponent(value)}`)
 }
 
-function toggleAnnouncement(id: string) {
+function toggleAnnouncement(id: number) {
   expandedAnnouncementId.value = expandedAnnouncementId.value === id ? null : id
+}
+
+function announcementDate(value: string) {
+  return value.slice(0, 10)
 }
 
 </script>
@@ -111,7 +121,11 @@ function toggleAnnouncement(id: string) {
       subtitle="第三方存档：保存文章、剪贴板、犇犇、陶片放逐和题目信息。"
     />
 
-    <section class="announcement-panel" aria-labelledby="announcement-title">
+    <section
+      v-if="announcements.length"
+      class="announcement-panel"
+      aria-labelledby="announcement-title"
+    >
       <header class="announcement-head">
         <div class="announcement-heading">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -167,7 +181,9 @@ function toggleAnnouncement(id: string) {
               <strong>{{ announcement.title }}</strong>
               <small>{{ announcement.summary }}</small>
             </span>
-            <time :datetime="announcement.date">{{ announcement.date }}</time>
+            <time :datetime="announcement.published_at">
+              {{ announcementDate(announcement.published_at) }}
+            </time>
             <span class="announcement-toggle" title="展开公告">
               <svg
                 viewBox="0 0 24 24"
@@ -190,7 +206,7 @@ function toggleAnnouncement(id: string) {
             :id="`announcement-detail-${announcement.id}`"
             class="announcement-detail"
           >
-            {{ announcement.detail }}
+            {{ announcement.content }}
           </p>
         </article>
       </div>
@@ -468,6 +484,7 @@ function toggleAnnouncement(id: string) {
   border-top: 1px dashed var(--border);
   color: var(--text-muted);
   font-size: 14px;
+  white-space: pre-wrap;
 }
 
 .home-board {

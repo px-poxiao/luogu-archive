@@ -11,10 +11,44 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.core.redis_client import get_redis
+from app.models.admin import SiteAnnouncement
 from app.models.luogu_content import Article, Feed, Judgement, Paste
 from app.models.task import CrawlTask
 
 router = APIRouter(prefix="/site", tags=["site"])
+
+
+class PublicAnnouncement(BaseModel):
+    id: int
+    title: str
+    summary: str
+    content: str
+    published_at: datetime
+
+
+@router.get("/announcements", response_model=list[PublicAnnouncement])
+async def list_public_announcements(
+    limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+) -> list[PublicAnnouncement]:
+    q = (
+        select(SiteAnnouncement)
+        .where(SiteAnnouncement.is_published.is_(True))
+        .order_by(desc(SiteAnnouncement.published_at), desc(SiteAnnouncement.id))
+        .limit(limit)
+    )
+    rows = (await db.execute(q)).scalars().all()
+    return [
+        PublicAnnouncement(
+            id=row.id,
+            title=row.title,
+            summary=row.summary,
+            content=row.content,
+            published_at=row.published_at,
+        )
+        for row in rows
+        if row.published_at is not None
+    ]
 
 
 class SiteTotals(BaseModel):

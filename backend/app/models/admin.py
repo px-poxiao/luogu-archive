@@ -8,6 +8,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -60,6 +61,29 @@ class AdminAuditLog(Base):
     ua: Mapped[str | None] = mapped_column(String(512), nullable=True)
     happened_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+class SiteAnnouncement(Base, TimestampMixin):
+    """由管理员发布到首页的站点公告。"""
+
+    __tablename__ = "site_announcements"
+    __table_args__ = (
+        Index("ix_site_announcements_publish", "is_published", "published_at"),
+    )
+
+    id: Mapped[int] = BigPKColumn()
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str] = mapped_column(String(500), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_by_admin_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("admins.id", ondelete="RESTRICT"),
+        nullable=False,
     )
 
 

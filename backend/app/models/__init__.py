@@ -14,6 +14,7 @@ from app.models.admin import (
     Admin,
     AdminAuditLog,
     CrawlerAccount,
+    SiteAnnouncement,
 )
 from app.models.luogu_content import (
     Article,
@@ -64,6 +65,7 @@ __all__ = [
     "Problem",
     "ProblemSolutionHistory",
     "SaveRequest",
+    "SiteAnnouncement",
     "SiteComment",
     "SiteSession",
     "SiteUser",

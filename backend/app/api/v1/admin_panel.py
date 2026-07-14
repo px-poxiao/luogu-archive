@@ -8,6 +8,13 @@
     DELETE /paste/{id}
     DELETE /feed/{id}
     DELETE /user/{uid}/hide_all    隐藏某用户所有历史名
+  站点公告
+    GET    /announcements
+    POST   /announcements
+    PUT    /announcements/{id}
+    POST   /announcements/{id}/publish
+    POST   /announcements/{id}/unpublish
+    DELETE /announcements/{id}
   删除申请
     GET    /takedowns              列表
     POST   /takedowns/{id}/approve
@@ -28,7 +35,7 @@ from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,7 +51,7 @@ from app.models._common import (
     TakedownStatus,
     utcnow,
 )
-from app.models.admin import Admin, AdminAuditLog, CrawlerAccount
+from app.models.admin import Admin, AdminAuditLog, CrawlerAccount, SiteAnnouncement
 from app.models.luogu_content import Article, Feed, Paste
 from app.models.luogu_user import UserNameVersion, UserNameViolation
 from app.models.task import CrawlTask, TakedownRequest
@@ -168,6 +175,178 @@ async def hide_all_names(
     )
     await db.commit()
     return {"message": "已隐藏此用户此刻前所有历史用户名"}
+
+
+# ============================================================
+# 站点公告
+# ============================================================
+
+class AnnouncementWriteReq(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    summary: str = Field(..., min_length=1, max_length=500)
+    content: str = Field(..., min_length=1, max_length=20_000)
+    is_published: bool = False
+
+    @field_validator("title", "summary", "content")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("内容不能为空")
+        return value
+
+
+def _announcement_dict(row: SiteAnnouncement) -> dict:
+    return {
+        "id": row.id,
+        "title": row.title,
+        "summary": row.summary,
+        "content": row.content,
+        "is_published": row.is_published,
+        "published_at": row.published_at.isoformat() if row.published_at else None,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+        "created_by_admin_id": row.created_by_admin_id,
+    }
+
+
+@router.get("/announcements")
+async def list_announcements(
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    q = select(SiteAnnouncement).order_by(
+        desc(SiteAnnouncement.created_at),
+        desc(SiteAnnouncement.id),
+    )
+    rows = (await db.execute(q)).scalars().all()
+    return [_announcement_dict(row) for row in rows]
+
+
+@router.post("/announcements")
+async def create_announcement(
+    body: AnnouncementWriteReq,
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    row = SiteAnnouncement(
+        title=body.title.strip(),
+        summary=body.summary.strip(),
+        content=body.content.strip(),
+        is_published=body.is_published,
+        published_at=utcnow() if body.is_published else None,
+        created_by_admin_id=admin.id,
+    )
+    db.add(row)
+    await db.flush()
+    await _audit(
+        db,
+        admin,
+        request,
+        "announcement_create",
+        target_type="announcement",
+        target_id=str(row.id),
+        params={"title": row.title, "is_published": row.is_published},
+    )
+    await db.commit()
+    return _announcement_dict(row)
+
+
+@router.put("/announcements/{announcement_id}")
+async def update_announcement(
+    announcement_id: int,
+    body: AnnouncementWriteReq,
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    row = await db.get(SiteAnnouncement, announcement_id)
+    if row is None:
+        raise NotFoundError("公告不存在")
+
+    was_published = row.is_published
+    row.title = body.title.strip()
+    row.summary = body.summary.strip()
+    row.content = body.content.strip()
+    row.is_published = body.is_published
+    if body.is_published and not was_published:
+        row.published_at = utcnow()
+    elif not body.is_published:
+        row.published_at = None
+
+    await _audit(
+        db,
+        admin,
+        request,
+        "announcement_update",
+        target_type="announcement",
+        target_id=str(row.id),
+        params={"title": row.title, "is_published": row.is_published},
+    )
+    await db.commit()
+    return _announcement_dict(row)
+
+
+@router.post("/announcements/{announcement_id}/publish")
+async def publish_announcement(
+    announcement_id: int,
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    row = await db.get(SiteAnnouncement, announcement_id)
+    if row is None:
+        raise NotFoundError("公告不存在")
+    row.is_published = True
+    row.published_at = utcnow()
+    await _audit(
+        db, admin, request, "announcement_publish",
+        target_type="announcement", target_id=str(row.id),
+    )
+    await db.commit()
+    return _announcement_dict(row)
+
+
+@router.post("/announcements/{announcement_id}/unpublish")
+async def unpublish_announcement(
+    announcement_id: int,
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    row = await db.get(SiteAnnouncement, announcement_id)
+    if row is None:
+        raise NotFoundError("公告不存在")
+    row.is_published = False
+    row.published_at = None
+    await _audit(
+        db, admin, request, "announcement_unpublish",
+        target_type="announcement", target_id=str(row.id),
+    )
+    await db.commit()
+    return _announcement_dict(row)
+
+
+@router.delete("/announcements/{announcement_id}")
+async def delete_announcement(
+    announcement_id: int,
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    row = await db.get(SiteAnnouncement, announcement_id)
+    if row is None:
+        raise NotFoundError("公告不存在")
+    title = row.title
+    await db.delete(row)
+    await _audit(
+        db, admin, request, "announcement_delete",
+        target_type="announcement", target_id=str(announcement_id),
+        params={"title": title},
+    )
+    await db.commit()
+    return {"message": "已删除"}
 
 
 # ============================================================

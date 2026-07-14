@@ -14,6 +14,7 @@ function logout() {
         <NuxtLink to="/admin" class="brand">洛谷档案馆 · 管理后台</NuxtLink>
         <nav v-if="admin.isLoggedIn">
           <NuxtLink to="/admin">仪表盘</NuxtLink>
+          <NuxtLink to="/admin/announcements">站点公告</NuxtLink>
           <NuxtLink to="/admin/takedowns">删除申请</NuxtLink>
           <NuxtLink to="/admin/accounts">爬取账号</NuxtLink>
           <NuxtLink to="/admin/problems">题库刷新</NuxtLink>
