@@ -1,13 +1,14 @@
-"""基于 Redis 的限流器 —— 滑动窗口 + 令牌桶。
+"""基于 Redis 的限流器 —— 滑动窗口与完成冷却门。
 
 用途：
 - IP 级：用户点保存按钮的滑动窗口
-- 节点级：爬虫每个 CrawlerNode 的令牌桶（1 req / 3s 或 1 req / 6s）
-- 账号级：每账号每小时 QPH
+- 爬虫级：请求完成后才开始计时的串行冷却门
 
 所有实现走 Lua 脚本保证原子性。即使将来加多机，同一 Redis 就能协调。
 """
 from __future__ import annotations
+
+import secrets
 
 from redis.asyncio import Redis
 
@@ -38,45 +39,44 @@ end
 """
 
 
-# ---------- Lua 脚本：令牌桶（平滑限流） ----------
-# KEYS[1] = 桶 key（HASH）
-# ARGV[1] = 当前时间戳（秒级浮点）
-# ARGV[2] = 速率（tokens/sec）
-# ARGV[3] = 桶容量
-# 返回：{allowed (0/1), retry_after_ms}
-_TOKEN_BUCKET_LUA = """
-local now = tonumber(ARGV[1])
-local rate = tonumber(ARGV[2])
-local capacity = tonumber(ARGV[3])
+# ---------- Lua 脚本：请求完成后冷却 ----------
+# 请求期间 key 保存随机 token 并带租约；请求结束后，持有者把同一个 key
+# 原子替换为 cooldown 标记。这样下一请求只能在冷却到期后进入。
+_COMPLETION_COOLDOWN_ACQUIRE_LUA = """
 local key = KEYS[1]
+local token = ARGV[1]
+local lease_ms = tonumber(ARGV[2])
 
-local state = redis.call('HMGET', key, 'tokens', 'ts')
-local tokens = tonumber(state[1])
-local last_ts = tonumber(state[2])
-
-if tokens == nil then
-    tokens = capacity
-    last_ts = now
-else
-    -- 按时间流逝补充令牌
-    local delta = (now - last_ts) * rate
-    tokens = math.min(capacity, tokens + delta)
-    last_ts = now
-end
-
-if tokens >= 1 then
-    tokens = tokens - 1
-    redis.call('HMSET', key, 'tokens', tokens, 'ts', last_ts)
-    redis.call('EXPIRE', key, math.ceil(capacity / rate) + 10)
+local acquired = redis.call('SET', key, token, 'NX', 'PX', lease_ms)
+if acquired then
     return {1, 0}
-else
-    -- 差多少令牌 * 单令牌时间 = 还要等多久
-    local need = 1 - tokens
-    local wait_ms = math.ceil(need / rate * 1000)
-    redis.call('HMSET', key, 'tokens', tokens, 'ts', last_ts)
-    redis.call('EXPIRE', key, math.ceil(capacity / rate) + 10)
-    return {0, wait_ms}
 end
+
+local ttl = redis.call('PTTL', key)
+if ttl < 1 then
+    ttl = 1
+end
+return {0, ttl}
+"""
+
+_COMPLETION_COOLDOWN_FINISH_LUA = """
+local key = KEYS[1]
+local token = ARGV[1]
+local cooldown_ms = tonumber(ARGV[2])
+
+if redis.call('GET', key) ~= token then
+    return 0
+end
+
+redis.call('PSETEX', key, cooldown_ms, 'cooldown')
+return 1
+"""
+
+_COMPLETION_COOLDOWN_RELEASE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
 """
 
 
@@ -110,34 +110,42 @@ class SlidingWindowLimiter:
         return bool(allowed), int(count)
 
 
-class TokenBucketLimiter:
-    """令牌桶。适合"平均 X req/sec，允许小突发"场景，用于爬虫节点。"""
+class CompletionCooldownLimiter:
+    """串行请求，并从上一请求完成时开始计算冷却时间。
+
+    请求执行期间使用带 TTL 的所有权 token 占住 key；正常、失败或超时结束后，
+    持有者调用 ``finish`` 把 key 切换为冷却状态。若进程在请求期间崩溃，租约
+    到期后会自动恢复，不会永久锁死。
+    """
 
     def __init__(self, redis: Redis) -> None:
-        self._redis = redis
-        self._script = redis.register_script(_TOKEN_BUCKET_LUA)
+        self._acquire_script = redis.register_script(_COMPLETION_COOLDOWN_ACQUIRE_LUA)
+        self._finish_script = redis.register_script(_COMPLETION_COOLDOWN_FINISH_LUA)
+        self._release_script = redis.register_script(_COMPLETION_COOLDOWN_RELEASE_LUA)
 
-    async def acquire(
-        self,
-        key: str,
-        *,
-        rate_per_sec: float,
-        capacity: int = 1,
-        now_sec: float | None = None,
-    ) -> tuple[bool, int]:
-        """尝试取一个令牌。
-
-        返回 (allowed, retry_after_ms)。若 allowed=False，稍后 retry_after_ms 再试。
-        """
-        import time as _t
-
-        if now_sec is None:
-            now_sec = _t.time()
-        allowed, wait_ms = await self._script(
+    async def acquire(self, key: str, *, lease_sec: float) -> tuple[str | None, int]:
+        """尝试占用冷却门，返回 ``(token, retry_after_ms)``。"""
+        token = secrets.token_urlsafe(18)
+        lease_ms = max(1, int(lease_sec * 1000))
+        allowed, retry_after_ms = await self._acquire_script(
             keys=[key],
-            args=[now_sec, rate_per_sec, capacity],
+            args=[token, lease_ms],
         )
-        return bool(allowed), int(wait_ms)
+        return (token if allowed else None), int(retry_after_ms)
+
+    async def finish(self, key: str, token: str, *, cooldown_sec: float) -> bool:
+        """结束当前请求，并从此刻开始冷却。"""
+        cooldown_ms = max(1, int(cooldown_sec * 1000))
+        result = await self._finish_script(
+            keys=[key],
+            args=[token, cooldown_ms],
+        )
+        return bool(result)
+
+    async def release(self, key: str, token: str) -> bool:
+        """请求尚未发出时取消占用，不进入冷却。"""
+        result = await self._release_script(keys=[key], args=[token])
+        return bool(result)
 
 
 # ---------- Key 生成约定 ----------

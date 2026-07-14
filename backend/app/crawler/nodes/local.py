@@ -1,12 +1,17 @@
 """Default local crawler nodes.
 
-Rate limits are per worker and per target domain:
-- luogu.com.cn: 1 request / 10 seconds.
-- luogu.com: 1 request / 1 second.
+Rate limits are per worker and per target domain, measured after the previous
+request completes:
+- luogu.com.cn: request completes, then cool down for 10 seconds.
+- luogu.com: request completes, then cool down for 1 second.
 
 Within the same worker, anonymous and authenticated nodes share the same domain
-bucket.  Different workers must use different NODE_ID values, so their buckets
+gate.  Different workers must use different NODE_ID values, so their gates
 remain independent.
+
+A task waits for a gate no longer than the longest cooldown involved in that
+request. Authenticated requests share one total wait budget across the account
+and domain gates.
 """
 from __future__ import annotations
 

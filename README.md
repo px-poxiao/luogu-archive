@@ -68,20 +68,22 @@ luogu-archive/
 
 ### 爬虫节点与限流
 
-爬虫按「单 worker × 目标域名」限速；同一 worker 内 anon/authed 共用域名令牌桶，但熔断状态仍按节点身份记录：
+爬虫按「单 worker × 目标域名」限速；同一 worker 内 anon/authed 共用完成冷却门，但熔断状态仍按节点身份记录：
 
 | 节点 ID             | 用途                         | 速率                                                        |
 | ----------------- | -------------------------- | --------------------------------------------------------- |
-| `local-anon`      | 海外镜像 luogu.com：犇犇接口、发现页    | 与 `local-authed` 共用单 worker `luogu.com` 桶：1 req/s         |
-| `local-authed`    | 海外镜像：带 Cookie 认证请求         | 与 `local-anon` 共用单 worker `luogu.com` 桶：1 req/s           |
-| `local-anon-cn`   | 主站 luogu.com.cn：题目、陶片、标签字典 | 与 `local-authed-cn` 共用单 worker `luogu.com.cn` 桶：0.1 req/s |
-| `local-authed-cn` | 主站：认证请求                    | 与 `local-anon-cn` 共用单 worker `luogu.com.cn` 桶：0.1 req/s   |
+| `local-anon`      | 海外镜像 luogu.com：犇犇接口、发现页    | 与 `local-authed` 共用：请求完成后冷却 1 秒          |
+| `local-authed`    | 海外镜像：带 Cookie 认证请求         | 与 `local-anon` 共用：请求完成后冷却 1 秒            |
+| `local-anon-cn`   | 主站 luogu.com.cn：题目、陶片、标签字典 | 与 `local-authed-cn` 共用：请求完成后冷却 10 秒      |
+| `local-authed-cn` | 主站：认证请求                    | 与 `local-anon-cn` 共用：请求完成后冷却 10 秒        |
 
 `/judgement`、`/problem`、`/_lfe` 等路径在 `crawler/http.py:_resolve_url` 里**强制走主站**，对应也必须用 `cn=True` 的节点取得方式（`get_default_node(kind, cn=True)`）。节点与域名错配会导致海外节点的限流计数被主站 0.1 req/s 污染、被错误熔断 —— 这是历史上"陶片保存不了"的根因。
 
 **熔断**：单节点遇 429 / 明确反爬信号 → 该节点冷却 `CRAWLER_BREAKER_COOLDOWN_SEC`；10 分钟内连续 3 个节点被封 → 全局冷却。403/404 不直接熔断，走累计阈值 + 同类资源探针确认。
 
-**Cookie 账号池**：仅犇犇爬取挂 Cookie。多账号用 Redis `INCR` 轮询，无 QPH 上限、无账号串行锁。账号失效自动禁用。
+**等待上限**：任务等待账号门和域名门的总时间，不超过本次请求涉及的最长冷却时间；超时后按限流失败交回任务重试机制。
+
+**Cookie 账号池**：仅犇犇爬取挂 Cookie。多账号用 Redis `INCR` 轮询；同一账号严格串行，并在请求完成后冷却 `CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC`。账号失效自动禁用。
 
 ### 任务队列优先级
 
@@ -299,8 +301,8 @@ redis-cli -a <密码> DEL save:pending:judgement:all lk:crawl:judgement:all
 | `DB_*`                                                     | MySQL 连接                                                             |
 | `REDIS_URL`                                                | Redis（含密码，如 `redis://:pass@127.0.0.1:6379/0`）                        |
 | `CRAWLER_BASE_URL`                                         | 默认 `https://www.luogu.com.cn`                                        |
-| `CRAWLER_ANON_RATE_PER_SEC` / `CRAWLER_AUTH_RATE_PER_SEC`  | 兼容旧配置；当前本地节点按单 worker 域名桶固定：luogu.com 1 req/s，luogu.com.cn 0.1 req/s |
-| `CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC`                        | 同一 Cookie 账号的请求最小间隔，默认 5 秒；Redis 跨线程、进程和 worker 共享                |
+| `CRAWLER_ANON_RATE_PER_SEC` / `CRAWLER_AUTH_RATE_PER_SEC`  | 兼容旧配置；单 worker 在请求完成后按域名冷却：luogu.com 1 秒，luogu.com.cn 10 秒          |
+| `CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC`                        | 同一 Cookie 账号请求完成后的冷却时间，默认 5 秒；Redis 跨线程、进程和 worker 共享            |
 | `NODE_ID`                                                  | 多机部署时每台 worker 填唯一值，单机留空                                             |
 | `JWT_SECRET`                                               | 站内用户 JWT 密钥（256bit hex）                                              |
 | `ADMIN_TOTP_ENCRYPTION_KEY`                                | 管理员 TOTP secret 加密用 Fernet key                                       |

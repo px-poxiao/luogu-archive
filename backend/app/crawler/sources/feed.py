@@ -147,7 +147,7 @@ async def _crawl_inner(uid: int, page: int, *, trigger: str) -> None:
             raise
         except CrawlerBlockedError as e:
             # 注意：CrawlerBlockedError 既可能是真"目标站点拦截"（429/CF），
-            # 也可能是"节点令牌桶排队超时" —— 后者跟账号无关，不该让账号背锅。
+            # 也可能是"完成冷却门等待超时" —— 后者跟账号无关，不该让账号背锅。
             # 通过 error message 区分两类。
             dur = int((_t.monotonic() - start) * 1000)
             await record_task_done(

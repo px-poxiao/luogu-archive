@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -30,7 +31,7 @@ from app.core.exceptions import (
     CrawlerTimeoutError,
 )
 from app.core.logging import get_logger
-from app.core.ratelimit import TokenBucketLimiter, ratelimit_key
+from app.core.ratelimit import CompletionCooldownLimiter, ratelimit_key
 from app.crawler.lentille import extract_lentille_context
 from app.crawler.nodes.base import CrawlerNode, NodeKind
 
@@ -150,7 +151,8 @@ async def _confirm_blocked_via_probe(node, redis: Redis, *, failed_url: str) -> 
     headers["Accept"] = "text/html,application/xhtml+xml"
     client = get_http_client()
     try:
-        r = await client.get(probe_url, headers=headers, timeout=10)
+        async with _request_slots(node, redis):
+            r = await client.get(probe_url, headers=headers, timeout=10)
         if r.status_code == 200:
             log.info("crawler.probe_ok", node_id=node.node_id, url=probe_url)
             return False
@@ -190,52 +192,115 @@ async def _wait_for_slot(
     node: CrawlerNode,
     redis: Redis,
     *,
-    max_wait_ms: int = 120_000,
-) -> None:
-    """在节点令牌桶里等一个令牌。
+    deadline: float,
+) -> str:
+    """等待并占用节点完成冷却门。
 
     若等不到（比如熔断中）→ 抛 CrawlerBlockedError。
-
-    max_wait_ms 默认 120 秒：批量任务（feed 分层轮询一次派几百条）排队时给
-    充足余量，避免出现"排队 8 秒后超时被抛弃"的伪限流。
     """
-    deadline = time.monotonic() * 1000 + max_wait_ms
+    lease_sec = max(float(settings.CRAWLER_REQUEST_TIMEOUT_SEC) + 30.0, 60.0)
     while True:
-        allowed, retry_after_ms = await node.try_acquire(redis)
-        if allowed:
-            return
-        if time.monotonic() * 1000 + retry_after_ms > deadline:
+        token, retry_after_ms = await node.try_acquire(redis, lease_sec=lease_sec)
+        if token is not None:
+            return token
+        remaining_sec = deadline - time.monotonic()
+        if remaining_sec <= 0:
             raise CrawlerBlockedError(
-                f"爬虫节点 {node.node_id} 限流/熔断中（等待 {retry_after_ms}ms 超时）",
+                f"爬虫节点 {node.node_id} 限流/熔断中（等待冷却名额超时）",
             )
-        await asyncio.sleep(retry_after_ms / 1000)
+        await asyncio.sleep(min(retry_after_ms / 1000, remaining_sec))
 
 
 async def _wait_for_account_slot(
     account_id: int,
     redis: Redis,
     *,
-    max_wait_ms: int = 120_000,
-) -> None:
-    """Wait for the per-account request bucket shared by all workers."""
-    interval_sec = max(float(settings.CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC), 0.001)
-    limiter = TokenBucketLimiter(redis)
+    deadline: float,
+    lease_sec: float,
+) -> tuple[str, str]:
+    """等待并占用跨 worker 共享的账号完成冷却门。"""
+    limiter = CompletionCooldownLimiter(redis)
     key = ratelimit_key("crawler_account_request", str(account_id))
-    deadline = time.monotonic() * 1000 + max_wait_ms
 
     while True:
-        allowed, retry_after_ms = await limiter.acquire(
+        token, retry_after_ms = await limiter.acquire(
             key,
-            rate_per_sec=1.0 / interval_sec,
-            capacity=1,
+            lease_sec=lease_sec,
         )
-        if allowed:
-            return
-        if time.monotonic() * 1000 + retry_after_ms > deadline:
+        if token is not None:
+            return key, token
+        remaining_sec = deadline - time.monotonic()
+        if remaining_sec <= 0:
             raise CrawlerBlockedError(
-                f"爬取账号 {account_id} 请求限流中（等待 {retry_after_ms}ms 超时）"
+                f"爬取账号 {account_id} 请求限流中（等待冷却名额超时）"
             )
-        await asyncio.sleep(retry_after_ms / 1000)
+        await asyncio.sleep(min(retry_after_ms / 1000, remaining_sec))
+
+
+async def _finish_account_slot(
+    redis: Redis,
+    slot: tuple[str, str],
+) -> bool:
+    key, token = slot
+    return await CompletionCooldownLimiter(redis).finish(
+        key,
+        token,
+        cooldown_sec=max(float(settings.CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC), 0.001),
+    )
+
+
+async def _cancel_account_slot(
+    redis: Redis,
+    slot: tuple[str, str],
+) -> bool:
+    key, token = slot
+    return await CompletionCooldownLimiter(redis).release(key, token)
+
+
+@asynccontextmanager
+async def _request_slots(
+    node: CrawlerNode,
+    redis: Redis,
+    *,
+    account_id: int | None = None,
+):
+    """在一次 HTTP 请求期间占用账号门和域名门，结束后分别开始冷却。"""
+    account_cooldown_sec = (
+        max(float(settings.CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC), 0.001)
+        if account_id is not None
+        else 0.0
+    )
+    max_wait_sec = max(node.cooldown_sec, account_cooldown_sec)
+    deadline = time.monotonic() + max_wait_sec
+    # 账号门先获取，租约需覆盖剩余等待预算、请求超时和清理余量。
+    account_lease_sec = max_wait_sec + float(settings.CRAWLER_REQUEST_TIMEOUT_SEC) + 30.0
+
+    account_slot: tuple[str, str] | None = None
+    if account_id is not None:
+        account_slot = await _wait_for_account_slot(
+            account_id,
+            redis,
+            deadline=deadline,
+            lease_sec=account_lease_sec,
+        )
+
+    try:
+        node_token = await _wait_for_slot(node, redis, deadline=deadline)
+    except BaseException:
+        if account_slot is not None:
+            await _cancel_account_slot(redis, account_slot)
+        raise
+
+    try:
+        yield
+    finally:
+        finish_calls = [node.finish_request(redis, node_token)]
+        if account_slot is not None:
+            finish_calls.append(_finish_account_slot(redis, account_slot))
+        results = await asyncio.gather(*finish_calls, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                log.error("crawler.cooldown_finish_failed", error=str(result))
 
 
 async def _do_request(
@@ -250,6 +315,7 @@ async def _do_request(
     json_body: dict | None = None,
     accept_json: bool = False,
     parse: Literal["html", "json", "auto"] = "auto",
+    account_id: int | None = None,
 ) -> FetchResult:
     """核心请求函数。所有上层 fetch_* 都包它。
 
@@ -257,8 +323,6 @@ async def _do_request(
     避免长期进程里匿名请求积累的 Cloudflare cookie 与显式传入的 cookie 冲突
     导致 403。匿名路径继续使用共享 client + 连接池。
     """
-    await _wait_for_slot(node, redis)
-
     merged_headers = _build_default_headers(node)
     if accept_json:
         merged_headers["Accept"] = "application/json"
@@ -269,15 +333,25 @@ async def _do_request(
 
     use_isolated_client = cookies is not None
     start = time.monotonic()
-    try:
-        if use_isolated_client:
-            # 一次性 client，每次请求干净的 cookie jar，不被旧 __cf_bm 污染
-            async with httpx.AsyncClient(
-                http2=True,
-                timeout=httpx.Timeout(settings.CRAWLER_REQUEST_TIMEOUT_SEC),
-                follow_redirects=True,
-            ) as isolated:
-                resp = await isolated.request(
+    async with _request_slots(node, redis, account_id=account_id):
+        try:
+            if use_isolated_client:
+                # 一次性 client，每次请求干净的 cookie jar，不被旧 __cf_bm 污染
+                async with httpx.AsyncClient(
+                    http2=True,
+                    timeout=httpx.Timeout(settings.CRAWLER_REQUEST_TIMEOUT_SEC),
+                    follow_redirects=True,
+                ) as isolated:
+                    resp = await isolated.request(
+                        method,
+                        url,
+                        params=params,
+                        headers=merged_headers,
+                        cookies=cookies,
+                        json=json_body,
+                    )
+            else:
+                resp = await get_http_client().request(
                     method,
                     url,
                     params=params,
@@ -285,19 +359,10 @@ async def _do_request(
                     cookies=cookies,
                     json=json_body,
                 )
-        else:
-            resp = await get_http_client().request(
-                method,
-                url,
-                params=params,
-                headers=merged_headers,
-                cookies=cookies,
-                json=json_body,
-            )
-    except httpx.TimeoutException as e:
-        raise CrawlerTimeoutError(f"请求超时: {url}") from e
-    except httpx.HTTPError as e:
-        raise CrawlerError(f"HTTP 错误: {e}") from e
+        except httpx.TimeoutException as e:
+            raise CrawlerTimeoutError(f"请求超时: {url}") from e
+        except httpx.HTTPError as e:
+            raise CrawlerError(f"HTTP 错误: {e}") from e
     duration_ms = int((time.monotonic() - start) * 1000)
 
     status = resp.status_code
@@ -450,7 +515,6 @@ async def fetch_authed(
 
     if "_uid" not in cookies or "__client_id" not in cookies:
         raise ValueError("cookies 必须含 _uid 和 __client_id")
-    await _wait_for_account_slot(account_id, redis)
     url = _resolve_url(path_or_url)
     if node is None:
         cn = "luogu.com.cn" in url
@@ -465,6 +529,7 @@ async def fetch_authed(
         params=params,
         accept_json=accept_json,
         parse=parse,
+        account_id=account_id,
     )
 
 

@@ -4,7 +4,7 @@
 - 任务队列（Dramatiq broker）
 - 缓存（HTTP 响应、渲染结果）
 - 分布式锁（同 URL 爬虫幂等）
-- 限流（滑动窗口、令牌桶）
+- 限流（滑动窗口、完成冷却门）
 - 保存按钮请求合并
 """
 from __future__ import annotations

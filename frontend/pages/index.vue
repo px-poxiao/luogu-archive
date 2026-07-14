@@ -5,6 +5,29 @@ type JumpType = 'article' | 'paste' | 'user'
 
 const inputId = ref('')
 const selectedType = ref<JumpType>('article')
+const showAllAnnouncements = ref(false)
+const expandedAnnouncementId = ref<string | null>(null)
+
+const announcements = [
+  {
+    id: 'problem-difficulty-20260714',
+    title: '关于题目难度标签更新的说明',
+    summary: '洛谷近期调整了题目难度分级，档案馆已完成标签兼容与历史数据清理。',
+    detail: '新的题目难度标签现已正常展示，原有的未知难度记录也已完成清理。后续抓取到的新题会直接使用新的难度分级。',
+    date: '2026-07-14',
+  },
+  {
+    id: 'crawler-priority-20260710',
+    title: '爬取队列优先级调整完成',
+    summary: '爬取任务现按高、中、低优先级严格处理，手动任务将优先响应。',
+    detail: '用户主动触发的保存和更新任务进入高优先级队列，常规抓取进入中优先级队列，题目轮询进入低优先级队列。',
+    date: '2026-07-10',
+  },
+]
+
+const visibleAnnouncements = computed(() => (
+  showAllAnnouncements.value ? announcements : announcements.slice(0, 1)
+))
 
 const jumpTypes: Array<{
   key: JumpType
@@ -75,6 +98,10 @@ function go(type?: JumpType) {
   navigateTo(`/${targetType}/${encodeURIComponent(value)}`)
 }
 
+function toggleAnnouncement(id: string) {
+  expandedAnnouncementId.value = expandedAnnouncementId.value === id ? null : id
+}
+
 </script>
 
 <template>
@@ -83,6 +110,91 @@ function go(type?: JumpType) {
       title="洛谷档案馆"
       subtitle="第三方存档：保存文章、剪贴板、犇犇、陶片放逐和题目信息。"
     />
+
+    <section class="announcement-panel" aria-labelledby="announcement-title">
+      <header class="announcement-head">
+        <div class="announcement-heading">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <h2 id="announcement-title">站点公告</h2>
+          <span>{{ announcements.length }} 条</span>
+        </div>
+        <button
+          type="button"
+          class="announcement-all"
+          :aria-expanded="showAllAnnouncements"
+          aria-controls="announcement-list"
+          @click="showAllAnnouncements = !showAllAnnouncements"
+        >
+          <span>{{ showAllAnnouncements ? '收起公告' : '全部公告' }}</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true" :class="{ expanded: showAllAnnouncements }">
+            <path
+              d="M9 6l6 6-6 6"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+      </header>
+
+      <div id="announcement-list" class="announcement-list">
+        <article
+          v-for="(announcement, index) in visibleAnnouncements"
+          :key="announcement.id"
+          class="announcement-item"
+          :class="{ latest: index === 0 }"
+        >
+          <span class="announcement-dot" aria-hidden="true" />
+          <button
+            type="button"
+            class="announcement-content"
+            :aria-expanded="expandedAnnouncementId === announcement.id"
+            :aria-controls="`announcement-detail-${announcement.id}`"
+            @click="toggleAnnouncement(announcement.id)"
+          >
+            <span class="announcement-main">
+              <strong>{{ announcement.title }}</strong>
+              <small>{{ announcement.summary }}</small>
+            </span>
+            <time :datetime="announcement.date">{{ announcement.date }}</time>
+            <span class="announcement-toggle" title="展开公告">
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                :class="{ expanded: expandedAnnouncementId === announcement.id }"
+              >
+                <path
+                  d="M6 9l6 6 6-6"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+          </button>
+          <p
+            v-if="expandedAnnouncementId === announcement.id"
+            :id="`announcement-detail-${announcement.id}`"
+            class="announcement-detail"
+          >
+            {{ announcement.detail }}
+          </p>
+        </article>
+      </div>
+    </section>
 
     <section class="home-board">
       <div class="jump-panel" aria-label="快速跳转">
@@ -175,8 +287,187 @@ function go(type?: JumpType) {
   min-height: calc(100vh - 190px);
   padding-bottom: 44px;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 22px;
+}
+
+.announcement-panel {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.announcement-panel::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: #c7922d;
+  content: '';
+}
+
+.announcement-head {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 20px 0 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.announcement-heading,
+.announcement-all,
+.announcement-content {
+  display: flex;
+  align-items: center;
+}
+
+.announcement-heading {
+  min-width: 0;
+  gap: 10px;
+}
+
+.announcement-heading > svg {
+  width: 21px;
+  height: 21px;
+  color: #c7922d;
+  flex: 0 0 auto;
+}
+
+.announcement-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.announcement-heading span {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.announcement-all {
+  gap: 5px;
+  border: 0;
+  padding: 7px 0 7px 10px;
+  background: transparent;
+  color: var(--link);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+}
+
+.announcement-all svg,
+.announcement-toggle svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 0.18s ease;
+}
+
+.announcement-all svg.expanded {
+  transform: rotate(90deg);
+}
+
+.announcement-list {
+  padding-left: 22px;
+}
+
+.announcement-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  border-top: 1px solid var(--border);
+}
+
+.announcement-item:first-child {
+  border-top: 0;
+}
+
+.announcement-dot {
+  position: absolute;
+  top: 29px;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.announcement-item.latest .announcement-dot {
+  background: var(--link);
+}
+
+.announcement-content {
+  width: 100%;
+  min-width: 0;
+  gap: 18px;
+  border: 0;
+  padding: 17px 18px 17px 22px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.announcement-content:hover {
+  background: color-mix(in srgb, var(--link) 4%, transparent);
+}
+
+.announcement-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.announcement-main strong,
+.announcement-main small {
+  display: block;
+}
+
+.announcement-main strong {
+  overflow: hidden;
+  font-size: 16px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.announcement-main small {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.announcement-content time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.announcement-toggle {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+
+.announcement-toggle svg.expanded {
+  transform: rotate(180deg);
+}
+
+.announcement-detail {
+  margin: -5px 72px 18px 22px;
+  padding-top: 13px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-size: 14px;
 }
 
 .home-board {
@@ -388,6 +679,60 @@ function go(type?: JumpType) {
   .jump-panel {
     padding: 16px;
     min-height: auto;
+  }
+
+  .announcement-head {
+    min-height: 54px;
+    padding: 0 14px 0 17px;
+  }
+
+  .announcement-heading {
+    gap: 8px;
+  }
+
+  .announcement-heading h2 {
+    font-size: 16px;
+  }
+
+  .announcement-all span {
+    font-size: 13px;
+  }
+
+  .announcement-list {
+    padding-left: 17px;
+  }
+
+  .announcement-dot {
+    top: 26px;
+  }
+
+  .announcement-content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 15px 12px 15px 17px;
+  }
+
+  .announcement-main {
+    grid-column: 1 / -1;
+  }
+
+  .announcement-main strong {
+    white-space: normal;
+  }
+
+  .announcement-content time {
+    align-self: center;
+  }
+
+  .announcement-toggle {
+    width: 30px;
+    height: 30px;
+    justify-self: end;
+  }
+
+  .announcement-detail {
+    margin: -2px 12px 15px 17px;
   }
 
   .jump-head {
