@@ -52,6 +52,7 @@ from app.models._common import (
     utcnow,
 )
 from app.models.admin import Admin, AdminAuditLog, CrawlerAccount, SiteAnnouncement
+from app.models.contest import Contest, ContestArchiveStatus
 from app.models.luogu_content import Article, Feed, Paste
 from app.models.luogu_user import UserNameVersion, UserNameViolation
 from app.models.task import CrawlTask, TakedownRequest
@@ -667,6 +668,148 @@ async def crawler_stats(
         "queue_lengths": queue_lens,
         "now": now.isoformat(),
     }
+
+
+# ============================================================
+# 比赛归档与等级分
+# ============================================================
+
+@router.get("/contests")
+async def admin_contests(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100),
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """管理员查看全部已发现比赛及任务状态。"""
+
+    total = int(await db.scalar(select(func.count(Contest.id))) or 0)
+    rows = (
+        await db.execute(
+            select(Contest)
+            .order_by(Contest.end_time.desc(), Contest.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+    return {
+        "items": [
+            {
+                "id": item.id,
+                "name": item.name,
+                "start_time": item.start_time,
+                "end_time": item.end_time,
+                "status": item.status.value,
+                "rated": item.rated_type > 0,
+                "participant_count": item.participant_count,
+                "error_message": item.error_message,
+            }
+            for item in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+class ContestArchiveReq(BaseModel):
+    contest_id: int = Field(..., ge=1)
+
+
+@router.post("/contests/discover")
+async def admin_discover_contests(
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """立即扫描比赛列表第一页。"""
+
+    from app.tasks.actors.contest import discover_contests
+
+    discover_contests.send()
+    await _audit(db, admin, request, "contest_discover", target_type="contest", target_id="page_1")
+    await db.commit()
+    return {"message": "已派发比赛发现任务"}
+
+
+@router.post("/contests/archive")
+async def admin_archive_contest(
+    body: ContestArchiveReq,
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """按比赛 ID 补录或重新归档。"""
+
+    from app.tasks.actors.contest import archive_contest
+
+    archive_contest.send(body.contest_id, "admin", True)
+    await _audit(
+        db,
+        admin,
+        request,
+        "contest_archive",
+        target_type="contest",
+        target_id=str(body.contest_id),
+    )
+    await db.commit()
+    return {"message": "已派发归档任务"}
+
+
+@router.post("/contests/{contest_id}/recalculate")
+async def admin_recalculate_contest(
+    contest_id: int,
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """使用已保存的榜单和用户赛前快照重新计算，不重新抓取。"""
+
+    from app.tasks.actors.contest import calculate_contest_prediction
+
+    contest = await db.get(Contest, contest_id)
+    if contest is None:
+        raise NotFoundError("比赛不存在")
+    calculate_contest_prediction.send(contest_id)
+    await _audit(
+        db,
+        admin,
+        request,
+        "contest_recalculate",
+        target_type="contest",
+        target_id=str(contest_id),
+    )
+    await db.commit()
+    return {"message": "已派发重新计算任务"}
+
+
+@router.post("/contests/{contest_id}/check-official")
+async def admin_check_contest_official(
+    contest_id: int,
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """立即用阈值内前 20 名检查正式等级分。"""
+
+    from app.tasks.actors.contest import probe_contest_official
+
+    contest = await db.get(Contest, contest_id)
+    if contest is None:
+        raise NotFoundError("比赛不存在")
+    if contest.status == ContestArchiveStatus.official:
+        raise ConflictError("该比赛已经保存正式结果")
+    probe_contest_official.send(contest_id)
+    await _audit(
+        db,
+        admin,
+        request,
+        "contest_check_official",
+        target_type="contest",
+        target_id=str(contest_id),
+    )
+    await db.commit()
+    return {"message": "已派发正式结果检查任务"}
 
 
 # ============================================================

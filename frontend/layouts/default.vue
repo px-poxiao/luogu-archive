@@ -44,6 +44,11 @@ const navItems = [
     icon: 'M6 4h10l4 4v12H6V4zM9 14h6M9 18h6',
   },
   {
+    to: '/contest',
+    label: '比赛',
+    icon: 'M8 4h8v3a4 4 0 01-8 0V4zM6 5H3v2a4 4 0 004 4M18 5h3v2a4 4 0 01-4 4M12 11v5M8 20h8M9 16h6',
+  },
+  {
     to: '/solution/fix',
     label: '题解修',
     icon: 'M4 5h16M4 9h10M7 13h10l-4 6H7l4-6z',

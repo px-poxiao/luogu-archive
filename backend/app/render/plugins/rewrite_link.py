@@ -30,7 +30,6 @@ _ALLOWED_PATH_PREFIXES = (
     "/article/",
     "/paste/",
     "/user/",
-    "/problem/",
     "/judgement",
     "/feed",
 )

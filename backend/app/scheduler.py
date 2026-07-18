@@ -50,6 +50,34 @@ async def job_crawl_judgement() -> None:
     crawl_judgement.send("scheduled")
 
 
+async def job_discover_contests() -> None:
+    """每小时扫描比赛列表第一页，登记新比赛并归档刚结束的比赛。"""
+    from app.tasks.actors.contest import discover_contests
+
+    discover_contests.send()
+
+
+async def job_probe_contest_official() -> None:
+    """每小时检查仍在等待正式等级分的比赛。"""
+    from app.models.contest import Contest, ContestArchiveStatus
+    from app.tasks.actors.contest import probe_contest_official
+
+    async with db_session() as session:
+        contest_ids = list(
+            (
+                await session.execute(
+                    select(Contest.id).where(
+                        Contest.status == ContestArchiveStatus.predicted,
+                        Contest.rated_type > 0,
+                        Contest.elo_done.is_(False),
+                    )
+                )
+            ).scalars().all()
+        )
+    for index, contest_id in enumerate(contest_ids):
+        probe_contest_official.send_with_options(args=(contest_id,), delay=index * 1_000)
+
+
 async def job_feed_tiered_polling() -> None:
     """犇犇分层轮询：根据 last_active_feed_at 决定哪些用户该爬。
 
@@ -305,6 +333,13 @@ def build_scheduler() -> AsyncIOScheduler:
     sched.add_job(job_discover_discuss, "interval", minutes=5, id="discover_discuss")
     sched.add_job(job_discover_article, "interval", minutes=10, id="discover_article")
     sched.add_job(job_crawl_judgement, "interval", hours=1, id="crawl_judgement")
+    sched.add_job(job_discover_contests, "interval", hours=1, id="discover_contests")
+    sched.add_job(
+        job_probe_contest_official,
+        "interval",
+        hours=1,
+        id="probe_contest_official",
+    )
     sched.add_job(job_feed_tiered_polling, "interval", minutes=10, id="feed_polling")
     sched.add_job(job_problem_tier_hourly, "interval", hours=1, id="problem_tier_hourly")
     # tier2 每天凌晨 02:17 开始

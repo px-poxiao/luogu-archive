@@ -10,6 +10,7 @@
 所有模型从 app.core.db.Base 继承。
 """
 from app.core.db import Base
+from app.models.contest import Contest, ContestParticipant, ContestProblem
 from app.models.admin import (
     Admin,
     AdminAuditLog,
@@ -57,6 +58,9 @@ __all__ = [
     "Base",
     "CrawlTask",
     "CrawlerAccount",
+    "Contest",
+    "ContestParticipant",
+    "ContestProblem",
     "Feed",
     "Judgement",
     "LuoguUser",
