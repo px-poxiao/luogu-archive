@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -86,8 +87,8 @@ async def lease_account():
     同一账号跨 worker 严格串行；调用方退出上下文（包括写库和审计完成）后，
     才开始 CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC 冷却。
 
-    选号策略：用 redis INCR 做全局 round-robin，每次 +1 % len(accounts) 选下一个，
-    多 worker 高并发时也能均匀分摊到所有账号上 —— 不再都涌向"最久未用"那一个。
+    选号策略：Redis INCR 决定轮询起点，再依次原子尝试所有账号的冷却门。
+    优先拿当前空闲账号；全部忙时等待最早到期者后重试，避免卡在一个冷却账号上。
 
     用法：
         async with lease_account() as cookies:
@@ -100,6 +101,7 @@ async def lease_account():
                 ...,
             )
     """
+    candidates: list[AccountCookies] = []
     async with db_session() as session:
         q = (
             select(CrawlerAccount)
@@ -110,29 +112,64 @@ async def lease_account():
         if not accounts:
             yield None
             return
+        for acc in accounts:
+            candidates.append(
+                AccountCookies(
+                    account_id=acc.id,
+                    luogu_uid=acc.luogu_uid,
+                    label=acc.label,
+                    uid_value=decrypt_cookie(acc.uid_value_encrypted),
+                    client_id=decrypt_cookie(acc.client_id_encrypted),
+                    c3vk=(
+                        decrypt_cookie(acc.c3vk_encrypted)
+                        if acc.c3vk_encrypted
+                        else None
+                    ),
+                )
+            )
 
-        # redis 原子自增计数器；多 worker / 多节点都共用一个序列
-        redis = get_redis()
-        idx = await redis.incr("crawler:account:rr_idx") - 1
-        acc = accounts[idx % len(accounts)]
+    # 延迟导入避免 cookies -> http -> crawler 模块初始化环。
+    from app.crawler.http import crawler_task_cooldown, try_acquire_account_slot
+    from app.crawler.nodes import NodeKind, get_default_node
 
-        acc.last_used_at = utcnow()
-        await session.commit()
-        cookies = AccountCookies(
-            account_id=acc.id,
-            luogu_uid=acc.luogu_uid,
-            label=acc.label,
-            uid_value=decrypt_cookie(acc.uid_value_encrypted),
-            client_id=decrypt_cookie(acc.client_id_encrypted),
-            c3vk=decrypt_cookie(acc.c3vk_encrypted) if acc.c3vk_encrypted else None,
-        )
-        # 延迟导入避免 cookies -> http -> crawler 模块初始化环。
-        from app.crawler.http import crawler_task_cooldown
-        from app.crawler.nodes import NodeKind, get_default_node
+    redis = get_redis()
+    start = (await redis.incr("crawler:account:rr_idx") - 1) % len(candidates)
+    ordered = candidates[start:] + candidates[:start]
+    selected: AccountCookies | None = None
+    selected_slot: tuple[str, str] | None = None
 
-        node = get_default_node(NodeKind.AUTHED)
-        async with crawler_task_cooldown(node, redis, account_id=acc.id):
-            yield cookies
+    while selected is None:
+        retry_after: list[int] = []
+        for candidate in ordered:
+            slot, retry_after_ms = await try_acquire_account_slot(
+                candidate.account_id,
+                redis,
+            )
+            if slot is not None:
+                selected = candidate
+                selected_slot = slot
+                break
+            retry_after.append(retry_after_ms)
+        if selected is None:
+            # 所有账号都忙时不制造失败重试；睡到最早冷却门附近再重新竞争。
+            wait_sec = min(retry_after or [1000]) / 1000
+            await asyncio.sleep(max(0.05, min(wait_sec, 5.0)))
+
+    node = get_default_node(NodeKind.AUTHED)
+    async with crawler_task_cooldown(
+        node,
+        redis,
+        account_id=selected.account_id,
+        account_slot=selected_slot,
+    ):
+        async with db_session() as session:
+            await session.execute(
+                update(CrawlerAccount)
+                .where(CrawlerAccount.id == selected.account_id)
+                .values(last_used_at=utcnow())
+            )
+            await session.commit()
+        yield selected
 
 
 async def mark_account_failed(

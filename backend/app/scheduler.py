@@ -88,8 +88,45 @@ async def job_feed_tiered_polling() -> None:
       2d~7d 每 1d
       >7d   不轮询
     """
+    from app.core.config import settings
+    from app.models.admin import CrawlerAccount
     from app.tasks.actors.crawl import crawl_user_feeds
+
     now = utcnow()
+    redis = get_redis()
+
+    async with db_session() as session:
+        account_count = int(
+            await session.scalar(
+                select(func.count(CrawlerAccount.id)).where(
+                    CrawlerAccount.enabled.is_(True)
+                )
+            )
+            or 0
+        )
+
+    interval_sec = max(float(settings.CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC), 0.001)
+    utilization = min(max(float(settings.CRAWLER_FEED_SCHEDULE_UTILIZATION), 0.0), 1.0)
+    cycle_capacity = int(account_count * 600 / interval_sec * utilization)
+    backlog_windows = max(int(settings.CRAWLER_FEED_BACKLOG_WINDOWS), 1)
+
+    # .msgs 包含准备、延迟和正在处理的消息，比只看 ready list 更适合做背压。
+    try:
+        pending = int(await redis.hlen("dramatiq:crawler.mid.msgs"))
+    except Exception:
+        pending = 0
+    backlog_target = cycle_capacity * backlog_windows
+    dispatch_limit = min(cycle_capacity, max(0, backlog_target - pending))
+    if dispatch_limit <= 0:
+        log.info(
+            "feed_polling.skipped_by_capacity",
+            accounts=account_count,
+            cycle_capacity=cycle_capacity,
+            pending=pending,
+            backlog_target=backlog_target,
+        )
+        return
+
     # 计算各桶的"上次犇犇爬取时间应早于"阈值。
     async with db_session() as session:
         # S 桶：最近 3h 发过犇犇 & 上次爬虫 > 10 min 前
@@ -102,6 +139,10 @@ async def job_feed_tiered_polling() -> None:
                     LuoguUser.last_feed_crawled_at < now - timedelta(minutes=10),
                     LuoguUser.last_feed_crawled_at.is_(None),
                 ),
+            )
+            .order_by(
+                LuoguUser.last_feed_crawled_at.is_not(None),
+                LuoguUser.last_feed_crawled_at.asc(),
             )
             .limit(500)
         )
@@ -118,6 +159,10 @@ async def job_feed_tiered_polling() -> None:
                     LuoguUser.last_feed_crawled_at.is_(None),
                 ),
             )
+            .order_by(
+                LuoguUser.last_feed_crawled_at.is_not(None),
+                LuoguUser.last_feed_crawled_at.asc(),
+            )
             .limit(500)
         )
         a_bucket = [row[0] for row in (await session.execute(q)).all()]
@@ -132,6 +177,10 @@ async def job_feed_tiered_polling() -> None:
                     LuoguUser.last_feed_crawled_at < now - timedelta(hours=2, minutes=30),
                     LuoguUser.last_feed_crawled_at.is_(None),
                 ),
+            )
+            .order_by(
+                LuoguUser.last_feed_crawled_at.is_not(None),
+                LuoguUser.last_feed_crawled_at.asc(),
             )
             .limit(500)
         )
@@ -148,15 +197,20 @@ async def job_feed_tiered_polling() -> None:
                     LuoguUser.last_feed_crawled_at.is_(None),
                 ),
             )
+            .order_by(
+                LuoguUser.last_feed_crawled_at.is_not(None),
+                LuoguUser.last_feed_crawled_at.asc(),
+            )
             .limit(500)
         )
         c_bucket = [row[0] for row in (await session.execute(q)).all()]
 
-    redis = get_redis()
     lock = DistributedLock(redis)
     total = 0
     deduped = 0
     for uid in s_bucket + a_bucket + b_bucket + c_bucket:
+        if total >= dispatch_limit:
+            break
         dedup_key = f"scheduler:feed:queued:{uid}"
         token = secrets.token_urlsafe(18)
         # 成功任务会主动释放；失败/丢失消息最多阻塞半小时，覆盖重试窗口即可。
@@ -178,6 +232,10 @@ async def job_feed_tiered_polling() -> None:
         c=len(c_bucket),
         total=total,
         deduped=deduped,
+        accounts=account_count,
+        cycle_capacity=cycle_capacity,
+        dispatch_limit=dispatch_limit,
+        pending_before=pending,
     )
 
 
