@@ -28,6 +28,8 @@ PUBLIC_STATUSES = {
 
 
 def _status_text(contest: Contest) -> str:
+    if contest.rated_type <= 0 or contest.elo_threshold is None:
+        return "不计等级分"
     if contest.status == ContestArchiveStatus.official:
         return "正式结果"
     if contest.predicted_at is not None:
@@ -148,8 +150,7 @@ async def contest_scoreboard(
     items = []
     for row, user in participants:
         rating = (row.official_rating if official else row.predicted_rating) if rated else None
-        # Unrated 比赛不改变任何参赛者的等级分，公开结果统一显示变化 0。
-        delta = (row.official_delta if official else row.predicted_delta) if rated else 0
+        delta = (row.official_delta if official else row.predicted_delta) if rated else None
         warnings = row.warning_reasons or []
         if official and not row.is_penalized:
             warnings = []

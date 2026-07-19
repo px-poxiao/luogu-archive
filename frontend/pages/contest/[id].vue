@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const api = useApi()
+const { format } = useTime()
 const route = useRoute()
 const contestId = computed(() => Number(route.params.id))
 const page = ref(1)
@@ -68,13 +69,8 @@ const { data, pending, error, refresh } = useLazyAsyncData(
 useHead(() => ({ title: data.value?.contest.name || '比赛' }))
 
 const totalPages = computed(() => Math.max(1, Math.ceil((data.value?.total || 0) / 50)))
-const ratedRatingTitle = computed(() =>
-  data.value?.contest.rating_mode === 'official' ? '等级分结果' : '等级分预估',
-)
 const ratingTitle = computed(() =>
-  data.value?.contest.rating_mode === 'unrated'
-    ? '\u7b49\u7ea7\u5206\u53d8\u5316'
-    : ratedRatingTitle.value,
+  data.value?.contest.rating_mode === 'official' ? '等级分结果' : '等级分预估',
 )
 
 function search() {
@@ -82,12 +78,6 @@ function search() {
   const next = keyword.value.trim()
   if (next === appliedKeyword.value) refresh()
   else appliedKeyword.value = next
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  }).format(new Date(value))
 }
 
 function formatDuration(milliseconds: number | undefined | null) {
@@ -118,7 +108,7 @@ function toggleWarning(uid: number) {
         <div class="contest-copy">
           <NuxtLink to="/contest" class="back-link">比赛 /</NuxtLink>
           <h1>{{ data.contest.name }}</h1>
-          <p>{{ formatDate(data.contest.start_time) }} 至 {{ formatDate(data.contest.end_time) }}</p>
+          <p>{{ format(data.contest.start_time) }} 至 {{ format(data.contest.end_time) }}</p>
         </div>
         <dl class="contest-numbers">
           <div><dt>题数</dt><dd>{{ data.contest.problem_count }}</dd></div>
@@ -145,7 +135,7 @@ function toggleWarning(uid: number) {
               <tr>
                 <th class="rank-col sticky-rank">名次</th>
                 <th class="user-col sticky-user">参赛者</th>
-                <th class="rating-col sticky-rating">{{ ratingTitle }}</th>
+                <th v-if="data.contest.rated" class="rating-col sticky-rating">{{ ratingTitle }}</th>
                 <th class="total-col">总分</th>
                 <th v-for="problem in data.problems" :key="problem.pid" class="problem-col">
                   <span
@@ -176,13 +166,8 @@ function toggleWarning(uid: number) {
                     }"
                     show-badge
                   />
-                  <span class="uid">{{ row.uid }}</span>
                 </td>
-                <td class="rating-col sticky-rating">
-                  <template v-if="data.contest.rating_mode === 'unrated'">
-                    <span class="delta same">0</span>
-                  </template>
-                  <template v-else>
+                <td v-if="data.contest.rated" class="rating-col sticky-rating">
                   <span v-if="row.rating_pending" class="rating-pending">loading……</span>
                   <span v-else-if="row.rating !== null" class="rating-value">
                     <span class="rating-number">{{ row.rating }}</span>
@@ -208,7 +193,6 @@ function toggleWarning(uid: number) {
                       <span v-for="reason in row.warnings" :key="reason">{{ reason }}</span>
                     </span>
                   </span>
-                  </template>
                 </td>
                 <td class="total-col score-cell">
                   <strong>{{ row.penalized ? '-' : formatScore(row.score) }}</strong>
@@ -225,7 +209,7 @@ function toggleWarning(uid: number) {
                 </td>
               </tr>
               <tr v-if="!data.items.length">
-                <td :colspan="4 + data.problems.length" class="empty">没有找到参赛者</td>
+                <td :colspan="3 + data.problems.length + (data.contest.rated ? 1 : 0)" class="empty">没有找到参赛者</td>
               </tr>
             </tbody>
           </table>
@@ -292,7 +276,6 @@ tbody tr:hover td { background: var(--hover); }
 .sticky-user { left: 76px; }
 .sticky-rating { left: 296px; box-shadow: 7px 0 10px -10px rgba(0, 0, 0, .7); }
 thead .sticky-rank, thead .sticky-user, thead .sticky-rating { z-index: 4; }
-.uid { display: block; margin-top: 2px; color: var(--text-muted); font-size: 11px; opacity: .7; }
 .rating-value { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
 .rating-number { color: var(--text); }
 .delta { font-size: 13px; }

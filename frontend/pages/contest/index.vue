@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const api = useApi()
+const { format } = useTime()
 const page = ref(1)
 const keyword = ref('')
 const appliedKeyword = ref('')
@@ -38,11 +39,6 @@ function search() {
   if (appliedKeyword.value === keyword.value.trim()) refresh()
 }
 
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  }).format(new Date(value))
-}
 </script>
 
 <template>
@@ -70,7 +66,7 @@ function formatTime(value: string) {
               <NuxtLink :to="`/contest/${item.id}`" class="contest-name">{{ item.name }}</NuxtLink>
               <span class="contest-id">#{{ item.id }}</span>
             </td>
-            <td>{{ formatTime(item.end_time) }}</td>
+            <td>{{ format(item.end_time) }}</td>
             <td>{{ item.problem_count }}</td>
             <td>{{ item.participant_count }}</td>
             <td><span class="status" :class="{ official: item.status === '正式结果' }">{{ item.status }}</span></td>
