@@ -257,12 +257,12 @@ async def archive_one(contest_id: int, *, force: bool = False) -> None:
             contest.status = ContestArchiveStatus.refreshing_users
         await session.commit()
 
-    # ``eloThreshold = -1`` 是洛谷对不计等级分比赛使用的哨兵值。
+    # 洛谷使用 0 或 -1 作为不计等级分比赛的阈值哨兵值。
     elo_threshold = raw_contest.get("eloThreshold")
     if (
         raw_contest.get("rated")
         and isinstance(elo_threshold, (int, float))
-        and elo_threshold >= 0
+        and elo_threshold > 0
     ):
         phase = "official" if bool(raw_contest.get("eloDone")) else "prediction"
         await enqueue_user_refresh(contest_id, phase=phase)
@@ -419,7 +419,7 @@ async def calculate_prediction(contest_id: int, *, cascade: bool = True) -> None
                         ContestParticipant.rperf.is_not(None),
                         Contest.status == ContestArchiveStatus.predicted,
                         Contest.rated_type > 0,
-                        Contest.elo_threshold >= 0,
+                        Contest.elo_threshold > 0,
                         Contest.elo_threshold.is_not(None),
                         Contest.end_time <= contest.start_time,
                     )
@@ -560,7 +560,7 @@ async def recalculate_following_predictions(contest_id: int) -> int:
                         Contest.id != contest_id,
                         Contest.status == ContestArchiveStatus.predicted,
                         Contest.rated_type > 0,
-                        Contest.elo_threshold >= 0,
+                        Contest.elo_threshold > 0,
                         Contest.elo_threshold.is_not(None),
                         Contest.start_time >= anchor.end_time,
                     )

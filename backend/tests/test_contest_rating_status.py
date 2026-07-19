@@ -10,7 +10,13 @@ def test_negative_elo_threshold_means_unrated() -> None:
     assert is_elo_rated(1, -1) is False
 
 
-def test_non_negative_elo_threshold_means_rated() -> None:
+def test_zero_elo_threshold_means_unrated() -> None:
+    """洛谷部分不计等级分比赛使用 0 作为阈值哨兵值。"""
+
+    assert is_elo_rated(1, 0) is False
+
+
+def test_positive_elo_threshold_means_rated() -> None:
     """存在有效阈值且 rated 标记开启时才进入等级分流程。"""
 
     assert is_elo_rated(1, 2000) is True

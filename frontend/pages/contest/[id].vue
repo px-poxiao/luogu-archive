@@ -121,7 +121,11 @@ function toggleWarning(uid: number) {
           <div>
             <h2>排行榜</h2>
             <span v-if="data.contest.rating_mode === 'loading'" class="loading-state">loading……</span>
-            <span v-else class="result-state">{{ data.contest.status }}</span>
+            <span
+              v-else
+              class="result-state"
+              :class="{ unrated: data.contest.rating_mode === 'unrated' }"
+            >{{ data.contest.status }}</span>
           </div>
           <form class="search" @submit.prevent="search">
             <input v-model="keyword" placeholder="用户名或 UID" aria-label="搜索参赛者">
@@ -250,6 +254,7 @@ function toggleWarning(uid: number) {
 .scoreboard-toolbar h2 { display: inline; margin: 0 10px 0 0; font-size: 18px; }
 .loading-state, .result-state { color: var(--text-muted); font-size: 12px; }
 .result-state { color: var(--lg-green); }
+.result-state.unrated { color: var(--text-muted); }
 .search { display: flex; gap: 8px; }
 .search input {
   width: 220px; min-width: 0; padding: 7px 9px; border: 1px solid var(--border);

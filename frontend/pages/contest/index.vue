@@ -69,7 +69,15 @@ function search() {
             <td>{{ format(item.end_time) }}</td>
             <td>{{ item.problem_count }}</td>
             <td>{{ item.participant_count }}</td>
-            <td><span class="status" :class="{ official: item.status === '正式结果' }">{{ item.status }}</span></td>
+            <td>
+              <span
+                class="status"
+                :class="{
+                  official: item.status === '正式结果',
+                  unrated: item.status === '不计等级分',
+                }"
+              >{{ item.status }}</span>
+            </td>
           </tr>
           <tr v-if="!data?.items.length"><td colspan="5" class="empty">没有找到比赛</td></tr>
         </tbody>
@@ -110,6 +118,7 @@ th { color: var(--text-muted); font-size: 13px; font-weight: 600; }
 .contest-id { margin-left: 8px; color: var(--text-muted); font-size: 12px; }
 .status { color: var(--lg-orange); }
 .status.official { color: var(--lg-green); }
+.status.unrated { color: var(--text-muted); }
 .empty { text-align: center; color: var(--text-muted); padding: 36px; }
 .pagination { display: flex; justify-content: center; align-items: center; gap: 14px; margin-top: 20px; }
 .pagination button:disabled { opacity: .45; cursor: default; }

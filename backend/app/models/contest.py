@@ -74,7 +74,7 @@ class Contest(Base, TimestampMixin):
 
     @property
     def is_elo_rated(self) -> bool:
-        """洛谷用 ``eloThreshold = -1`` 表示比赛不计等级分。"""
+        """洛谷用非正数 ``eloThreshold`` 表示比赛不计等级分。"""
 
         return is_elo_rated(self.rated_type, self.elo_threshold)
 
