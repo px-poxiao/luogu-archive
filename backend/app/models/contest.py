@@ -19,6 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.contest_rating import is_elo_rated
 from app.core.db import Base
 from app.models._common import BigPKColumn, LuoguColor, TimestampMixin
 
@@ -70,6 +71,12 @@ class Contest(Base, TimestampMixin):
     participants: Mapped[list[ContestParticipant]] = relationship(
         back_populates="contest", cascade="all, delete-orphan"
     )
+
+    @property
+    def is_elo_rated(self) -> bool:
+        """洛谷用 ``eloThreshold = -1`` 表示比赛不计等级分。"""
+
+        return is_elo_rated(self.rated_type, self.elo_threshold)
 
 
 class ContestProblem(Base):

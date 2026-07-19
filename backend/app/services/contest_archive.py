@@ -21,10 +21,9 @@ from app.models.luogu_content import Problem
 from app.models.luogu_user import LuoguUser, UserEloHistory
 from app.services.elo_rating import (
     RatingParticipant,
-    infer_complete_rperfs,
+    compose_rating_history,
     infer_contest_center,
     predict_contest,
-    zero_history_default,
 )
 
 
@@ -251,14 +250,20 @@ async def archive_one(contest_id: int, *, force: bool = False) -> None:
             )
 
         # 不计算等级分的比赛只归档排行榜，不产生用户刷新流量。
-        if contest.rated_type <= 0 or contest.elo_threshold is None:
+        if not contest.is_elo_rated:
             contest.status = ContestArchiveStatus.predicted
             contest.predicted_at = utcnow()
         else:
             contest.status = ContestArchiveStatus.refreshing_users
         await session.commit()
 
-    if raw_contest.get("rated") and raw_contest.get("eloThreshold") is not None:
+    # ``eloThreshold = -1`` 是洛谷对不计等级分比赛使用的哨兵值。
+    elo_threshold = raw_contest.get("eloThreshold")
+    if (
+        raw_contest.get("rated")
+        and isinstance(elo_threshold, (int, float))
+        and elo_threshold >= 0
+    ):
         phase = "official" if bool(raw_contest.get("eloDone")) else "prediction"
         await enqueue_user_refresh(contest_id, phase=phase)
 
@@ -364,12 +369,12 @@ async def _finish_refresh(contest_id: int, phase: str) -> None:
         calculate_contest_prediction.send(contest_id)
 
 
-async def calculate_prediction(contest_id: int) -> None:
+async def calculate_prediction(contest_id: int, *, cascade: bool = True) -> None:
     """读取赛前快照并生成唯一一版公开预测。"""
 
     async with db_session() as session:
         contest = await session.get(Contest, contest_id)
-        if contest is None or contest.elo_threshold is None:
+        if contest is None or not contest.is_elo_rated:
             return
         participants = (
             await session.execute(
@@ -380,6 +385,7 @@ async def calculate_prediction(contest_id: int) -> None:
         ).scalars().all()
         threshold = int(contest.elo_threshold)
         history_by_uid: dict[int, list[UserEloHistory]] = defaultdict(list)
+        predicted_history_by_uid: dict[int, list[ContestParticipant]] = defaultdict(list)
         participant_uids = [row.uid for row in participants]
         if participant_uids:
             history_events = (
@@ -397,13 +403,61 @@ async def calculate_prediction(contest_id: int) -> None:
                 )
             ).scalars().all()
             for event in history_events:
-                if (event.contest_end_time or event.time) < contest.start_time:
+                if (event.contest_end_time or event.time) <= contest.start_time:
                     history_by_uid[int(event.uid)].append(event)
+
+            # 前序比赛尚未正式结算时，使用其预测结果组成临时历史。
+            previous_predictions = (
+                await session.execute(
+                    select(ContestParticipant, Contest)
+                    .join(Contest, Contest.id == ContestParticipant.contest_id)
+                    .where(
+                        ContestParticipant.uid.in_(participant_uids),
+                        ContestParticipant.contest_id != contest_id,
+                        ContestParticipant.is_penalized.is_(False),
+                        ContestParticipant.predicted_rating.is_not(None),
+                        ContestParticipant.rperf.is_not(None),
+                        Contest.status == ContestArchiveStatus.predicted,
+                        Contest.rated_type > 0,
+                        Contest.elo_threshold >= 0,
+                        Contest.elo_threshold.is_not(None),
+                        Contest.end_time <= contest.start_time,
+                    )
+                    .order_by(
+                        ContestParticipant.uid,
+                        Contest.end_time.asc(),
+                        Contest.id.asc(),
+                    )
+                )
+            ).all()
+            official_ids_by_uid = {
+                uid: {int(event.contest_id) for event in events}
+                for uid, events in history_by_uid.items()
+            }
+            for previous_row, _previous_contest in previous_predictions:
+                if previous_row.contest_id in official_ids_by_uid.get(previous_row.uid, set()):
+                    continue
+                predicted_history_by_uid[int(previous_row.uid)].append(previous_row)
+
+        calculation_by_uid = {}
+        for row in participants:
+            history_rows = history_by_uid.get(row.uid, [])
+            ratings = [int(event.rating) for event in history_rows]
+            predicted_rows = predicted_history_by_uid.get(row.uid, [])
+            calculation_by_uid[row.uid] = compose_rating_history(
+                ratings,
+                history_count=int(row.history_count or 0),
+                fallback_old_rating=int(row.old_rating or 0),
+                predicted_results_oldest_first=[
+                    (int(previous.predicted_rating), float(previous.rperf))
+                    for previous in predicted_rows
+                ],
+            )
 
         eligible = [
             row for row in participants
             if not row.is_penalized
-            and (row.old_rating is None or row.old_rating < threshold)
+            and calculation_by_uid[row.uid].old_rating < threshold
         ]
         # 只在实际参与等级分计算的池内重新计算并列平均名次。
         eligible_rank: dict[int, float] = {}
@@ -419,24 +473,15 @@ async def calculate_prediction(contest_id: int) -> None:
 
         inputs: list[RatingParticipant] = []
         for row in eligible:
-            history_rows = history_by_uid.get(row.uid, [])
-            count = int(row.history_count or len(history_rows))
-            ratings = [int(event.rating) for event in history_rows]
-            if len(ratings) < count:
-                ratings = [0] * (count - len(ratings)) + ratings
-            perf_history = infer_complete_rperfs(ratings, zero_history_rperf=None)
-            rating_history = infer_complete_rperfs(
-                ratings,
-                zero_history_rperf=zero_history_default(count),
-            )
+            calculation = calculation_by_uid[row.uid]
             inputs.append(
                 RatingParticipant(
                     uid=row.uid,
                     rank=eligible_rank[row.uid],
-                    old_rating=int(row.old_rating or 0),
-                    historical_perfs=perf_history,
-                    historical_rating_rperfs=rating_history,
-                    historical_event_count=count,
+                    old_rating=calculation.old_rating,
+                    historical_perfs=calculation.historical_perfs,
+                    historical_rating_rperfs=calculation.historical_rating_rperfs,
+                    historical_event_count=calculation.count,
                 )
             )
 
@@ -446,29 +491,43 @@ async def calculate_prediction(contest_id: int) -> None:
             for item in predict_contest(inputs, rated_bound=threshold, center=center)
         }
         for row in participants:
+            calculation = calculation_by_uid[row.uid]
+            old_rating = calculation.old_rating
+            history_count = calculation.count
             warnings: list[str] = []
             if row.is_penalized:
                 row.predicted_rating = None
                 row.predicted_delta = None
+                row.performance = None
+                row.rperf = None
                 row.warning_reasons = ["该参赛记录已被处罚，不参与等级分预测"]
                 continue
-            if row.old_rating is not None and row.old_rating >= threshold:
-                row.predicted_rating = row.old_rating
+            if old_rating >= threshold:
+                row.predicted_rating = old_rating
                 row.predicted_delta = 0
+                row.performance = None
+                row.rperf = None
                 row.warning_reasons = ["赛前等级分不低于本场等级分阈值"]
                 continue
             prediction = predictions.get(row.uid)
             if row.profile_status != "success" or prediction is None:
                 row.predicted_rating = None
                 row.predicted_delta = None
+                row.performance = None
+                row.rperf = None
                 row.warning_reasons = row.warning_reasons or ["用户等级分数据不可用"]
                 continue
-            if (row.history_count or 0) <= 5:
+            if history_count <= 5:
                 warnings.append("参赛场次不超过 5 场，预测误差可能较大")
-            if (row.old_rating or 0) == 0:
+            if old_rating == 0:
                 warnings.append("赛前公开等级分为 0，内部实力无法唯一反推")
-            if (row.history_count or 0) > len(history_by_uid.get(row.uid, [])):
+            if history_count > calculation.known_count:
                 warnings.append("部分早期等级分历史未公开，使用等效历史近似")
+            if calculation.predicted_count:
+                warnings.append(
+                    "\u8d5b\u524d\u7b49\u7ea7\u5206\u5305\u542b\u524d\u5e8f\u6bd4\u8d5b\u9884\u6d4b\uff0c"
+                    "\u524d\u5e8f\u6bd4\u8d5b\u6b63\u5f0f\u7ed3\u7b97\u540e\u5c06\u81ea\u52a8\u8c03\u6574"
+                )
             if row.profile_source == "cache":
                 warnings.append("用户主页刷新失败，本结果使用档案馆缓存")
             row.predicted_rating = prediction.new_rating
@@ -481,6 +540,38 @@ async def calculate_prediction(contest_id: int) -> None:
         contest.predicted_at = utcnow()
         contest.error_message = None
         await session.commit()
+
+    if cascade:
+        await recalculate_following_predictions(contest_id)
+
+
+async def recalculate_following_predictions(contest_id: int) -> int:
+    """前序预测或正式结果变化后，按时间顺序重算后续比赛。"""
+
+    async with db_session() as session:
+        anchor = await session.get(Contest, contest_id)
+        if anchor is None:
+            return 0
+        following_ids = list(
+            (
+                await session.execute(
+                    select(Contest.id)
+                    .where(
+                        Contest.id != contest_id,
+                        Contest.status == ContestArchiveStatus.predicted,
+                        Contest.rated_type > 0,
+                        Contest.elo_threshold >= 0,
+                        Contest.elo_threshold.is_not(None),
+                        Contest.start_time >= anchor.end_time,
+                    )
+                    .order_by(Contest.start_time.asc(), Contest.end_time.asc(), Contest.id.asc())
+                )
+            ).scalars().all()
+        )
+
+    for following_id in following_ids:
+        await calculate_prediction(int(following_id), cascade=False)
+    return len(following_ids)
 
 
 async def detect_official_from_user(contest_id: int, uid: int) -> bool:
@@ -501,7 +592,7 @@ async def official_probe_uids(contest_id: int) -> list[int]:
 
     async with db_session() as session:
         contest = await session.get(Contest, contest_id)
-        if contest is None or contest.elo_threshold is None:
+        if contest is None or not contest.is_elo_rated:
             return []
         return list(
             (
@@ -525,7 +616,11 @@ async def begin_official_refresh(contest_id: int) -> None:
 
     async with db_session() as session:
         contest = await session.get(Contest, contest_id)
-        if contest is None or contest.status == ContestArchiveStatus.official:
+        if (
+            contest is None
+            or not contest.is_elo_rated
+            or contest.status == ContestArchiveStatus.official
+        ):
             return
         contest.elo_done = True
         contest.status = ContestArchiveStatus.refreshing_users
@@ -538,7 +633,7 @@ async def finalize_official(contest_id: int) -> None:
 
     async with db_session() as session:
         contest = await session.get(Contest, contest_id)
-        if contest is None:
+        if contest is None or not contest.is_elo_rated:
             return
         participants = (
             await session.execute(
@@ -576,6 +671,8 @@ async def finalize_official(contest_id: int) -> None:
         contest.official_at = utcnow()
         contest.error_message = None
         await session.commit()
+
+    await recalculate_following_predictions(contest_id)
 
 
 async def mark_failed(contest_id: int, error: Exception) -> None:

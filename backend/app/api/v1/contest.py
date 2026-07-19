@@ -28,7 +28,7 @@ PUBLIC_STATUSES = {
 
 
 def _status_text(contest: Contest) -> str:
-    if contest.rated_type <= 0 or contest.elo_threshold is None:
+    if not contest.is_elo_rated:
         return "不计等级分"
     if contest.status == ContestArchiveStatus.official:
         return "正式结果"
@@ -81,7 +81,7 @@ async def list_contests(
                 "end_time": item.end_time,
                 "problem_count": item.problem_count,
                 "participant_count": item.participant_count,
-                "rated": item.rated_type > 0 and item.elo_threshold is not None,
+                "rated": item.is_elo_rated,
                 "status": _status_text(item),
             }
             for item in contests
@@ -144,7 +144,7 @@ async def contest_scoreboard(
         )
     ).scalars().all()
 
-    rated = contest.rated_type > 0 and contest.elo_threshold is not None
+    rated = contest.is_elo_rated
     official = contest.status == ContestArchiveStatus.official
     show_rating = rated and (contest.predicted_at is not None or official)
     items = []

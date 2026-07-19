@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from app.services.elo_rating import (
     RatingParticipant,
+    compose_rating_history,
     infer_complete_rperfs,
     predict_contest,
 )
@@ -64,3 +65,27 @@ def test_new_rating_does_not_exceed_contest_bound() -> None:
 
     assert [result.new_rating for result in results] == [2000, 2000]
     assert [result.delta for result in results] == [1, 100]
+
+
+def test_predicted_history_is_replaced_by_official_history_without_duplication() -> None:
+    """前序比赛转官方后，历史场次不应重复累计。"""
+
+    predicted_state = compose_rating_history(
+        [1000, 1100],
+        history_count=2,
+        fallback_old_rating=0,
+        predicted_results_oldest_first=[(1200, 1300.0), (1250, 1400.0)],
+    )
+    official_state = compose_rating_history(
+        [1000, 1100, 1190],
+        history_count=3,
+        fallback_old_rating=0,
+        predicted_results_oldest_first=[(1250, 1400.0)],
+    )
+
+    assert predicted_state.count == 4
+    assert predicted_state.old_rating == 1250
+    assert predicted_state.historical_perfs[:2] == (1400.0, 1300.0)
+    assert official_state.count == 4
+    assert official_state.old_rating == 1250
+    assert official_state.predicted_count == 1

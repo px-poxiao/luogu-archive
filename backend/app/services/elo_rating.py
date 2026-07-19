@@ -43,6 +43,18 @@ class RatingPrediction:
     delta: int
 
 
+@dataclass(frozen=True)
+class RatingHistoryState:
+    """一名用户在目标比赛开始前的完整计算历史。"""
+
+    count: int
+    old_rating: int
+    historical_perfs: tuple[float, ...]
+    historical_rating_rperfs: tuple[float, ...]
+    predicted_count: int
+    known_count: int
+
+
 def _weights(count: int) -> list[float]:
     return [WEIGHT_DECAY ** (index + 1) for index in range(count)]
 
@@ -164,6 +176,43 @@ def zero_history_default(history_count: int) -> float:
     if history_count == 3:
         return 400.0
     return 350.0
+
+
+def compose_rating_history(
+    official_ratings_oldest_first: Sequence[int],
+    *,
+    history_count: int,
+    fallback_old_rating: int,
+    predicted_results_oldest_first: Sequence[tuple[int, float]],
+) -> RatingHistoryState:
+    """把官方历史和前序比赛预测合并成目标比赛的临时赛前状态。"""
+
+    official_ratings = [int(value) for value in official_ratings_oldest_first]
+    count = max(int(history_count), len(official_ratings))
+    padded_ratings = [0] * (count - len(official_ratings)) + official_ratings
+    performance_history = infer_complete_rperfs(
+        padded_ratings,
+        zero_history_rperf=None,
+    )
+    rating_history = infer_complete_rperfs(
+        padded_ratings,
+        zero_history_rperf=zero_history_default(count),
+    )
+    old_rating = official_ratings[-1] if official_ratings else int(fallback_old_rating)
+    for predicted_rating, predicted_rperf in predicted_results_oldest_first:
+        performance_history.insert(0, float(predicted_rperf))
+        rating_history.insert(0, float(predicted_rperf))
+        old_rating = int(predicted_rating)
+        count += 1
+    predicted_count = len(predicted_results_oldest_first)
+    return RatingHistoryState(
+        count=count,
+        old_rating=old_rating,
+        historical_perfs=tuple(performance_history),
+        historical_rating_rperfs=tuple(rating_history),
+        predicted_count=predicted_count,
+        known_count=len(official_ratings) + predicted_count,
+    )
 
 
 def infer_contest_center(contest_name: str, rated_bound: float) -> float:

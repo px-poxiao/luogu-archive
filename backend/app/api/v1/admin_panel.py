@@ -700,7 +700,7 @@ async def admin_contests(
                 "start_time": item.start_time,
                 "end_time": item.end_time,
                 "status": item.status.value,
-                "rated": item.rated_type > 0,
+                "rated": item.is_elo_rated,
                 "participant_count": item.participant_count,
                 "error_message": item.error_message,
             }
@@ -770,6 +770,8 @@ async def admin_recalculate_contest(
     contest = await db.get(Contest, contest_id)
     if contest is None:
         raise NotFoundError("比赛不存在")
+    if not contest.is_elo_rated:
+        raise ConflictError("该比赛不计等级分")
     calculate_contest_prediction.send(contest_id)
     await _audit(
         db,
@@ -797,6 +799,8 @@ async def admin_check_contest_official(
     contest = await db.get(Contest, contest_id)
     if contest is None:
         raise NotFoundError("比赛不存在")
+    if not contest.is_elo_rated:
+        raise ConflictError("该比赛不计等级分")
     if contest.status == ContestArchiveStatus.official:
         raise ConflictError("该比赛已经保存正式结果")
     probe_contest_official.send(contest_id)

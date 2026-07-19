@@ -69,6 +69,7 @@ async def job_probe_contest_official() -> None:
                     select(Contest.id).where(
                         Contest.status == ContestArchiveStatus.predicted,
                         Contest.rated_type > 0,
+                        Contest.elo_threshold >= 0,
                         Contest.elo_done.is_(False),
                     )
                 )
