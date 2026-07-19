@@ -245,6 +245,8 @@ def predict_contest(
             if history is None:
                 history = participant.historical_perfs
             new_rating = int(rating_from_rperfs([rperf, *history]))
+        # 单场结算后的个人等级分不得超过本场等级分上限。
+        new_rating = min(new_rating, int(rated_bound))
         results.append(
             RatingPrediction(
                 uid=participant.uid,

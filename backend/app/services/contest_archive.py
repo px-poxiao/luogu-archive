@@ -290,7 +290,7 @@ async def enqueue_user_refresh(contest_id: int, *, phase: str) -> int:
     return len(participants)
 
 
-async def snapshot_user(contest_id: int, uid: int, *, refreshed: bool) -> None:
+async def snapshot_user(contest_id: int, uid: int, *, profile_source: str) -> None:
     """把档案馆中目标比赛前的 Rating 状态固化到排行榜行。"""
 
     async with db_session() as session:
@@ -337,8 +337,10 @@ async def snapshot_user(contest_id: int, uid: int, *, refreshed: bool) -> None:
             participant.old_rating = old_rating
             participant.history_count = expected_count
             participant.profile_status = "success"
-            participant.profile_source = "fresh" if refreshed else "cache"
-            participant.profile_refreshed_at = utcnow() if refreshed else None
+            participant.profile_source = profile_source
+            participant.profile_refreshed_at = (
+                utcnow() if profile_source == "fresh" else user.last_crawled_at if user else None
+            )
         await session.commit()
 
 

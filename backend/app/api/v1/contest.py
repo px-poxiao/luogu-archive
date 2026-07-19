@@ -16,6 +16,7 @@ from app.models.contest import (
     ContestParticipant,
     ContestProblem,
 )
+from app.models.luogu_user import LuoguUser
 
 
 router = APIRouter(tags=["contest"])
@@ -122,15 +123,17 @@ async def contest_scoreboard(
     total = int(
         await db.scalar(select(func.count(ContestParticipant.id)).where(*filters)) or 0
     )
+    # 复用用户主表中的最新展示资料，保证用户名、称号和认证标记与犇犇页一致。
     participants = (
         await db.execute(
-            select(ContestParticipant)
+            select(ContestParticipant, LuoguUser)
+            .outerjoin(LuoguUser, LuoguUser.uid == ContestParticipant.uid)
             .where(*filters)
             .order_by(ContestParticipant.is_penalized.asc(), ContestParticipant.rank_order.asc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
-    ).scalars().all()
+    ).all()
     problems = (
         await db.execute(
             select(ContestProblem)
@@ -143,18 +146,23 @@ async def contest_scoreboard(
     official = contest.status == ContestArchiveStatus.official
     show_rating = rated and (contest.predicted_at is not None or official)
     items = []
-    for row in participants:
-        rating = row.official_rating if official else row.predicted_rating
-        delta = row.official_delta if official else row.predicted_delta
+    for row, user in participants:
+        rating = (row.official_rating if official else row.predicted_rating) if rated else None
+        # Unrated 比赛不改变任何参赛者的等级分，公开结果统一显示变化 0。
+        delta = (row.official_delta if official else row.predicted_delta) if rated else 0
         warnings = row.warning_reasons or []
         if official and not row.is_penalized:
             warnings = []
         items.append(
             {
                 "uid": row.uid,
-                "name": row.name,
-                "color": row.color.value,
-                "avatar": row.avatar,
+                "name": user.name if user else row.name,
+                "color": user.color.value if user else row.color.value,
+                "avatar": user.avatar if user else row.avatar,
+                "badge": user.badge if user else None,
+                "ccf_level": user.ccf_level if user else 0,
+                "xcpc_level": user.xcpc_level if user else 0,
+                "is_admin": user.is_admin if user else False,
                 "rank": row.rank_order,
                 "score": row.score,
                 "running_time": row.running_time,
@@ -175,7 +183,15 @@ async def contest_scoreboard(
             "problem_count": contest.problem_count or len(problems),
             "participant_count": contest.participant_count,
             "rated": rated,
-            "rating_mode": "official" if official else ("prediction" if show_rating else "loading"),
+            "rating_mode": (
+                "unrated"
+                if not rated
+                else "official"
+                if official
+                else "prediction"
+                if show_rating
+                else "loading"
+            ),
             "status": _status_text(contest),
         },
         "problems": [

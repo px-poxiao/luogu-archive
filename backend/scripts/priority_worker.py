@@ -3,7 +3,7 @@
 Dramatiq 可以让一个 worker 同时监听多条队列，但这不能保证队列之间的严格调度顺序。
 这里一次只运行一个单队列 Dramatiq 子进程，并按下面的顺序选择队列：
 
-    crawler.hi -> crawler.contest -> crawler.mid -> crawler.low
+    crawler.hi -> crawler.mid -> crawler.low
 
 注意：Dramatiq 的延迟队列 ``<queue>.DQ`` 里可能有未来才重试的消息。未来消息不能
 阻塞低优先级队列，否则一个高优先级重试任务就会让普通队列长期饿死。
@@ -21,7 +21,7 @@ from redis import Redis
 
 from app.core.config import settings
 
-QUEUES = ("crawler.hi", "crawler.contest", "crawler.mid", "crawler.low")
+QUEUES = ("crawler.hi", "crawler.mid", "crawler.low")
 
 
 def _env_int(name: str, default: int) -> int:

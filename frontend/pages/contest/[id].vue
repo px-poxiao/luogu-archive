@@ -23,6 +23,10 @@ interface ScoreboardRow {
   name: string
   color: string
   avatar: string | null
+  badge: string | null
+  ccf_level: number
+  xcpc_level: number
+  is_admin: boolean
   rank: number
   score: number
   running_time: number
@@ -43,7 +47,7 @@ interface ScoreboardResponse {
     problem_count: number
     participant_count: number
     rated: boolean
-    rating_mode: 'loading' | 'prediction' | 'official'
+    rating_mode: 'loading' | 'prediction' | 'official' | 'unrated'
     status: string
   }
   problems: ContestProblem[]
@@ -64,8 +68,13 @@ const { data, pending, error, refresh } = useLazyAsyncData(
 useHead(() => ({ title: data.value?.contest.name || '比赛' }))
 
 const totalPages = computed(() => Math.max(1, Math.ceil((data.value?.total || 0) / 50)))
-const ratingTitle = computed(() =>
+const ratedRatingTitle = computed(() =>
   data.value?.contest.rating_mode === 'official' ? '等级分结果' : '等级分预估',
+)
+const ratingTitle = computed(() =>
+  data.value?.contest.rating_mode === 'unrated'
+    ? '\u7b49\u7ea7\u5206\u53d8\u5316'
+    : ratedRatingTitle.value,
 )
 
 function search() {
@@ -93,17 +102,6 @@ function formatDuration(milliseconds: number | undefined | null) {
 function formatScore(value: number | undefined) {
   if (value === undefined || value === null) return '-'
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
-}
-
-function ratingColor(rating: number | null) {
-  if (rating === null || rating < 800) return 'Gray'
-  if (rating < 1200) return 'Orange'
-  if (rating < 1500) return 'Green'
-  if (rating < 1800) return 'Blue'
-  if (rating < 2100) return 'Purple'
-  if (rating < 2400) return 'Red'
-  if (rating < 3000) return 'Black'
-  return 'Cyan'
 }
 
 function toggleWarning(uid: number) {
@@ -147,7 +145,7 @@ function toggleWarning(uid: number) {
               <tr>
                 <th class="rank-col sticky-rank">名次</th>
                 <th class="user-col sticky-user">参赛者</th>
-                <th v-if="data.contest.rated" class="rating-col sticky-rating">{{ ratingTitle }}</th>
+                <th class="rating-col sticky-rating">{{ ratingTitle }}</th>
                 <th class="total-col">总分</th>
                 <th v-for="problem in data.problems" :key="problem.pid" class="problem-col">
                   <span
@@ -166,17 +164,31 @@ function toggleWarning(uid: number) {
                 <td class="rank-col sticky-rank">{{ row.penalized ? '-' : `#${row.rank}` }}</td>
                 <td class="user-col sticky-user">
                   <LuoguUserName
-                    :user="{ uid: row.uid, name: row.name, color: row.color, avatar: row.avatar, badge: null }"
+                    :user="{
+                      uid: row.uid,
+                      name: row.name,
+                      color: row.color,
+                      avatar: row.avatar,
+                      badge: row.badge,
+                      ccf_level: row.ccf_level,
+                      xcpc_level: row.xcpc_level,
+                      is_admin: row.is_admin,
+                    }"
+                    show-badge
                   />
                   <span class="uid">{{ row.uid }}</span>
                 </td>
-                <td v-if="data.contest.rated" class="rating-col sticky-rating">
+                <td class="rating-col sticky-rating">
+                  <template v-if="data.contest.rating_mode === 'unrated'">
+                    <span class="delta same">0</span>
+                  </template>
+                  <template v-else>
                   <span v-if="row.rating_pending" class="rating-pending">loading……</span>
                   <span v-else-if="row.rating !== null" class="rating-value">
-                    <span class="lg-name" :data-color="ratingColor(row.rating)">{{ row.rating }}</span>
+                    <span class="rating-number">{{ row.rating }}</span>
                     <span v-if="(row.delta || 0) > 0" class="delta up">↑{{ row.delta }}</span>
                     <span v-else-if="(row.delta || 0) < 0" class="delta down">↓{{ Math.abs(row.delta || 0) }}</span>
-                    <span v-else class="delta same">→0</span>
+                    <span v-else class="delta same">0</span>
                   </span>
                   <span v-else class="rating-empty">-</span>
                   <span
@@ -196,6 +208,7 @@ function toggleWarning(uid: number) {
                       <span v-for="reason in row.warnings" :key="reason">{{ reason }}</span>
                     </span>
                   </span>
+                  </template>
                 </td>
                 <td class="total-col score-cell">
                   <strong>{{ row.penalized ? '-' : formatScore(row.score) }}</strong>
@@ -264,6 +277,7 @@ function toggleWarning(uid: number) {
 }
 .table-scroll { overflow-x: auto; max-width: 100%; }
 .scoreboard-table { width: 100%; min-width: max-content; border-collapse: separate; border-spacing: 0; }
+thead { position: relative; z-index: 10; }
 th, td { height: 72px; box-sizing: border-box; padding: 10px 14px; border-bottom: 1px solid var(--border); text-align: center; white-space: nowrap; }
 th { height: 54px; color: var(--text-muted); font-size: 13px; font-weight: 500; background: var(--surface); }
 tbody tr:last-child td { border-bottom: 0; }
@@ -280,6 +294,7 @@ tbody tr:hover td { background: var(--hover); }
 thead .sticky-rank, thead .sticky-user, thead .sticky-rating { z-index: 4; }
 .uid { display: block; margin-top: 2px; color: var(--text-muted); font-size: 11px; opacity: .7; }
 .rating-value { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.rating-number { color: var(--text); }
 .delta { font-size: 13px; }
 .delta.up { color: var(--lg-green); }
 .delta.down { color: var(--lg-red); }
@@ -290,7 +305,7 @@ thead .sticky-rank, thead .sticky-user, thead .sticky-rating { z-index: 4; }
 .penalized { opacity: .7; }
 .problem-tip { position: relative; display: inline-flex; justify-content: center; min-width: 30px; cursor: help; }
 .problem-popover, .warning-popover {
-  position: absolute; z-index: 20; bottom: calc(100% + 9px); left: 50%; transform: translateX(-50%);
+  position: absolute; z-index: 30; top: calc(100% + 9px); bottom: auto; left: 50%; transform: translateX(-50%);
   display: none; min-width: 160px; max-width: 280px; padding: 8px 10px; border: 1px solid var(--border);
   border-radius: 5px; background: var(--surface); color: var(--text); box-shadow: 0 8px 22px rgba(0,0,0,.16);
   white-space: normal; text-align: left; font-size: 12px; line-height: 1.55;
@@ -305,6 +320,13 @@ thead .sticky-rank, thead .sticky-user, thead .sticky-rating { z-index: 4; }
 .warning-popover span { display: block; }
 .warning-popover span + span { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--border); }
 .warning-wrap:hover .warning-popover, .warning-wrap.active .warning-popover { display: block; }
+/* 浮层必须盖过后续粘性行；表格末尾两行改为向上展开，避免底边裁切。 */
+tbody tr:hover .sticky-rating,
+tbody tr:has(.warning-wrap.active) .sticky-rating { z-index: 30; }
+tbody tr:nth-last-child(-n + 2) .warning-popover {
+  top: auto;
+  bottom: calc(100% + 9px);
+}
 .pagination { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 16px 22px; border-top: 1px solid var(--border); }
 .pagination button:disabled { opacity: .45; cursor: default; }
 .empty, .load-error { padding: 38px; text-align: center; color: var(--text-muted); }
@@ -332,7 +354,7 @@ thead .sticky-rank, thead .sticky-user, thead .sticky-rating { z-index: 4; }
   .sticky-rating { left: 146px; }
   .rating-value { gap: 4px; }
   .warning-wrap { margin-left: 2px; }
-  .warning-popover { position: fixed; left: 50%; right: auto; bottom: 24px; transform: translateX(-50%); width: min(280px, calc(100vw - 40px)); }
+  .warning-popover { position: fixed; top: auto; left: 50%; right: auto; bottom: 24px; transform: translateX(-50%); width: min(280px, calc(100vw - 40px)); }
   .pagination { justify-content: center; }
 }
 </style>

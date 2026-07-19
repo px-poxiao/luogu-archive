@@ -38,3 +38,29 @@ def test_prediction_is_stable_for_mixed_histories() -> None:
     assert [result.uid for result in results] == [1, 2, 3]
     assert [result.new_rating for result in results] == [1435, 376, 0]
     assert [result.delta for result in results] == [125, 376, 0]
+
+
+def test_new_rating_does_not_exceed_contest_bound() -> None:
+    """高表现用户的新等级分也必须截断到本场上限。"""
+
+    inputs = [
+        RatingParticipant(
+            uid=1,
+            rank=1,
+            old_rating=1999,
+            historical_perfs=[4000],
+            historical_event_count=1,
+        ),
+        RatingParticipant(
+            uid=2,
+            rank=2,
+            old_rating=1900,
+            historical_perfs=[3800],
+            historical_event_count=1,
+        ),
+    ]
+
+    results = predict_contest(inputs, rated_bound=2000, center=1400)
+
+    assert [result.new_rating for result in results] == [2000, 2000]
+    assert [result.delta for result in results] == [1, 100]

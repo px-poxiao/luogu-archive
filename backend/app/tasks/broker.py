@@ -31,6 +31,5 @@ def get_broker() -> RedisBroker:
 
 # 队列常量
 QUEUE_CRAWL_HI = "crawler.hi"
-QUEUE_CONTEST = "crawler.contest"
 QUEUE_CRAWL_MID = "crawler.mid"
 QUEUE_CRAWL_LOW = "crawler.low"
