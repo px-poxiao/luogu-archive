@@ -1,9 +1,10 @@
 """公开比赛排行榜 API。"""
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +28,29 @@ PUBLIC_STATUSES = {
 }
 
 
+class RatingPredictionItem(BaseModel):
+    contest_id: int
+    contest_name: str
+    start_time: datetime
+    end_time: datetime
+    predicted_at: datetime
+    rank: int
+    score: float
+    old_rating: int
+    predicted_rating: int
+    predicted_delta: int
+    elo_threshold: int
+    warnings: list[str]
+
+
+class UserRatingPredictions(BaseModel):
+    uid: int
+    count: int
+    latest_predicted_rating: int | None
+    total_predicted_delta: int
+    items: list[RatingPredictionItem]
+
+
 def _status_text(contest: Contest) -> str:
     if not contest.is_elo_rated:
         return "不计等级分"
@@ -44,6 +68,62 @@ def _has_ended(contest: Contest) -> bool:
     if end_time.tzinfo is None:
         end_time = end_time.replace(tzinfo=timezone.utc)
     return end_time <= utcnow()
+
+
+@router.get(
+    "/user/{uid}/rating-predictions",
+    response_model=UserRatingPredictions,
+)
+async def user_rating_predictions(
+    uid: int,
+    db: AsyncSession = Depends(get_db),
+) -> UserRatingPredictions:
+    """返回用户所有已预测、尚未正式结算的等级分记录。"""
+
+    rows = (
+        await db.execute(
+            select(ContestParticipant, Contest)
+            .join(Contest, Contest.id == ContestParticipant.contest_id)
+            .where(
+                ContestParticipant.uid == uid,
+                ContestParticipant.is_penalized.is_(False),
+                ContestParticipant.predicted_rating.is_not(None),
+                ContestParticipant.official_rating.is_(None),
+                Contest.status == ContestArchiveStatus.predicted,
+                Contest.elo_done.is_(False),
+                Contest.predicted_at.is_not(None),
+                Contest.rated_type > 0,
+                Contest.elo_threshold.is_not(None),
+                Contest.elo_threshold > 0,
+            )
+            .order_by(Contest.end_time.asc(), Contest.id.asc())
+        )
+    ).all()
+
+    items = [
+        RatingPredictionItem(
+            contest_id=contest.id,
+            contest_name=contest.name,
+            start_time=contest.start_time,
+            end_time=contest.end_time,
+            predicted_at=contest.predicted_at,
+            rank=participant.rank_order,
+            score=participant.score,
+            old_rating=int(participant.old_rating or 0),
+            predicted_rating=int(participant.predicted_rating),
+            predicted_delta=int(participant.predicted_delta or 0),
+            elo_threshold=int(contest.elo_threshold),
+            warnings=[str(item) for item in (participant.warning_reasons or [])],
+        )
+        for participant, contest in rows
+    ]
+    return UserRatingPredictions(
+        uid=uid,
+        count=len(items),
+        latest_predicted_rating=(items[-1].predicted_rating if items else None),
+        total_predicted_delta=sum(item.predicted_delta for item in items),
+        items=items,
+    )
 
 
 @router.get("/contests")
