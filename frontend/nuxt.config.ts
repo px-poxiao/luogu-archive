@@ -27,6 +27,13 @@ export default defineNuxtConfig({
     classSuffix: '',
   },
   css: ['~/assets/css/base.css', 'katex/dist/katex.min.css'],
+  routeRules: {
+    '/favicon.png': {
+      headers: {
+        'cache-control': 'public, max-age=604800, stale-while-revalidate=86400',
+      },
+    },
+  },
   app: {
     head: {
       htmlAttrs: { lang: 'zh-CN' },
