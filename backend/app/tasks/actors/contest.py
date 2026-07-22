@@ -1,12 +1,18 @@
 """比赛归档与等级分任务 actor。"""
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import timedelta, timezone
+from typing import TypeVar
 
 import dramatiq
 
 from app.core.db import db_session
+from app.core.exceptions import CrawlerCooldownDeferred
 from app.core.logging import get_logger
+from app.core.redis_client import get_redis
+from app.crawler.http import crawler_task_cooldown
+from app.crawler.nodes import NodeKind, get_default_node
 from app.models._common import utcnow
 from app.models.contest import Contest
 from app.models.luogu_user import LuoguUser
@@ -16,6 +22,23 @@ from app.tasks.broker import QUEUE_CRAWL_MID, get_broker
 
 get_broker()
 log = get_logger(__name__)
+T = TypeVar("T")
+
+
+async def _run_cn_task(factory: Callable[[], Awaitable[T]]) -> T:
+    node = get_default_node(NodeKind.ANON, cn=True)
+    async with crawler_task_cooldown(
+        node,
+        get_redis(),
+        defer_when_busy=True,
+    ):
+        return await factory()
+
+
+def _defer(actor_name: str, args: tuple, exc: CrawlerCooldownDeferred) -> None:
+    delay_ms = exc.retry_after_ms + 100
+    get_broker().get_actor(actor_name).send_with_options(args=args, delay=delay_ms)
+    log.info("actor.cooldown_deferred", actor=actor_name, delay_ms=delay_ms)
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_MID, max_retries=2, min_backoff=10_000)
@@ -24,18 +47,33 @@ def discover_contests() -> None:
 
     from app.services.contest_archive import discover_first_page
 
-    run_async(discover_first_page())
+    try:
+        run_async(_run_cn_task(discover_first_page))
+    except CrawlerCooldownDeferred as exc:
+        _defer("discover_contests", (), exc)
 
 
 async def _archive(contest_id: int, trigger: str, force: bool) -> None:
+    from app.crawler.sources.base import task_lock
     from app.services.contest_archive import archive_one, mark_failed
 
-    try:
-        await archive_one(contest_id, force=force)
-    except Exception as exc:
-        await mark_failed(contest_id, exc)
-        log.error("contest.archive_failed", contest_id=contest_id, trigger=trigger, error=str(exc))
-        raise
+    async with task_lock("contest_archive", str(contest_id), ttl_sec=6 * 3600) as got:
+        if not got:
+            log.info("contest.archive_already_running", contest_id=contest_id, trigger=trigger)
+            return
+        try:
+            await _run_cn_task(lambda: archive_one(contest_id, force=force))
+        except CrawlerCooldownDeferred as exc:
+            _defer("archive_contest", (contest_id, trigger, force), exc)
+        except Exception as exc:
+            await mark_failed(contest_id, exc)
+            log.error(
+                "contest.archive_failed",
+                contest_id=contest_id,
+                trigger=trigger,
+                error=str(exc),
+            )
+            raise
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_MID, max_retries=2, min_backoff=10_000)

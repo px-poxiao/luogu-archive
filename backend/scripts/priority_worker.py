@@ -215,10 +215,8 @@ def main() -> int:
                     time.sleep(min(5, POLL_SEC))
 
             if desired_queue is None:
-                if child is not None:
-                    _stop_child(child, reason=f"all queues empty {counts}")
-                    child = None
-                    active_queue = None
+                # ready 列表为空不代表 worker 空闲：最后一条消息可能已经被取走，
+                # 正在 actor 中执行。保留当前子进程，避免把长任务误当成空闲任务停止。
                 time.sleep(POLL_SEC)
                 continue
 

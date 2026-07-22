@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 
 from app.core.db import db_session
 from app.core.logging import get_logger
@@ -121,18 +121,65 @@ async def discover_first_page() -> int:
                 contest.start_time = _to_datetime(raw.get("startTime"))
                 contest.end_time = _to_datetime(raw.get("endTime"))
                 contest.raw_data = raw
-            if _utc_datetime(contest.end_time) <= now and contest.status in {
-                ContestArchiveStatus.discovered,
-                ContestArchiveStatus.failed,
-            }:
-                contest.status = ContestArchiveStatus.queued
-                ended_ids.append(contest_id)
+        # A broker restart can lose a queued message while the database still says
+        # ``queued``. Recover those rows here, including contests that have already
+        # fallen off the first list page.
+        stale_queued_before = now - timedelta(minutes=15)
+        archive_candidates = (
+            await session.execute(
+                select(Contest).where(
+                    Contest.end_time <= now,
+                    or_(
+                        Contest.status.in_(
+                            {
+                                ContestArchiveStatus.discovered,
+                                ContestArchiveStatus.failed,
+                            }
+                        ),
+                        and_(
+                            Contest.status == ContestArchiveStatus.queued,
+                            Contest.updated_at <= stale_queued_before,
+                        ),
+                    ),
+                )
+            )
+        ).scalars().all()
+        ended_ids = [contest.id for contest in archive_candidates]
         await session.commit()
 
+    dispatched = 0
     for index, contest_id in enumerate(ended_ids):
         # 归档任务自身受 cn 域名门限制；这里稍微错峰，避免同一刻堆入 worker。
-        archive_contest.send_with_options(args=(contest_id, "scheduled"), delay=index * 1_000)
-    return len(ended_ids)
+        try:
+            if index == 0:
+                archive_contest.send(contest_id, "scheduled")
+            else:
+                archive_contest.send_with_options(
+                    args=(contest_id, "scheduled"),
+                    delay=index * 1_000,
+                )
+        except Exception as exc:
+            # 保留原状态，让下一轮发现任务继续尝试派发。
+            log.error(
+                "contest.archive_dispatch_failed",
+                contest_id=contest_id,
+                error=str(exc),
+            )
+            continue
+
+        # 只有 broker 已接受消息后才写 queued。即使这里提交失败，后续重复派发
+        # 也会被归档 actor 的按比赛 ID 锁合并。
+        async with db_session() as session:
+            contest = await session.get(Contest, contest_id)
+            if contest and contest.status in {
+                ContestArchiveStatus.discovered,
+                ContestArchiveStatus.failed,
+                ContestArchiveStatus.queued,
+            }:
+                contest.status = ContestArchiveStatus.queued
+                await session.commit()
+        dispatched += 1
+    return dispatched
 
 
 async def archive_one(contest_id: int, *, force: bool = False) -> None:
