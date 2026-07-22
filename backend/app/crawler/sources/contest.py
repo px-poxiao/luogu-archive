@@ -14,6 +14,7 @@ from app.crawler.lentille import data_from_lentille
 
 
 CN_BASE = "https://www.luogu.com.cn"
+SCOREBOARD_PAGE_SIZE = 50
 
 
 def _context_data(result_data: dict[str, Any] | None) -> dict[str, Any]:
@@ -94,31 +95,26 @@ async def fetch_detail(contest_id: int) -> tuple[dict[str, Any], list[dict[str, 
     return contest, _problem_rows(data)
 
 
-async def fetch_scoreboard(contest_id: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """按每页 50 人抓完整排行榜。"""
+async def fetch_scoreboard_page(
+    contest_id: int,
+    page: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """抓取排行榜的一页；一个 actor 只调用一次。"""
 
-    rows: list[dict[str, Any]] = []
-    page = 1
-    meta: dict[str, Any] = {}
-    while True:
-        result = await fetch_anon(
-            f"{CN_BASE}/fe/api/contest/scoreboard/{contest_id}",
-            redis=get_redis(),
-            params={"page": page},
-            accept_json=True,
-            parse="json",
-        )
-        payload = result.data or {}
-        scoreboard = payload.get("scoreboard")
-        if not isinstance(scoreboard, dict):
-            raise CrawlerError(f"比赛 {contest_id} 榜单第 {page} 页缺少 scoreboard")
-        batch = scoreboard.get("result") or []
-        if not isinstance(batch, list):
-            raise CrawlerError(f"比赛 {contest_id} 榜单第 {page} 页格式错误")
-        meta = {key: value for key, value in scoreboard.items() if key != "result"}
-        rows.extend(item for item in batch if isinstance(item, dict))
-        total = int(scoreboard.get("count") or len(rows))
-        if not batch or len(rows) >= total:
-            break
-        page += 1
+    result = await fetch_anon(
+        f"{CN_BASE}/fe/api/contest/scoreboard/{contest_id}",
+        redis=get_redis(),
+        params={"page": page},
+        accept_json=True,
+        parse="json",
+    )
+    payload = result.data or {}
+    scoreboard = payload.get("scoreboard")
+    if not isinstance(scoreboard, dict):
+        raise CrawlerError(f"比赛 {contest_id} 榜单第 {page} 页缺少 scoreboard")
+    batch = scoreboard.get("result") or []
+    if not isinstance(batch, list):
+        raise CrawlerError(f"比赛 {contest_id} 榜单第 {page} 页格式错误")
+    rows = [item for item in batch if isinstance(item, dict)]
+    meta = {key: value for key, value in scoreboard.items() if key != "result"}
     return rows, meta

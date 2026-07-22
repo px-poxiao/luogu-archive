@@ -35,6 +35,16 @@ async def _run_cn_task(factory: Callable[[], Awaitable[T]]) -> T:
         return await factory()
 
 
+async def _run_com_task(factory: Callable[[], Awaitable[T]]) -> T:
+    node = get_default_node(NodeKind.ANON)
+    async with crawler_task_cooldown(
+        node,
+        get_redis(),
+        defer_when_busy=True,
+    ):
+        return await factory()
+
+
 def _defer(actor_name: str, args: tuple, exc: CrawlerCooldownDeferred) -> None:
     delay_ms = exc.retry_after_ms + 100
     get_broker().get_actor(actor_name).send_with_options(args=args, delay=delay_ms)
@@ -62,7 +72,9 @@ async def _archive(contest_id: int, trigger: str, force: bool) -> None:
             log.info("contest.archive_already_running", contest_id=contest_id, trigger=trigger)
             return
         try:
-            await _run_cn_task(lambda: archive_one(contest_id, force=force))
+            await _run_cn_task(
+                lambda: archive_one(contest_id, trigger=trigger, force=force)
+            )
         except CrawlerCooldownDeferred as exc:
             _defer("archive_contest", (contest_id, trigger, force), exc)
         except Exception as exc:
@@ -78,9 +90,80 @@ async def _archive(contest_id: int, trigger: str, force: bool) -> None:
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_MID, max_retries=2, min_backoff=10_000)
 def archive_contest(contest_id: int, trigger: str = "scheduled", force: bool = False) -> None:
-    """归档一场已经结束的比赛。"""
+    """抓比赛详情并启动分页榜单流水线。"""
 
     run_async(_archive(contest_id, trigger, force))
+
+
+async def _archive_scoreboard_page(
+    contest_id: int,
+    page: int,
+    trigger: str,
+    run_id: str,
+) -> None:
+    from app.crawler.sources.base import task_lock
+    from app.services.contest_archive import archive_scoreboard_page, mark_failed
+
+    async with task_lock(
+        "contest_scoreboard_page",
+        f"{contest_id}:{run_id}:{page}",
+        ttl_sec=30 * 60,
+    ) as got:
+        if not got:
+            return
+        try:
+            await _run_cn_task(
+                lambda: archive_scoreboard_page(
+                    contest_id,
+                    page,
+                    trigger=trigger,
+                    run_id=run_id,
+                )
+            )
+        except CrawlerCooldownDeferred as exc:
+            _defer(
+                "archive_contest_scoreboard_page",
+                (contest_id, page, trigger, run_id),
+                exc,
+            )
+        except Exception as exc:
+            await mark_failed(contest_id, exc)
+            log.error(
+                "contest.scoreboard_page_failed",
+                contest_id=contest_id,
+                page=page,
+                trigger=trigger,
+                error=str(exc),
+            )
+            raise
+
+
+@dramatiq.actor(queue_name=QUEUE_CRAWL_MID, max_retries=0)
+def archive_contest_scoreboard_page(
+    contest_id: int,
+    page: int,
+    trigger: str = "scheduled",
+    run_id: str = "",
+) -> None:
+    """抓取并保存一页比赛榜单。"""
+
+    run_async(_archive_scoreboard_page(contest_id, page, trigger, run_id))
+
+
+@dramatiq.actor(queue_name=QUEUE_CRAWL_MID, max_retries=0)
+def finalize_contest_scoreboard(contest_id: int, run_id: str) -> None:
+    """全部榜单页完成后统一汇总并派发用户主页任务。"""
+
+    from app.services.contest_archive import finalize_scoreboard, mark_failed
+
+    async def finalize() -> None:
+        try:
+            await finalize_scoreboard(contest_id, run_id)
+        except Exception as exc:
+            await mark_failed(contest_id, exc)
+            raise
+
+    run_async(finalize())
 
 
 async def _refresh_user(contest_id: int, uid: int, phase: str) -> None:
@@ -101,13 +184,17 @@ async def _refresh_user(contest_id: int, uid: int, phase: str) -> None:
             profile_source = "recent"
         else:
             # 比赛任务只需要用户资料和 Elo，不级联抓犇犇、文章或剪贴板。
-            await crawl_one(
-                uid,
-                trigger="internal",
-                enqueue_feed=False,
-                enqueue_content=False,
+            await _run_com_task(
+                lambda: crawl_one(
+                    uid,
+                    trigger="internal",
+                    enqueue_feed=False,
+                    enqueue_content=False,
+                )
             )
             profile_source = "fresh"
+    except CrawlerCooldownDeferred:
+        raise
     except Exception as exc:
         # 产品约定每个阶段只请求一次；失败立即使用档案馆缓存，不让 Dramatiq 重试。
         log.warning(
@@ -117,17 +204,19 @@ async def _refresh_user(contest_id: int, uid: int, phase: str) -> None:
             phase=phase,
             error=str(exc),
         )
-    finally:
-        # 正式阶段同样需要赛前快照，用于没有参加评定的用户显示 0 变化。
-        await snapshot_user(contest_id, uid, profile_source=profile_source)
-        await refresh_finished(contest_id, phase)
+    # 正式阶段同样需要赛前快照，用于没有参加评定的用户显示 0 变化。
+    await snapshot_user(contest_id, uid, profile_source=profile_source)
+    await refresh_finished(contest_id, uid, phase)
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_MID, max_retries=0)
 def refresh_contest_user(contest_id: int, uid: int, phase: str) -> None:
-    """按严格域名限速刷新一名参赛者。"""
+    """刷新一名参赛者；一个 actor 至多请求一个用户主页。"""
 
-    run_async(_refresh_user(contest_id, uid, phase))
+    try:
+        run_async(_refresh_user(contest_id, uid, phase))
+    except CrawlerCooldownDeferred as exc:
+        _defer("refresh_contest_user", (contest_id, uid, phase), exc)
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_MID, max_retries=1)
@@ -149,46 +238,61 @@ def finalize_contest_official(contest_id: int) -> None:
 
 
 async def _probe_official(contest_id: int) -> None:
-    from app.crawler.sources.user import crawl_one
-    from app.services.contest_archive import (
-        begin_official_refresh,
-        detect_official_from_user,
-        official_probe_uids,
-    )
+    from app.services.contest_archive import official_probe_uids
 
     uids = await official_probe_uids(contest_id)
-    detected = False
     for uid in uids:
-        try:
-            await crawl_one(
+        probe_contest_official_user.send(contest_id, int(uid))
+
+
+async def _probe_official_user(contest_id: int, uid: int) -> None:
+    from app.crawler.sources.user import crawl_one
+    from app.services.contest_archive import begin_official_refresh, detect_official_from_user
+
+    try:
+        await _run_com_task(
+            lambda: crawl_one(
                 uid,
                 trigger="internal",
                 enqueue_feed=False,
                 enqueue_content=False,
             )
-        except Exception as exc:
-            log.warning(
-                "contest.official_probe_user_failed",
-                contest_id=contest_id,
-                uid=uid,
-                error=str(exc),
-            )
-            continue
-        if await detect_official_from_user(contest_id, uid):
-            detected = True
-            break
+        )
+    except CrawlerCooldownDeferred:
+        raise
+    except Exception as exc:
+        log.warning(
+            "contest.official_probe_user_failed",
+            contest_id=contest_id,
+            uid=uid,
+            error=str(exc),
+        )
+        return
 
     async with db_session() as session:
         contest = await session.get(Contest, contest_id)
         if contest:
             contest.last_official_check_at = utcnow()
             await session.commit()
-    if detected:
+    if await detect_official_from_user(contest_id, uid):
+        detected_key = f"contest:official_detected:{contest_id}"
+        if not await get_redis().set(detected_key, "1", nx=True, ex=24 * 3600):
+            return
         await begin_official_refresh(contest_id)
 
 
 @dramatiq.actor(queue_name=QUEUE_CRAWL_MID, max_retries=0)
 def probe_contest_official(contest_id: int) -> None:
-    """每小时只检查阈值内前 20 名是否出现正式记录。"""
+    """派发阈值内前 20 名的单用户正式记录探测任务。"""
 
     run_async(_probe_official(contest_id))
+
+
+@dramatiq.actor(queue_name=QUEUE_CRAWL_MID, max_retries=0)
+def probe_contest_official_user(contest_id: int, uid: int) -> None:
+    """只刷新一名用户并检查目标比赛的正式等级分记录。"""
+
+    try:
+        run_async(_probe_official_user(contest_id, uid))
+    except CrawlerCooldownDeferred as exc:
+        _defer("probe_contest_official_user", (contest_id, uid), exc)

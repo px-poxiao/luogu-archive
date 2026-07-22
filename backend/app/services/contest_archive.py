@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from math import ceil
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import and_, delete, func, or_, select
 
@@ -125,6 +127,7 @@ async def discover_first_page() -> int:
         # ``queued``. Recover those rows here, including contests that have already
         # fallen off the first list page.
         stale_queued_before = now - timedelta(minutes=15)
+        stale_crawling_before = now - timedelta(hours=6)
         archive_candidates = (
             await session.execute(
                 select(Contest).where(
@@ -140,11 +143,23 @@ async def discover_first_page() -> int:
                             Contest.status == ContestArchiveStatus.queued,
                             Contest.updated_at <= stale_queued_before,
                         ),
+                        and_(
+                            Contest.status == ContestArchiveStatus.crawling,
+                            Contest.updated_at <= stale_crawling_before,
+                        ),
                     ),
                 )
             )
         ).scalars().all()
-        ended_ids = [contest.id for contest in archive_candidates]
+        redis = get_redis()
+        ended_ids = []
+        for contest in archive_candidates:
+            if (
+                contest.status == ContestArchiveStatus.crawling
+                and await redis.exists(_scoreboard_heartbeat_key(contest.id))
+            ):
+                continue
+            ended_ids.append(contest.id)
         await session.commit()
 
     dispatched = 0
@@ -182,18 +197,60 @@ async def discover_first_page() -> int:
     return dispatched
 
 
-async def archive_one(contest_id: int, *, force: bool = False) -> None:
-    """抓比赛详情和完整榜单，并开始唯一一次赛前用户刷新。"""
+_CONTEST_PIPELINE_TTL_SEC = 7 * 24 * 3600
+_SCOREBOARD_HEARTBEAT_TTL_SEC = 6 * 3600
 
-    from app.crawler.sources.contest import fetch_detail, fetch_scoreboard
+
+def _scoreboard_expected_key(contest_id: int) -> str:
+    return f"contest:scoreboard:{contest_id}:expected"
+
+
+def _scoreboard_done_key(contest_id: int) -> str:
+    return f"contest:scoreboard:{contest_id}:done"
+
+
+def _scoreboard_finalize_key(contest_id: int) -> str:
+    return f"contest:scoreboard:{contest_id}:finalize"
+
+
+def _scoreboard_heartbeat_key(contest_id: int) -> str:
+    return f"contest:scoreboard:{contest_id}:heartbeat"
+
+
+def _scoreboard_run_key(contest_id: int) -> str:
+    return f"contest:scoreboard:{contest_id}:run"
+
+
+async def _scoreboard_run_is_current(contest_id: int, run_id: str) -> bool:
+    current = await get_redis().get(_scoreboard_run_key(contest_id))
+    if isinstance(current, bytes):
+        current = current.decode()
+    return current == run_id
+
+
+async def archive_one(
+    contest_id: int,
+    *,
+    trigger: str = "scheduled",
+    force: bool = False,
+) -> None:
+    """只抓比赛详情，然后派发第一页榜单任务。"""
+
+    from app.crawler.sources.contest import fetch_detail
+    from app.tasks.actors.contest import archive_contest_scoreboard_page
 
     async with db_session() as session:
         existing = await session.get(Contest, contest_id)
-        if existing and existing.status in {
-            ContestArchiveStatus.crawling,
-            ContestArchiveStatus.refreshing_users,
-        } and not force:
-            return
+        if existing and not force:
+            if existing.status == ContestArchiveStatus.crawling:
+                if await get_redis().exists(_scoreboard_heartbeat_key(contest_id)):
+                    return
+            elif existing.status in {
+                ContestArchiveStatus.refreshing_users,
+                ContestArchiveStatus.predicted,
+                ContestArchiveStatus.official,
+            }:
+                return
         if existing:
             existing.status = ContestArchiveStatus.crawling
             existing.error_message = None
@@ -208,17 +265,26 @@ async def archive_one(contest_id: int, *, force: bool = False) -> None:
                 contest.status = ContestArchiveStatus.discovered
                 await session.commit()
         return
-    scoreboard, scoreboard_meta = await fetch_scoreboard(contest_id)
-    ranks = _rank_values(scoreboard)
 
-    # 处罚用户按产品约定统一移到榜单末尾。
-    ordered_rows = sorted(
-        enumerate(scoreboard),
-        key=lambda pair: (float(pair[1].get("score") or 0) < 0, pair[0]),
-    )
+    run_id = uuid4().hex
+    redis = get_redis()
 
     async with db_session() as session:
-        contest = await session.get(Contest, contest_id)
+        contest = (
+            await session.execute(
+                select(Contest).where(Contest.id == contest_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        await redis.set(
+            _scoreboard_run_key(contest_id),
+            run_id,
+            ex=_CONTEST_PIPELINE_TTL_SEC,
+        )
+        await redis.set(
+            _scoreboard_heartbeat_key(contest_id),
+            run_id,
+            ex=_SCOREBOARD_HEARTBEAT_TTL_SEC,
+        )
         if contest is None:
             contest = Contest(
                 id=contest_id,
@@ -235,8 +301,9 @@ async def archive_one(contest_id: int, *, force: bool = False) -> None:
         contest.elo_threshold = raw_contest.get("eloThreshold")
         contest.elo_done = bool(raw_contest.get("eloDone"))
         contest.problem_count = int(raw_contest.get("problemCount") or 0)
-        contest.participant_count = len(scoreboard)
-        contest.raw_data = {**raw_contest, "scoreboardMeta": scoreboard_meta}
+        contest.participant_count = 0
+        contest.raw_data = raw_contest
+        contest.status = ContestArchiveStatus.crawling
         contest.error_message = None
 
         await session.execute(delete(ContestProblem).where(ContestProblem.contest_id == contest_id))
@@ -249,13 +316,6 @@ async def archive_one(contest_id: int, *, force: bool = False) -> None:
             for index, item in enumerate(raw_problems)
             if (value := _normalize_problem(item, index)) is not None
         ]
-        if not normalized and scoreboard:
-            details = scoreboard[0].get("details") or {}
-            if isinstance(details, dict):
-                normalized = [
-                    (str(pid), chr(ord("A") + index), "", {"pid": pid})
-                    for index, pid in enumerate(details.keys())
-                ]
         pids = [item[0] for item in normalized]
         known_titles: dict[str, str] = {}
         if pids:
@@ -273,46 +333,216 @@ async def archive_one(contest_id: int, *, force: bool = False) -> None:
                 )
             )
 
-        for display_index, (_, row) in enumerate(ordered_rows, start=1):
-            user = row.get("user") if isinstance(row.get("user"), dict) else {}
-            uid = user.get("uid")
-            if not isinstance(uid, int):
-                continue
-            score = float(row.get("score") or 0)
-            session.add(
-                ContestParticipant(
-                    contest_id=contest_id,
-                    uid=uid,
-                    name=str(user.get("name") or uid),
-                    color=_safe_color(user.get("color")),
-                    avatar=user.get("avatar"),
-                    rank_order=display_index,
-                    rank_value=ranks.get(uid, float(display_index)),
-                    score=score,
-                    running_time=int(row.get("runningTime") or 0),
-                    is_penalized=score < 0,
-                    problem_details=row.get("details") if isinstance(row.get("details"), dict) else {},
-                    profile_status="pending",
-                )
-            )
-
-        # 不计算等级分的比赛只归档排行榜，不产生用户刷新流量。
-        if not contest.is_elo_rated:
-            contest.status = ContestArchiveStatus.predicted
-            contest.predicted_at = utcnow()
-        else:
-            contest.status = ContestArchiveStatus.refreshing_users
         await session.commit()
 
-    # 洛谷使用 0 或 -1 作为不计等级分比赛的阈值哨兵值。
-    elo_threshold = raw_contest.get("eloThreshold")
-    if (
-        raw_contest.get("rated")
-        and isinstance(elo_threshold, (int, float))
-        and elo_threshold > 0
-    ):
-        phase = "official" if bool(raw_contest.get("eloDone")) else "prediction"
+    await redis.delete(
+        _scoreboard_expected_key(contest_id),
+        _scoreboard_done_key(contest_id),
+        _scoreboard_finalize_key(contest_id),
+    )
+    archive_contest_scoreboard_page.send(contest_id, 1, trigger, run_id)
+
+
+async def archive_scoreboard_page(
+    contest_id: int,
+    page: int,
+    *,
+    trigger: str,
+    run_id: str,
+) -> None:
+    """抓取并幂等保存一页排行榜。"""
+
+    from app.crawler.sources.contest import SCOREBOARD_PAGE_SIZE, fetch_scoreboard_page
+    from app.tasks.actors.contest import archive_contest_scoreboard_page
+
+    redis = get_redis()
+    if not await _scoreboard_run_is_current(contest_id, run_id):
+        return
+    done_key = _scoreboard_done_key(contest_id)
+    if await redis.sismember(done_key, page):
+        return
+
+    rows, meta = await fetch_scoreboard_page(contest_id, page)
+    if not await _scoreboard_run_is_current(contest_id, run_id):
+        return
+    total = max(0, int(meta.get("count") or len(rows)))
+    page_count = max(1, ceil(total / SCOREBOARD_PAGE_SIZE))
+    offset = (page - 1) * SCOREBOARD_PAGE_SIZE
+    valid_rows: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+    for index, row in enumerate(rows, start=1):
+        user = row.get("user") if isinstance(row.get("user"), dict) else {}
+        uid = user.get("uid")
+        if isinstance(uid, int):
+            valid_rows.append((offset + index, row, user))
+
+    async with db_session() as session:
+        contest = (
+            await session.execute(
+                select(Contest).where(Contest.id == contest_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if contest is None:
+            raise ValueError(f"比赛 {contest_id} 尚未保存详情")
+        if not await _scoreboard_run_is_current(contest_id, run_id):
+            return
+        uids = [int(user["uid"]) for _, _, user in valid_rows]
+        existing_by_uid: dict[int, ContestParticipant] = {}
+        if uids:
+            existing = (
+                await session.execute(
+                    select(ContestParticipant).where(
+                        ContestParticipant.contest_id == contest_id,
+                        ContestParticipant.uid.in_(uids),
+                    )
+                )
+            ).scalars().all()
+            existing_by_uid = {int(item.uid): item for item in existing}
+
+        for rank_order, row, user in valid_rows:
+            uid = int(user["uid"])
+            score = float(row.get("score") or 0)
+            participant = existing_by_uid.get(uid)
+            if participant is None:
+                participant = ContestParticipant(contest_id=contest_id, uid=uid)
+                session.add(participant)
+            participant.name = str(user.get("name") or uid)
+            participant.color = _safe_color(user.get("color"))
+            participant.avatar = user.get("avatar")
+            participant.rank_order = rank_order
+            participant.rank_value = float(rank_order)
+            participant.score = score
+            participant.running_time = int(row.get("runningTime") or 0)
+            participant.is_penalized = score < 0
+            participant.problem_details = (
+                row.get("details") if isinstance(row.get("details"), dict) else {}
+            )
+            participant.profile_status = "pending"
+            participant.profile_source = None
+            participant.profile_refreshed_at = None
+
+        if page == 1:
+            contest.participant_count = total
+            raw_data = dict(contest.raw_data or {})
+            raw_data["scoreboardMeta"] = meta
+            contest.raw_data = raw_data
+        contest.updated_at = utcnow()
+        await session.commit()
+
+    await redis.set(
+        _scoreboard_heartbeat_key(contest_id),
+        run_id,
+        ex=_SCOREBOARD_HEARTBEAT_TTL_SEC,
+    )
+
+    if page == 1:
+        expected_key = _scoreboard_expected_key(contest_id)
+        await redis.set(expected_key, page_count, ex=_CONTEST_PIPELINE_TTL_SEC)
+        for next_page in range(2, page_count + 1):
+            archive_contest_scoreboard_page.send(
+                contest_id,
+                next_page,
+                trigger,
+                run_id,
+            )
+
+    await scoreboard_page_finished(contest_id, page, run_id)
+
+
+async def scoreboard_page_finished(contest_id: int, page: int, run_id: str) -> None:
+    """记录分页完成，并且只派发一次汇总任务。"""
+
+    from app.tasks.actors.contest import finalize_contest_scoreboard
+
+    redis = get_redis()
+    if not await _scoreboard_run_is_current(contest_id, run_id):
+        return
+    done_key = _scoreboard_done_key(contest_id)
+    added = await redis.sadd(done_key, page)
+    await redis.expire(done_key, _CONTEST_PIPELINE_TTL_SEC)
+    if not added:
+        return
+    expected_raw = await redis.get(_scoreboard_expected_key(contest_id))
+    if expected_raw is None or await redis.scard(done_key) < int(expected_raw):
+        return
+    finalize_key = _scoreboard_finalize_key(contest_id)
+    if await redis.set(finalize_key, "1", nx=True, ex=_CONTEST_PIPELINE_TTL_SEC):
+        try:
+            finalize_contest_scoreboard.send(contest_id, run_id)
+        except Exception:
+            await redis.delete(finalize_key)
+            raise
+
+
+async def finalize_scoreboard(contest_id: int, run_id: str) -> None:
+    """全部榜单页落库后统一计算名次，并派发用户主页任务。"""
+
+    if not await _scoreboard_run_is_current(contest_id, run_id):
+        return
+
+    async with db_session() as session:
+        contest = (
+            await session.execute(
+                select(Contest).where(Contest.id == contest_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if contest is None:
+            return
+        if not await _scoreboard_run_is_current(contest_id, run_id):
+            return
+        participants = list(
+            (
+                await session.execute(
+                    select(ContestParticipant)
+                    .where(ContestParticipant.contest_id == contest_id)
+                    .order_by(ContestParticipant.rank_order)
+                )
+            ).scalars().all()
+        )
+        rank_rows = [
+            {"score": row.score, "user": {"uid": int(row.uid)}}
+            for row in participants
+        ]
+        rank_values = _rank_values(rank_rows)
+        participants.sort(key=lambda row: (row.is_penalized, row.rank_order))
+        for display_index, participant in enumerate(participants, start=1):
+            participant.rank_order = display_index
+            participant.rank_value = rank_values.get(participant.uid, float(display_index))
+
+        problem_count = await session.scalar(
+            select(func.count(ContestProblem.id)).where(
+                ContestProblem.contest_id == contest_id
+            )
+        )
+        if not problem_count and participants:
+            details = participants[0].problem_details or {}
+            if isinstance(details, dict):
+                for index, pid in enumerate(details):
+                    session.add(
+                        ContestProblem(
+                            contest_id=contest_id,
+                            pid=str(pid),
+                            label=chr(ord("A") + index),
+                            title="",
+                            order_index=index,
+                            raw_data={"pid": pid},
+                        )
+                    )
+
+        contest.participant_count = len(participants)
+        if contest.is_elo_rated:
+            contest.status = ContestArchiveStatus.refreshing_users
+        else:
+            contest.status = ContestArchiveStatus.predicted
+            contest.predicted_at = utcnow()
+        contest.error_message = None
+        is_elo_rated = contest.is_elo_rated
+        phase = "official" if contest.elo_done else "prediction"
+        await session.commit()
+
+    if is_elo_rated:
         await enqueue_user_refresh(contest_id, phase=phase)
+    if await _scoreboard_run_is_current(contest_id, run_id):
+        await get_redis().delete(_scoreboard_heartbeat_key(contest_id))
 
 
 async def enqueue_user_refresh(contest_id: int, *, phase: str) -> int:
@@ -329,17 +559,28 @@ async def enqueue_user_refresh(contest_id: int, *, phase: str) -> int:
             )
         ).scalars().all()
     key = f"contest:refresh:{contest_id}:{phase}"
+    done_key = f"contest:refresh_done:{contest_id}:{phase}"
     redis = get_redis()
-    await redis.set(key, len(participants), ex=24 * 3600)
+    await redis.delete(done_key)
+    await redis.set(key, len(participants), ex=_CONTEST_PIPELINE_TTL_SEC)
     if not participants:
         await _finish_refresh(contest_id, phase)
         return 0
-    for index, uid in enumerate(participants):
-        refresh_contest_user.send_with_options(
-            args=(contest_id, int(uid), phase),
-            delay=index * 1_000,
-        )
-    return len(participants)
+    dispatched = 0
+    for uid in participants:
+        try:
+            refresh_contest_user.send(contest_id, int(uid), phase)
+            dispatched += 1
+        except Exception as exc:
+            log.error(
+                "contest.user_refresh_dispatch_failed",
+                contest_id=contest_id,
+                uid=int(uid),
+                phase=phase,
+                error=str(exc),
+            )
+            await refresh_finished(contest_id, int(uid), phase)
+    return dispatched
 
 
 async def snapshot_user(contest_id: int, uid: int, *, profile_source: str) -> None:
@@ -396,14 +637,18 @@ async def snapshot_user(contest_id: int, uid: int, *, profile_source: str) -> No
         await session.commit()
 
 
-async def refresh_finished(contest_id: int, phase: str) -> None:
+async def refresh_finished(contest_id: int, uid: int, phase: str) -> None:
     """单个用户任务结束后递减计数，最后一个任务负责收口。"""
 
     redis = get_redis()
     key = f"contest:refresh:{contest_id}:{phase}"
+    done_key = f"contest:refresh_done:{contest_id}:{phase}"
+    if not await redis.sadd(done_key, uid):
+        return
+    await redis.expire(done_key, _CONTEST_PIPELINE_TTL_SEC)
     remaining = await redis.decr(key)
     if remaining <= 0:
-        await redis.delete(key)
+        await redis.delete(key, done_key)
         await _finish_refresh(contest_id, phase)
 
 
