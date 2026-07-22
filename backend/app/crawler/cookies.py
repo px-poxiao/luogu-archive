@@ -12,7 +12,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -88,7 +87,7 @@ async def lease_account():
     才开始 CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC 冷却。
 
     选号策略：Redis INCR 决定轮询起点，再依次原子尝试所有账号的冷却门。
-    优先拿当前空闲账号；全部忙时等待最早到期者后重试，避免卡在一个冷却账号上。
+    优先拿当前空闲账号；全部忙时让 actor 延迟重入队，把执行槽让给下一优先级。
 
     用法：
         async with lease_account() as cookies:
@@ -129,6 +128,7 @@ async def lease_account():
             )
 
     # 延迟导入避免 cookies -> http -> crawler 模块初始化环。
+    from app.core.exceptions import CrawlerCooldownDeferred
     from app.crawler.http import crawler_task_cooldown, try_acquire_account_slot
     from app.crawler.nodes import NodeKind, get_default_node
 
@@ -138,22 +138,19 @@ async def lease_account():
     selected: AccountCookies | None = None
     selected_slot: tuple[str, str] | None = None
 
-    while selected is None:
-        retry_after: list[int] = []
-        for candidate in ordered:
-            slot, retry_after_ms = await try_acquire_account_slot(
-                candidate.account_id,
-                redis,
-            )
-            if slot is not None:
-                selected = candidate
-                selected_slot = slot
-                break
-            retry_after.append(retry_after_ms)
-        if selected is None:
-            # 所有账号都忙时不制造失败重试；睡到最早冷却门附近再重新竞争。
-            wait_sec = min(retry_after or [1000]) / 1000
-            await asyncio.sleep(max(0.05, min(wait_sec, 5.0)))
+    retry_after: list[int] = []
+    for candidate in ordered:
+        slot, retry_after_ms = await try_acquire_account_slot(
+            candidate.account_id,
+            redis,
+        )
+        if slot is not None:
+            selected = candidate
+            selected_slot = slot
+            break
+        retry_after.append(retry_after_ms)
+    if selected is None:
+        raise CrawlerCooldownDeferred(min(retry_after or [1000]))
 
     node = get_default_node(NodeKind.AUTHED)
     async with crawler_task_cooldown(
@@ -161,6 +158,7 @@ async def lease_account():
         redis,
         account_id=selected.account_id,
         account_slot=selected_slot,
+        defer_when_busy=True,
     ):
         async with db_session() as session:
             await session.execute(

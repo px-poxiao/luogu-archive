@@ -569,17 +569,21 @@ async def full_refresh_problems(
     任务自身能识别 404（CrawlerNotFound throws）→ 不重试、不熔断。
     断号在范围内只表现为 404，不影响整体进度。
     """
-    from app.tasks.actors.crawl import crawl_problem_solution
+    from app.tasks.problem_queue import enqueue_problem_solution
 
     pids: list[str] = []
     pids.extend(f"P{n}" for n in range(body.p_min, body.p_max + 1))
     pids.extend(f"B{n}" for n in range(body.b_min, body.b_max + 1))
 
-    for i, pid in enumerate(pids):
-        crawl_problem_solution.send_with_options(
-            args=(pid, "manual_full_refresh"),
-            delay=i * body.delay_ms,
+    enqueued = 0
+    for pid in pids:
+        result = await enqueue_problem_solution(
+            pid,
+            "manual_full_refresh",
+            delay_ms=enqueued * body.delay_ms,
         )
+        if result.enqueued:
+            enqueued += 1
 
     await _audit(
         db, admin, request, "problem_full_refresh",
@@ -587,17 +591,19 @@ async def full_refresh_problems(
         params={
             "p_range": [body.p_min, body.p_max],
             "b_range": [body.b_min, body.b_max],
-            "count": len(pids),
+            "count": enqueued,
+            "skipped_duplicate": len(pids) - enqueued,
             "delay_ms": body.delay_ms,
         },
     )
     await db.commit()
 
     # 估算总耗时
-    eta_sec = (len(pids) * body.delay_ms) // 1000
+    eta_sec = (enqueued * body.delay_ms) // 1000
     return {
         "message": "已派发",
-        "count": len(pids),
+        "count": enqueued,
+        "skipped_duplicate": len(pids) - enqueued,
         "eta_sec": eta_sec,
     }
 

@@ -247,7 +247,7 @@ async def job_problem_tier_hourly() -> None:
     只轮询当前仍标记为开放的题；一旦检测到关闭，写回 False 后退出自动观察池。
     11s/题错峰，cn 节点 0.1 req/s 是上限。
     """
-    from app.tasks.actors.crawl import crawl_problem_solution
+    from app.tasks.problem_queue import enqueue_problem_solution
     now = utcnow()
 
     async with db_session() as session:
@@ -268,16 +268,16 @@ async def job_problem_tier_hourly() -> None:
         )
         pids = [r[0] for r in (await session.execute(q)).all()]
 
-    for i, pid in enumerate(pids):
-        crawl_problem_solution.send_with_options(
-            args=(pid, "scheduled"), delay=i * 11_000,
-        )
-    log.info("problem_polling.tier_hourly", count=len(pids))
+    enqueued = 0
+    for pid in pids:
+        result = await enqueue_problem_solution(pid, "scheduled", delay_ms=enqueued * 11_000)
+        enqueued += int(result.enqueued)
+    log.info("problem_polling.tier_hourly", count=enqueued, skipped=len(pids) - enqueued)
 
 
 async def job_problem_tier_daily() -> None:
     """tier2（普及）：每天派一次"距上次检查 ≥ 24h"的题。"""
-    from app.tasks.actors.crawl import crawl_problem_solution
+    from app.tasks.problem_queue import enqueue_problem_solution
     now = utcnow()
 
     async with db_session() as session:
@@ -298,11 +298,11 @@ async def job_problem_tier_daily() -> None:
         )
         pids = [r[0] for r in (await session.execute(q)).all()]
 
-    for i, pid in enumerate(pids):
-        crawl_problem_solution.send_with_options(
-            args=(pid, "scheduled"), delay=i * 11_000,
-        )
-    log.info("problem_polling.tier_daily", count=len(pids))
+    enqueued = 0
+    for pid in pids:
+        result = await enqueue_problem_solution(pid, "scheduled", delay_ms=enqueued * 11_000)
+        enqueued += int(result.enqueued)
+    log.info("problem_polling.tier_daily", count=enqueued, skipped=len(pids) - enqueued)
 
 
 async def job_problem_tier_weekly() -> None:
@@ -315,7 +315,7 @@ async def job_problem_tier_weekly() -> None:
     取最旧的 ceil(N/7) 条，每天派一次，7 天正好把全档转完一轮。
     """
     import math
-    from app.tasks.actors.crawl import crawl_problem_solution
+    from app.tasks.problem_queue import enqueue_problem_solution
     now = utcnow()
 
     other_diffs = [
@@ -358,12 +358,12 @@ async def job_problem_tier_weekly() -> None:
         )
         pids = [r[0] for r in (await session.execute(q)).all()]
 
-    for i, pid in enumerate(pids):
-        crawl_problem_solution.send_with_options(
-            args=(pid, "scheduled"), delay=i * 11_000,
-        )
+    enqueued = 0
+    for pid in pids:
+        result = await enqueue_problem_solution(pid, "scheduled", delay_ms=enqueued * 11_000)
+        enqueued += int(result.enqueued)
     log.info(
-        "problem_polling.tier_weekly", count=len(pids),
+        "problem_polling.tier_weekly", count=enqueued, skipped=len(pids) - enqueued,
         total_in_tier=total, daily_quota=daily_quota,
     )
 
@@ -371,14 +371,15 @@ async def job_problem_tier_weekly() -> None:
 async def job_problem_list_scan() -> None:
     """每天凌晨扫前 20 页题目列表，发现新题。
 
-    新题进 problems 表后，list 页 cascade 会自动派一次 solution 检测（去重 30min）。
+    新题进 problems 表后，list 页 cascade 会自动派一次 solution 检测（执行前全程去重）。
     """
-    from app.tasks.actors.crawl import crawl_problem_list_page
+    from app.tasks.problem_queue import enqueue_problem_list_page
     for page in range(1, 21):
         # 每页错峰 11s，让 cn 节点不被一口气怼 20 个 list 请求
-        crawl_problem_list_page.send_with_options(
-            args=(page, "scheduled"),
-            delay=(page - 1) * 11_000,
+        await enqueue_problem_list_page(
+            page,
+            "scheduled",
+            delay_ms=(page - 1) * 11_000,
         )
 
 

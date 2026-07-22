@@ -175,10 +175,12 @@ async def _try_merge_or_enqueue(
         crawl_article,
         crawl_judgement_hi,
         crawl_paste,
-        crawl_problem_list_page,
-        crawl_problem_solution,
         crawl_user_manual,
         crawl_user_feeds_hi,
+    )
+    from app.tasks.problem_queue import (
+        enqueue_problem_list_page,
+        enqueue_problem_solution,
     )
 
     redis = get_redis()
@@ -191,6 +193,7 @@ async def _try_merge_or_enqueue(
         return old, True
 
     # 派发
+    task_id: str | None = None
     try:
         if content_type == "article":
             msg = crawl_article.send(ident, "manual")
@@ -216,26 +219,32 @@ async def _try_merge_or_enqueue(
             ident_norm = ident.strip()
             if ident_norm.lower() == "list":
                 # 错峰扫前 30 页（覆盖 1500 道）。每页 11 秒间隔避免 cn 节点限流（0.1 req/s）。
-                # 各 send 都返回 msg；这里取第一个 msg 当返回的 task_id。
-                msg = crawl_problem_list_page.send(1, "manual")
+                # 取第一页的消息 id 作为本次保存任务 id。
+                first = await enqueue_problem_list_page(1, "manual")
+                task_id = first.message_id
                 for page in range(2, 31):
-                    crawl_problem_list_page.send_with_options(
-                        args=(page, "manual"),
-                        delay=(page - 1) * 11_000,
+                    await enqueue_problem_list_page(
+                        page,
+                        "manual",
+                        delay_ms=(page - 1) * 11_000,
                     )
             elif ident_norm.isdigit():
                 page = int(ident_norm)
-                msg = crawl_problem_list_page.send(page, "manual")
+                queued = await enqueue_problem_list_page(page, "manual")
+                task_id = queued.message_id
             else:
-                msg = crawl_problem_solution.send(ident_norm.upper(), "manual")
+                queued = await enqueue_problem_solution(ident_norm.upper(), "manual")
+                task_id = queued.message_id
         elif content_type == "problem_solution":
-            msg = crawl_problem_solution.send(ident, "manual")
+            queued = await enqueue_problem_solution(ident, "manual")
+            task_id = queued.message_id
         else:
             raise ValidationError("未知的 content_type")
     except ValueError as e:
         raise ValidationError(f"无效的 id: {ident}") from e
 
-    task_id = msg.message_id
+    if task_id is None:
+        task_id = msg.message_id
     # 挂 pending 标记，TTL 5 分钟（爬完没这么久，但防止卡死）
     await redis.setex(key, 300, task_id)
     return task_id, False

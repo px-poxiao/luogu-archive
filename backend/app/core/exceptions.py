@@ -45,6 +45,14 @@ class ConflictError(AppError):
     error_code = "conflict"
 
 
+class CrawlerCooldownDeferred(Exception):
+    """The actor should release its worker slot and retry after a cooldown."""
+
+    def __init__(self, retry_after_ms: int) -> None:
+        super().__init__(f"crawler cooldown active for {retry_after_ms} ms")
+        self.retry_after_ms = max(100, int(retry_after_ms))
+
+
 # ---------- 认证 ----------
 class AuthError(AppError):
     http_status = 401

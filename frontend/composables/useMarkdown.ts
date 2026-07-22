@@ -378,7 +378,7 @@ function rewriteLuoguHref(href: string): string {
       'www.luogu.org', 'luogu.org',
     ]
     if (!hosts.includes(u.hostname.toLowerCase())) return href
-    const allowed = ['/article/', '/paste/', '/user/', '/problem/', '/judgement', '/feed']
+    const allowed = ['/article/', '/paste/', '/user/', '/judgement', '/feed']
     if (allowed.some(p => u.pathname.startsWith(p)) || u.pathname === '/') {
       return u.pathname + u.search + u.hash
     }
