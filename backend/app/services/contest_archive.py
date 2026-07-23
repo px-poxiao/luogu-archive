@@ -199,6 +199,7 @@ async def discover_first_page() -> int:
 
 _CONTEST_PIPELINE_TTL_SEC = 7 * 24 * 3600
 _SCOREBOARD_HEARTBEAT_TTL_SEC = 6 * 3600
+_REFRESH_PROGRESS_TTL_SEC = 30 * 60
 
 
 def _scoreboard_expected_key(contest_id: int) -> str:
@@ -219,6 +220,26 @@ def _scoreboard_heartbeat_key(contest_id: int) -> str:
 
 def _scoreboard_run_key(contest_id: int) -> str:
     return f"contest:scoreboard:{contest_id}:run"
+
+
+def _refresh_counter_key(contest_id: int, phase: str) -> str:
+    return f"contest:refresh:{contest_id}:{phase}"
+
+
+def _refresh_done_key(contest_id: int, phase: str) -> str:
+    return f"contest:refresh_done:{contest_id}:{phase}"
+
+
+def _refresh_expected_key(contest_id: int, phase: str) -> str:
+    return f"contest:refresh_expected:{contest_id}:{phase}"
+
+
+def _refresh_heartbeat_key(contest_id: int, phase: str) -> str:
+    return f"contest:refresh_heartbeat:{contest_id}:{phase}"
+
+
+def _refresh_finalize_key(contest_id: int, phase: str) -> str:
+    return f"contest:refresh_finalize:{contest_id}:{phase}"
 
 
 async def _scoreboard_run_is_current(contest_id: int, run_id: str) -> bool:
@@ -558,28 +579,36 @@ async def enqueue_user_refresh(contest_id: int, *, phase: str) -> int:
                 .order_by(ContestParticipant.rank_order)
             )
         ).scalars().all()
-    key = f"contest:refresh:{contest_id}:{phase}"
-    done_key = f"contest:refresh_done:{contest_id}:{phase}"
+    participant_uids = [int(uid) for uid in participants]
+    key = _refresh_counter_key(contest_id, phase)
+    done_key = _refresh_done_key(contest_id, phase)
+    expected_key = _refresh_expected_key(contest_id, phase)
+    heartbeat_key = _refresh_heartbeat_key(contest_id, phase)
+    finalize_key = _refresh_finalize_key(contest_id, phase)
     redis = get_redis()
-    await redis.delete(done_key)
-    await redis.set(key, len(participants), ex=_CONTEST_PIPELINE_TTL_SEC)
-    if not participants:
-        await _finish_refresh(contest_id, phase)
+    await redis.delete(done_key, expected_key, finalize_key)
+    if participant_uids:
+        await redis.sadd(expected_key, *participant_uids)
+        await redis.expire(expected_key, _CONTEST_PIPELINE_TTL_SEC)
+    await redis.set(key, len(participant_uids), ex=_CONTEST_PIPELINE_TTL_SEC)
+    await redis.set(heartbeat_key, "1", ex=_REFRESH_PROGRESS_TTL_SEC)
+    if not participant_uids:
+        await _finish_refresh_once(contest_id, phase)
         return 0
     dispatched = 0
-    for uid in participants:
+    for uid in participant_uids:
         try:
-            refresh_contest_user.send(contest_id, int(uid), phase)
+            refresh_contest_user.send(contest_id, uid, phase)
             dispatched += 1
         except Exception as exc:
             log.error(
                 "contest.user_refresh_dispatch_failed",
                 contest_id=contest_id,
-                uid=int(uid),
+                uid=uid,
                 phase=phase,
                 error=str(exc),
             )
-            await refresh_finished(contest_id, int(uid), phase)
+            await refresh_finished(contest_id, uid, phase)
     return dispatched
 
 
@@ -638,18 +667,150 @@ async def snapshot_user(contest_id: int, uid: int, *, profile_source: str) -> No
 
 
 async def refresh_finished(contest_id: int, uid: int, phase: str) -> None:
-    """单个用户任务结束后递减计数，最后一个任务负责收口。"""
+    """记录单个用户完成，并按目标 UID 集合判断是否可以收口。"""
 
     redis = get_redis()
-    key = f"contest:refresh:{contest_id}:{phase}"
-    done_key = f"contest:refresh_done:{contest_id}:{phase}"
+    key = _refresh_counter_key(contest_id, phase)
+    done_key = _refresh_done_key(contest_id, phase)
+    expected_key = _refresh_expected_key(contest_id, phase)
+    heartbeat_key = _refresh_heartbeat_key(contest_id, phase)
+
+    # 兼容部署前已经运行中的旧流水线；恢复任务会在无进展后把它升级为集合模式。
+    if not await redis.exists(expected_key):
+        if not await redis.exists(key):
+            return
+        if not await redis.sadd(done_key, uid):
+            return
+        await redis.expire(done_key, _CONTEST_PIPELINE_TTL_SEC)
+        await redis.set(heartbeat_key, "1", ex=_REFRESH_PROGRESS_TTL_SEC)
+        remaining = await redis.decr(key)
+        if remaining <= 0:
+            await _finish_refresh_once(contest_id, phase)
+        return
+
+    # 已被新一轮恢复移出目标集合的旧消息不应影响当前批次。
+    if not await redis.sismember(expected_key, uid):
+        return
     if not await redis.sadd(done_key, uid):
         return
     await redis.expire(done_key, _CONTEST_PIPELINE_TTL_SEC)
-    remaining = await redis.decr(key)
+    await redis.set(heartbeat_key, "1", ex=_REFRESH_PROGRESS_TTL_SEC)
+    expected_count = await redis.scard(expected_key)
+    done_count = await redis.scard(done_key)
+    remaining = max(0, expected_count - done_count)
+    await redis.set(key, remaining, ex=_CONTEST_PIPELINE_TTL_SEC)
     if remaining <= 0:
-        await redis.delete(key, done_key)
+        await _finish_refresh_once(contest_id, phase)
+
+
+async def refresh_user_pending(contest_id: int, uid: int, phase: str) -> bool:
+    """重复补发时，已经完成或不再属于当前目标集合的用户直接跳过。"""
+
+    redis = get_redis()
+    expected_key = _refresh_expected_key(contest_id, phase)
+    if not await redis.exists(expected_key):
+        return True
+    return bool(
+        await redis.sismember(expected_key, uid)
+        and not await redis.sismember(_refresh_done_key(contest_id, phase), uid)
+    )
+
+
+async def recover_stalled_user_refresh(contest_id: int, phase: str) -> int:
+    """无进展超时后重建目标集合，并且只补发尚未完成的用户。"""
+
+    from app.tasks.actors.contest import refresh_contest_user
+
+    redis = get_redis()
+    heartbeat_key = _refresh_heartbeat_key(contest_id, phase)
+    if await redis.exists(heartbeat_key):
+        return 0
+
+    lock_key = f"contest:refresh_recover:{contest_id}:{phase}"
+    if not await redis.set(lock_key, "1", nx=True, ex=5 * 60):
+        return 0
+    try:
+        async with db_session() as session:
+            contest = await session.get(Contest, contest_id)
+            if (
+                contest is None
+                or contest.status != ContestArchiveStatus.refreshing_users
+                or ("official" if contest.elo_done else "prediction") != phase
+            ):
+                return 0
+            participants = list(
+                (
+                    await session.execute(
+                        select(ContestParticipant.uid).where(
+                            ContestParticipant.contest_id == contest_id
+                        )
+                    )
+                ).scalars().all()
+            )
+
+        await redis.set(heartbeat_key, "1", ex=_REFRESH_PROGRESS_TTL_SEC)
+        expected_key = _refresh_expected_key(contest_id, phase)
+        done_key = _refresh_done_key(contest_id, phase)
+        temp_expected_key = f"{expected_key}:recover:{uuid4().hex}"
+        participant_uids = [int(uid) for uid in participants]
+        if participant_uids:
+            await redis.sadd(temp_expected_key, *participant_uids)
+            await redis.expire(temp_expected_key, _CONTEST_PIPELINE_TTL_SEC)
+            await redis.rename(temp_expected_key, expected_key)
+            if await redis.exists(done_key):
+                await redis.sinterstore(done_key, done_key, expected_key)
+                await redis.expire(done_key, _CONTEST_PIPELINE_TTL_SEC)
+            missing = {int(uid) for uid in await redis.sdiff(expected_key, done_key)}
+        else:
+            await redis.delete(expected_key, done_key)
+            missing = set()
+
+        await redis.delete(_refresh_finalize_key(contest_id, phase))
+        await redis.set(
+            _refresh_counter_key(contest_id, phase),
+            len(missing),
+            ex=_CONTEST_PIPELINE_TTL_SEC,
+        )
+        if not missing:
+            await _finish_refresh_once(contest_id, phase)
+            return 0
+
+        dispatched = 0
+        for uid in missing:
+            try:
+                refresh_contest_user.send(contest_id, uid, phase)
+                dispatched += 1
+            except Exception as exc:
+                log.error(
+                    "contest.user_refresh_recovery_dispatch_failed",
+                    contest_id=contest_id,
+                    uid=uid,
+                    phase=phase,
+                    error=str(exc),
+                )
+                await refresh_finished(contest_id, uid, phase)
+        log.warning(
+            "contest.user_refresh_recovered",
+            contest_id=contest_id,
+            phase=phase,
+            missing=len(missing),
+            dispatched=dispatched,
+        )
+        return dispatched
+    finally:
+        await redis.delete(lock_key)
+
+
+async def _finish_refresh_once(contest_id: int, phase: str) -> None:
+    redis = get_redis()
+    finalize_key = _refresh_finalize_key(contest_id, phase)
+    if not await redis.set(finalize_key, "1", nx=True, ex=_CONTEST_PIPELINE_TTL_SEC):
+        return
+    try:
         await _finish_refresh(contest_id, phase)
+    except Exception:
+        await redis.delete(finalize_key)
+        raise
 
 
 async def _finish_refresh(contest_id: int, phase: str) -> None:

@@ -209,12 +209,19 @@ async def _refresh_user(contest_id: int, uid: int, phase: str) -> None:
     await refresh_finished(contest_id, uid, phase)
 
 
+async def _run_refresh_user(contest_id: int, uid: int, phase: str) -> None:
+    from app.services.contest_archive import refresh_user_pending
+
+    if await refresh_user_pending(contest_id, uid, phase):
+        await _refresh_user(contest_id, uid, phase)
+
+
 @dramatiq.actor(queue_name=QUEUE_CRAWL_MID, max_retries=0)
 def refresh_contest_user(contest_id: int, uid: int, phase: str) -> None:
     """刷新一名参赛者；一个 actor 至多请求一个用户主页。"""
 
     try:
-        run_async(_refresh_user(contest_id, uid, phase))
+        run_async(_run_refresh_user(contest_id, uid, phase))
     except CrawlerCooldownDeferred as exc:
         _defer("refresh_contest_user", (contest_id, uid, phase), exc)
 

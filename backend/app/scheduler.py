@@ -79,6 +79,27 @@ async def job_probe_contest_official() -> None:
         probe_contest_official.send_with_options(args=(contest_id,), delay=index * 1_000)
 
 
+async def job_recover_contest_refreshes() -> None:
+    """补发长时间没有进展的比赛用户刷新任务。"""
+
+    from app.models.contest import Contest, ContestArchiveStatus
+    from app.services.contest_archive import recover_stalled_user_refresh
+
+    async with db_session() as session:
+        contests = list(
+            (
+                await session.execute(
+                    select(Contest.id, Contest.elo_done).where(
+                        Contest.status == ContestArchiveStatus.refreshing_users
+                    )
+                )
+            ).all()
+        )
+    for contest_id, elo_done in contests:
+        phase = "official" if elo_done else "prediction"
+        await recover_stalled_user_refresh(int(contest_id), phase)
+
+
 async def job_feed_tiered_polling() -> None:
     """犇犇分层轮询：根据 last_active_feed_at 决定哪些用户该爬。
 
@@ -399,6 +420,12 @@ def build_scheduler() -> AsyncIOScheduler:
         "interval",
         hours=1,
         id="probe_contest_official",
+    )
+    sched.add_job(
+        job_recover_contest_refreshes,
+        "interval",
+        minutes=10,
+        id="recover_contest_refreshes",
     )
     sched.add_job(job_feed_tiered_polling, "interval", minutes=10, id="feed_polling")
     sched.add_job(job_problem_tier_hourly, "interval", hours=1, id="problem_tier_hourly")
