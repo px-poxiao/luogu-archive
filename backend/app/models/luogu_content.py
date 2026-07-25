@@ -36,6 +36,8 @@ class Article(Base, TimestampMixin):
     article_id: Mapped[str] = mapped_column(String(16), primary_key=True)
     author_uid: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
+    # 管理组可独立于正文增删提示，因此保存在文章当前快照上，不混入正文历史版本。
+    admin_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # 当前有效版本 id；便于主查询只 JOIN 一次
     current_version_id: Mapped[int | None] = mapped_column(

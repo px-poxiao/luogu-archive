@@ -73,6 +73,11 @@ def _extract_article_fields(data: dict) -> dict[str, Any]:
                 "content_md": str(content),
                 "author_uid": int(author_uid) if author_uid else None,
                 "author_raw": author_raw,
+                "admin_note": (
+                    str(node["adminNote"])
+                    if node.get("adminNote") is not None
+                    else None
+                ),
             }
     # 未能识别，抛错并带上 key 列表供排查
     raise CrawlerError(
@@ -144,6 +149,7 @@ async def _upsert_article(
             article_id=article_id,
             author_uid=fields.get("author_uid"),
             title=fields["title"][:500],
+            admin_note=fields.get("admin_note"),
             first_crawled_at=now,
             last_crawled_at=now,
         )
@@ -169,7 +175,8 @@ async def _upsert_article(
     )
     same = (await session.execute(q)).scalar_one_or_none()
     if same is not None:
-        # 内容无变化，只更新 last_crawled_at
+        # 管理员提示与正文独立变化，即使正文未改也必须同步当前提示。
+        existing.admin_note = fields.get("admin_note")
         existing.last_crawled_at = now
         return
 
@@ -186,6 +193,7 @@ async def _upsert_article(
     await session.flush()
     existing.title = fields["title"][:500]
     existing.author_uid = fields.get("author_uid") or existing.author_uid
+    existing.admin_note = fields.get("admin_note")
     existing.current_version_id = v.id
     existing.last_crawled_at = now
 

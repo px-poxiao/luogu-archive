@@ -9,6 +9,7 @@ interface ArticleDetail {
   article_id: string
   title: string
   content_md: string
+  admin_note: string | null
   author: any
   crawled_at: string
   version_count: number
@@ -22,6 +23,9 @@ const { data, error, pending } = useLazyAsyncData(`article-${id}`, () =>
 
 const { render } = useMarkdown()
 const html = computed(() => (data.value ? render(data.value.content_md) : ''))
+const adminNoteHtml = computed(() =>
+  data.value?.admin_note ? render(data.value.admin_note) : '',
+)
 
 const contentRef = ref<HTMLElement | null>(null)
 useCopyCode(contentRef)
@@ -118,6 +122,25 @@ async function copyOriginalMarkdown() {
         </div>
       </div>
     </header>
+
+    <aside v-if="data.admin_note" class="admin-note" aria-label="管理员提示">
+      <div class="admin-note-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path
+            d="M12 3 2.8 19h18.4L12 3Zm0 5v5m0 3.5v.5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </div>
+      <div class="admin-note-body">
+        <strong>管理员提示</strong>
+        <div class="lg-content admin-note-content" v-html="adminNoteHtml" />
+      </div>
+    </aside>
 
     <article ref="contentRef" class="lg-content" v-html="html" />
   </div>
@@ -243,6 +266,51 @@ async function copyOriginalMarkdown() {
   width: 15px;
   height: 15px;
   flex: 0 0 auto;
+}
+
+/* 管理组提示保持独立，不与作者正文混在一起。 */
+.admin-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  background: var(--banner-bg);
+  border: 1px solid var(--banner-border);
+  border-radius: 8px;
+  color: var(--text);
+}
+.admin-note-icon {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--lg-orange);
+}
+.admin-note-icon svg {
+  width: 22px;
+  height: 22px;
+}
+.admin-note-body {
+  min-width: 0;
+  flex: 1;
+}
+.admin-note-body > strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 15px;
+}
+.admin-note-content {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.admin-note-content :deep(> :first-child) {
+  margin-top: 0;
+}
+.admin-note-content :deep(> :last-child) {
+  margin-bottom: 0;
 }
 
 .error-box {

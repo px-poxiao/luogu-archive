@@ -56,6 +56,7 @@ class ArticleDetail(BaseModel):
     article_id: str
     title: str
     content_md: str
+    admin_note: str | None
     author: _UserBrief | None
     crawled_at: datetime
     version_count: int
@@ -199,6 +200,7 @@ async def get_article(
         article_id=article_id,
         title=v.title,
         content_md=v.content_md,
+        admin_note=art.admin_note,
         author=await _user_brief(db, art.author_uid),
         crawled_at=v.crawled_at,
         version_count=versions_count,
