@@ -123,24 +123,11 @@ async function copyOriginalMarkdown() {
       </div>
     </header>
 
-    <aside v-if="data.admin_note" class="admin-note" aria-label="管理员提示">
-      <div class="admin-note-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24">
-          <path
-            d="M12 3 2.8 19h18.4L12 3Zm0 5v5m0 3.5v.5"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      </div>
-      <div class="admin-note-body">
-        <strong>管理员提示</strong>
-        <div class="lg-content admin-note-content" v-html="adminNoteHtml" />
-      </div>
-    </aside>
+    <!-- 与洛谷文章页保持一致：红色引用块 + 固定的“管理组提示：”标题。 -->
+    <blockquote v-if="data.admin_note" class="admin-public-comment">
+      <p class="admin-public-comment-title">管理组提示：</p>
+      <div class="lg-content admin-public-comment-content" v-html="adminNoteHtml" />
+    </blockquote>
 
     <article ref="contentRef" class="lg-content" v-html="html" />
   </div>
@@ -268,48 +255,27 @@ async function copyOriginalMarkdown() {
   flex: 0 0 auto;
 }
 
-/* 管理组提示保持独立，不与作者正文混在一起。 */
-.admin-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin: 0 0 16px;
-  padding: 14px 16px;
-  background: var(--banner-bg);
-  border: 1px solid var(--banner-border);
-  border-radius: 8px;
+/* 复刻洛谷文章页的管理员公开提示样式。 */
+.admin-public-comment {
+  margin: 0 0 20px;
+  padding: 10px 20px;
+  background: color-mix(in srgb, var(--lg-red) 12%, var(--surface));
+  border: 0;
+  border-left: 5px solid var(--lg-red);
   color: var(--text);
+  white-space: pre-wrap;
 }
-.admin-note-icon {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  color: var(--lg-orange);
+.admin-public-comment-title {
+  margin: 0 0 0.3em;
+  font-weight: 700;
 }
-.admin-note-icon svg {
-  width: 22px;
-  height: 22px;
+.admin-public-comment-content {
+  color: inherit;
 }
-.admin-note-body {
-  min-width: 0;
-  flex: 1;
-}
-.admin-note-body > strong {
-  display: block;
-  margin-bottom: 3px;
-  font-size: 15px;
-}
-.admin-note-content {
-  color: var(--text-muted);
-  font-size: 14px;
-}
-.admin-note-content :deep(> :first-child) {
+.admin-public-comment-content :deep(> :first-child) {
   margin-top: 0;
 }
-.admin-note-content :deep(> :last-child) {
+.admin-public-comment-content :deep(> :last-child) {
   margin-bottom: 0;
 }
 
