@@ -1,8 +1,19 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 const route = useRoute()
 const api = useApi()
 const { smart, format } = useTime()
 const uid = route.params.uid as string
+
+interface UserNameHistoryItem {
+  name: string
+  color: string
+  badge: string | null
+  ccf_level: number
+  xcpc_level: number
+  first_seen_at: string
+  last_seen_at: string
+  is_hidden: boolean
+}
 
 interface UserProfile {
   uid: number
@@ -24,7 +35,7 @@ interface UserProfile {
   register_time: string | null
   introduction_md: string | null
   last_crawled_at: string | null
-  name_history: Array<{ name: string; first_seen_at: string; last_seen_at: string; is_hidden: boolean }>
+  name_history: UserNameHistoryItem[]
   prizes: Array<{ year: number; contest: string; event: string | null; prize: string; score: number | null; rank: number | null }>
   name_hidden: boolean
 }
@@ -183,6 +194,66 @@ const userBrief = computed(() => profile.value ? {
   is_admin: profile.value.is_admin,
 } : null)
 
+interface CollapsedNameHistoryItem extends UserNameHistoryItem {
+  id: string
+}
+
+// 兼容旧数据：只合并时间线上相邻且外显完全相同的快照，不跨越中间变化。
+const nameHistory = computed<CollapsedNameHistoryItem[]>(() => {
+  const ordered = [...(profile.value?.name_history ?? [])].sort(
+    (a, b) => new Date(b.first_seen_at).getTime() - new Date(a.first_seen_at).getTime(),
+  )
+  const collapsed: CollapsedNameHistoryItem[] = []
+
+  for (const entry of ordered) {
+    const key = [
+      entry.is_hidden ? 'hidden' : entry.name,
+      entry.color,
+      entry.badge ?? '',
+      entry.ccf_level,
+      entry.xcpc_level,
+    ].join('|')
+    const tail = collapsed[collapsed.length - 1]
+    const tailKey = tail
+      ? [
+          tail.is_hidden ? 'hidden' : tail.name,
+          tail.color,
+          tail.badge ?? '',
+          tail.ccf_level,
+          tail.xcpc_level,
+        ].join('|')
+      : null
+
+    if (tail && tailKey === key) {
+      if (new Date(entry.first_seen_at) < new Date(tail.first_seen_at)) {
+        tail.first_seen_at = entry.first_seen_at
+      }
+      if (new Date(entry.last_seen_at) > new Date(tail.last_seen_at)) {
+        tail.last_seen_at = entry.last_seen_at
+      }
+      continue
+    }
+
+    collapsed.push({
+      ...entry,
+      id: `${entry.first_seen_at}-${collapsed.length}`,
+    })
+  }
+  return collapsed
+})
+
+function historyUser(entry: UserNameHistoryItem) {
+  return {
+    uid: profile.value?.uid ?? Number(uid),
+    name: entry.name,
+    color: entry.color,
+    badge: entry.badge,
+    avatar: null,
+    ccf_level: entry.ccf_level,
+    xcpc_level: entry.xcpc_level,
+  }
+}
+
 // 左侧 Tab 切换
 type TabKey = 'activity' | 'intro' | 'prizes' | 'names'
 const activeTab = ref<TabKey>('activity')
@@ -191,7 +262,7 @@ const tabs: Array<{ key: TabKey; label: string; show: () => boolean }> = [
   { key: 'activity', label: '活动', show: () => true },
   { key: 'intro', label: '个人介绍', show: () => !!profile.value?.introduction_md },
   { key: 'prizes', label: 'OI 获奖', show: () => (profile.value?.prizes?.length ?? 0) > 0 },
-  { key: 'names', label: '用户名历史', show: () => (profile.value?.name_history?.length ?? 0) > 1 },
+  { key: 'names', label: '用户名历史', show: () => nameHistory.value.length > 1 },
 ]
 
 // 代码复制按钮：绑在右侧内容容器上，覆盖 activity / intro 两种 md 场景
@@ -425,16 +496,42 @@ function formatScore(s: number): string {
           </table>
         </section>
 
-        <!-- 用户名历史 -->
-        <section v-if="activeTab === 'names'">
-          <h2>用户名历史</h2>
-          <ul class="simple-list">
-            <li v-for="h in profile.name_history" :key="h.name">
-              <span v-if="h.is_hidden" class="hidden-name">UID {{ profile.uid }}（已隐藏）</span>
-              <span v-else class="lg-name" :data-color="profile.color">{{ h.name }}</span>
-              <span class="time">{{ format(h.first_seen_at, 'YYYY-MM-DD') }} ~ {{ format(h.last_seen_at, 'YYYY-MM-DD') }}</span>
+        <!-- 用户名外显历史 -->
+        <section v-if="activeTab === 'names'" class="name-history-panel">
+          <header class="name-history-head">
+            <div>
+              <h2>历史用户名外显</h2>
+              <p>追踪最近的用户名外显变动记录。</p>
+            </div>
+            <span>{{ nameHistory.length }} 次记录</span>
+          </header>
+
+          <ol class="name-history-list">
+            <li
+              v-for="(h, index) in nameHistory"
+              :key="h.id"
+              :class="{ current: index === 0 }"
+            >
+              <span class="history-line" aria-hidden="true" />
+              <span class="history-dot" aria-hidden="true" />
+              <div class="history-content">
+                <LuoguUserName
+                  :user="historyUser(h)"
+                  :hidden="h.is_hidden"
+                  show-badge
+                  no-link
+                />
+                <div class="history-time">
+                  <span :title="h.first_seen_at">
+                    最早追溯到 {{ format(h.first_seen_at, 'YYYY/MM/DD') }}
+                  </span>
+                  <span :title="h.last_seen_at">
+                    最后捕获于 {{ format(h.last_seen_at, 'YYYY/MM/DD') }}
+                  </span>
+                </div>
+              </div>
             </li>
-          </ul>
+          </ol>
         </section>
       </main>
     </div>
@@ -630,14 +727,12 @@ function formatScore(s: number): string {
   flex: 0 0 auto;
 }
 
-.activity-list,
-.simple-list {
+.activity-list {
   list-style: none;
   padding: 0;
   margin: 0;
 }
-.activity-list li,
-.simple-list li {
+.activity-list li {
   padding: 10px 14px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -661,9 +756,101 @@ function formatScore(s: number): string {
   /* 文章 / 剪贴板的链接独占一行，上方留空与 feed 内容块保持一致 */
   margin-top: 8px;
 }
-.hidden-name {
+.name-history-panel {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.name-history-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+}
+.name-history-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.name-history-head p {
+  margin: 4px 0 0;
   color: var(--text-muted);
-  font-style: italic;
+  font-size: 13px;
+}
+.name-history-head > span {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.name-history-list {
+  margin: 0;
+  padding: 8px 22px 12px;
+  list-style: none;
+}
+.name-history-list li {
+  position: relative;
+  min-height: 66px;
+  padding: 13px 0 13px 26px;
+}
+.history-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background: var(--border);
+}
+.name-history-list li:first-child .history-line {
+  top: 21px;
+}
+.name-history-list li:last-child .history-line {
+  bottom: calc(100% - 22px);
+}
+.history-dot {
+  position: absolute;
+  top: 19px;
+  left: 1px;
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--text-muted);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.name-history-list li.current .history-dot {
+  background: var(--link);
+  box-shadow: 0 0 0 1px var(--link);
+}
+.history-content {
+  min-width: 0;
+}
+.history-time {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 16px;
+  margin-top: 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.name-history-list li.current .history-time {
+  color: var(--text);
+  font-weight: 500;
+}
+@media (max-width: 520px) {
+  .name-history-head {
+    padding: 16px;
+  }
+  .name-history-head > span {
+    display: none;
+  }
+  .name-history-list {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
 }
 .feed-foot {
   margin-top: 6px;

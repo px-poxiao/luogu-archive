@@ -210,14 +210,24 @@ async def _wait_for_slot(
         token, retry_after_ms = await node.try_acquire(redis, lease_sec=lease_sec)
         if token is not None:
             return token
-        if defer_when_busy:
-            raise CrawlerCooldownDeferred(retry_after_ms)
+
         remaining_sec = deadline - time.monotonic()
+        retry_after_sec = retry_after_ms / 1000
+
+        # 正常冷却通常只有 1 秒（luogu.com）或 10 秒（luogu.com.cn）。
+        # 这种短等待直接留在当前单线程 worker 内完成，避免同一批任务在
+        # ready / DQ 队列之间反复搬运。只有长租约、熔断或等待预算耗尽时
+        # 才重新入延迟队列，仍保留进程异常后的自动恢复能力。
+        if defer_when_busy and (
+            remaining_sec <= 0 or retry_after_sec > remaining_sec + 0.25
+        ):
+            raise CrawlerCooldownDeferred(retry_after_ms)
         if remaining_sec <= 0:
             raise CrawlerBlockedError(
                 f"爬虫节点 {node.node_id} 限流/熔断中（等待冷却名额超时）",
             )
-        await asyncio.sleep(min(retry_after_ms / 1000, remaining_sec))
+        sleep_sec = retry_after_sec if defer_when_busy else min(retry_after_sec, remaining_sec)
+        await asyncio.sleep(sleep_sec)
 
 
 async def _wait_for_account_slot(

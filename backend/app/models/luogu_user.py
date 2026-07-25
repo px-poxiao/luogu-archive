@@ -130,7 +130,7 @@ class LuoguUser(Base, TimestampMixin):
 
 
 class UserNameVersion(Base):
-    """用户名历史。每次改名关闭旧行 + 新增一行。"""
+    """用户名外显历史；名字、颜色、称号或认证标记变化时新增快照。"""
 
     __tablename__ = "user_name_versions"
     __table_args__ = (
@@ -142,6 +142,14 @@ class UserNameVersion(Base):
         BigInteger, ForeignKey("luogu_users.uid", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(128), nullable=False)
+    color: Mapped[LuoguColor] = mapped_column(
+        Enum(LuoguColor, native_enum=False, length=16),
+        nullable=False,
+        default=LuoguColor.Gray,
+    )
+    badge: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ccf_level: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    xcpc_level: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

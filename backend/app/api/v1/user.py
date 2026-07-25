@@ -22,7 +22,6 @@ from app.models.luogu_content import (
 from app.models.luogu_user import (
     LuoguUser,
     UserNameVersion,
-    UserNameViolation,
     UserPrize,
 )
 
@@ -35,6 +34,10 @@ router = APIRouter(prefix="/user", tags=["user"])
 
 class UserNameHistoryItem(BaseModel):
     name: str
+    color: str
+    badge: str | None
+    ccf_level: int
+    xcpc_level: int
     first_seen_at: datetime
     last_seen_at: datetime
     is_hidden: bool  # 前台若为 True 会显示成 UID xxx
@@ -110,30 +113,39 @@ async def get_user(
     if is_stale(user.last_crawled_at):
         await schedule_refresh_user(uid)
 
-    # 用户名违规情况
-    vio_q = select(UserNameViolation).where(UserNameViolation.uid == uid).limit(1)
-    vio = (await db.execute(vio_q)).scalar_one_or_none()
     current_name_hidden = False
+    current_name_resolved = False
 
-    # 名字历史（不含已关闭的被隐藏）
+    # 用户名外显历史：最新记录优先，最多返回最近 120 次变化。
     nv_q = (
         select(UserNameVersion)
         .where(UserNameVersion.uid == uid)
-        .order_by(UserNameVersion.first_seen_at)
+        .order_by(
+            UserNameVersion.first_seen_at.desc(),
+            UserNameVersion.id.desc(),
+        )
+        .limit(120)
     )
     nvs = (await db.execute(nv_q)).scalars().all()
     history: list[UserNameHistoryItem] = []
     for nv in nvs:
+        # 被隐藏的历史不把原用户名及其外显特征下发到浏览器。
+        history_name = f"UID {uid}" if nv.is_hidden else nv.name
         history.append(
             UserNameHistoryItem(
-                name=nv.name,
+                name=history_name,
+                color="Gray" if nv.is_hidden else nv.color.value,
+                badge=None if nv.is_hidden else nv.badge,
+                ccf_level=0 if nv.is_hidden else nv.ccf_level,
+                xcpc_level=0 if nv.is_hidden else nv.xcpc_level,
                 first_seen_at=nv.first_seen_at,
                 last_seen_at=nv.last_seen_at,
                 is_hidden=nv.is_hidden,
             )
         )
-        if nv.name == user.name:
+        if nv.name == user.name and not current_name_resolved:
             current_name_hidden = nv.is_hidden
+            current_name_resolved = True
 
     # 奖项
     p_q = select(UserPrize).where(UserPrize.uid == uid).order_by(UserPrize.year)

@@ -5,7 +5,7 @@ r"""用户主页爬虫。
 
 实现要点：
 - 不需要登录
-- 判重：introduction 走版本化；name 走 name_versions；数值字段走时间序列
+- 判重：introduction 走版本化；用户名外显走 name_versions；数值字段走时间序列
 - 用户名违规检测：
   1) 系统格式正则（_user_\\d+ / 违规用户名\d+）
   2) 匹配即写 user_name_violation → 隐藏 triggered_at 之前所有 name_versions
@@ -310,10 +310,8 @@ async def _upsert_user(
         )
         session.add(existing)
         await session.flush()
-        # 新建时第一条 name_version / intro_version
-        session.add(
-            UserNameVersion(uid=uid, name=name, first_seen_at=now, last_seen_at=now)
-        )
+        # 新建时写入第一条用户名外显快照。
+        await _record_name_appearance(session, uid, new_values, now)
         if intro:
             session.add(
                 UserIntroVersion(
@@ -326,32 +324,8 @@ async def _upsert_user(
     else:
         await _record_profile_changes(session, existing, new_values, now)
 
-        # ---- 名字变更检测 ----
-        if name != existing.name:
-            # 关闭旧版本
-            stmt = (
-                update(UserNameVersion)
-                .where(
-                    UserNameVersion.uid == uid,
-                    UserNameVersion.name == existing.name,
-                )
-                .values(last_seen_at=now)
-            )
-            await session.execute(stmt)
-            session.add(
-                UserNameVersion(uid=uid, name=name, first_seen_at=now, last_seen_at=now)
-            )
-        else:
-            # 只更新旧版本的 last_seen_at
-            stmt = (
-                update(UserNameVersion)
-                .where(
-                    UserNameVersion.uid == uid,
-                    UserNameVersion.name == name,
-                )
-                .values(last_seen_at=now)
-            )
-            await session.execute(stmt)
+        # ---- 用户名外显变更检测 ----
+        await _record_name_appearance(session, uid, new_values, now)
 
         # ---- introduction 变更检测 ----
         if intro != (existing.introduction or ""):
@@ -414,6 +388,52 @@ async def _upsert_user(
 
     # ---------- dailyCounts ----------
     await _sync_daily(session, uid, data.get("dailyCounts") or [])
+
+
+async def _record_name_appearance(
+    session: AsyncSession,
+    uid: int,
+    new_values: dict,
+    now: datetime,
+) -> None:
+    """保存用户名外显快照；连续相同外显只延长最后捕获时间。"""
+
+    latest = (
+        await session.execute(
+            select(UserNameVersion)
+            .where(UserNameVersion.uid == uid)
+            .order_by(
+                UserNameVersion.first_seen_at.desc(),
+                UserNameVersion.id.desc(),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    color = LuoguColor(new_values["color"])
+    appearance_unchanged = latest is not None and (
+        latest.name == new_values["name"]
+        and latest.color == color
+        and latest.badge == new_values["badge"]
+        and latest.ccf_level == new_values["ccf_level"]
+        and latest.xcpc_level == new_values["xcpc_level"]
+    )
+    if appearance_unchanged:
+        latest.last_seen_at = now
+        return
+
+    session.add(
+        UserNameVersion(
+            uid=uid,
+            name=new_values["name"],
+            color=color,
+            badge=new_values["badge"],
+            ccf_level=new_values["ccf_level"],
+            xcpc_level=new_values["xcpc_level"],
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+    )
 
 
 def _stringify_change_value(value) -> str | None:  # noqa: ANN001
