@@ -80,11 +80,12 @@ async def pick_account(session: AsyncSession) -> AccountCookies | None:
 
 
 @asynccontextmanager
-async def lease_account():
+async def lease_account(*, cn: bool = False):
     """上下文管理器：租用一个账号（多账号轮询）。
 
     同一账号跨 worker 严格串行；调用方退出上下文（包括写库和审计完成）后，
     才开始 CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC 冷却。
+    ``cn=True`` 用于访问 luogu.com.cn，并与该域名的匿名请求共享限速门。
 
     选号策略：Redis INCR 决定轮询起点，再依次原子尝试所有账号的冷却门。
     优先拿当前空闲账号；全部忙时让 actor 延迟重入队，把执行槽让给下一优先级。
@@ -152,7 +153,7 @@ async def lease_account():
     if selected is None:
         raise CrawlerCooldownDeferred(min(retry_after or [1000]))
 
-    node = get_default_node(NodeKind.AUTHED)
+    node = get_default_node(NodeKind.AUTHED, cn=cn)
     async with crawler_task_cooldown(
         node,
         redis,

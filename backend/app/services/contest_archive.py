@@ -11,6 +11,7 @@ from sqlalchemy import and_, delete, func, or_, select
 
 from app.core.db import db_session
 from app.core.logging import get_logger
+from app.core.locks import DistributedLock
 from app.core.redis_client import get_redis
 from app.models._common import LuoguColor, utcnow
 from app.models.contest import (
@@ -30,6 +31,9 @@ from app.services.elo_rating import (
 
 
 log = get_logger(__name__)
+
+# 比赛结束后排行榜仍可能有少量结算延迟，统一等待五分钟再开始归档。
+_CONTEST_ARCHIVE_GRACE = timedelta(minutes=5)
 
 
 def _to_datetime(value: int | float | None) -> datetime:
@@ -88,14 +92,11 @@ def _normalize_problem(item: dict[str, Any], index: int) -> tuple[str, str, str,
 
 
 async def discover_first_page() -> int:
-    """保存比赛列表第一页，并派发刚结束比赛的归档任务。"""
+    """保存比赛列表第一页，并尝试派发已超过等待期的比赛。"""
 
     from app.crawler.sources.contest import fetch_first_page
-    from app.tasks.actors.contest import archive_contest
 
     rows = await fetch_first_page()
-    now = utcnow()
-    ended_ids: list[int] = []
     async with db_session() as session:
         for raw in rows:
             contest_id = raw.get("id")
@@ -123,78 +124,97 @@ async def discover_first_page() -> int:
                 contest.start_time = _to_datetime(raw.get("startTime"))
                 contest.end_time = _to_datetime(raw.get("endTime"))
                 contest.raw_data = raw
-        # A broker restart can lose a queued message while the database still says
-        # ``queued``. Recover those rows here, including contests that have already
-        # fallen off the first list page.
-        stale_queued_before = now - timedelta(minutes=15)
-        stale_crawling_before = now - timedelta(hours=6)
-        archive_candidates = (
-            await session.execute(
-                select(Contest).where(
-                    Contest.end_time <= now,
-                    or_(
-                        Contest.status.in_(
-                            {
-                                ContestArchiveStatus.discovered,
-                                ContestArchiveStatus.failed,
-                            }
-                        ),
-                        and_(
-                            Contest.status == ContestArchiveStatus.queued,
-                            Contest.updated_at <= stale_queued_before,
-                        ),
-                        and_(
-                            Contest.status == ContestArchiveStatus.crawling,
-                            Contest.updated_at <= stale_crawling_before,
-                        ),
-                    ),
-                )
-            )
-        ).scalars().all()
-        redis = get_redis()
-        ended_ids = []
-        for contest in archive_candidates:
-            if (
-                contest.status == ContestArchiveStatus.crawling
-                and await redis.exists(_scoreboard_heartbeat_key(contest.id))
-            ):
-                continue
-            ended_ids.append(contest.id)
         await session.commit()
 
-    dispatched = 0
-    for index, contest_id in enumerate(ended_ids):
-        # 归档任务自身受 cn 域名门限制；这里稍微错峰，避免同一刻堆入 worker。
-        try:
-            if index == 0:
-                archive_contest.send(contest_id, "scheduled")
-            else:
-                archive_contest.send_with_options(
-                    args=(contest_id, "scheduled"),
-                    delay=index * 1_000,
-                )
-        except Exception as exc:
-            # 保留原状态，让下一轮发现任务继续尝试派发。
-            log.error(
-                "contest.archive_dispatch_failed",
-                contest_id=contest_id,
-                error=str(exc),
-            )
-            continue
+    return await dispatch_ready_contests()
 
-        # 只有 broker 已接受消息后才写 queued。即使这里提交失败，后续重复派发
-        # 也会被归档 actor 的按比赛 ID 锁合并。
+
+async def dispatch_ready_contests() -> int:
+    """按数据库中的截止时间派发比赛归档，不额外请求洛谷。
+
+    每分钟运行一次，只处理结束至少五分钟的比赛。分布式锁用于避免比赛发现任务
+    与定时到期检查在同一时刻重复派发。
+    """
+
+    from app.tasks.actors.contest import archive_contest
+
+    redis = get_redis()
+    lock = DistributedLock(redis)
+    async with lock.guard("contest:archive_due_dispatch", ttl_sec=50) as got:
+        if not got:
+            return 0
+
+        now = utcnow()
+        archive_before = now - _CONTEST_ARCHIVE_GRACE
+        # Broker 重启可能丢失消息但数据库仍是 queued；一并恢复已经失去进展的比赛，
+        # 包括早已离开比赛列表第一页的记录。
+        stale_queued_before = now - timedelta(minutes=15)
+        stale_crawling_before = now - timedelta(hours=6)
         async with db_session() as session:
-            contest = await session.get(Contest, contest_id)
-            if contest and contest.status in {
-                ContestArchiveStatus.discovered,
-                ContestArchiveStatus.failed,
-                ContestArchiveStatus.queued,
-            }:
-                contest.status = ContestArchiveStatus.queued
-                await session.commit()
-        dispatched += 1
-    return dispatched
+            archive_candidates = (
+                await session.execute(
+                    select(Contest).where(
+                        Contest.end_time <= archive_before,
+                        or_(
+                            Contest.status.in_(
+                                {
+                                    ContestArchiveStatus.discovered,
+                                    ContestArchiveStatus.failed,
+                                }
+                            ),
+                            and_(
+                                Contest.status == ContestArchiveStatus.queued,
+                                Contest.updated_at <= stale_queued_before,
+                            ),
+                            and_(
+                                Contest.status == ContestArchiveStatus.crawling,
+                                Contest.updated_at <= stale_crawling_before,
+                            ),
+                        ),
+                    )
+                )
+            ).scalars().all()
+            ended_ids = []
+            for contest in archive_candidates:
+                if (
+                    contest.status == ContestArchiveStatus.crawling
+                    and await redis.exists(_scoreboard_heartbeat_key(contest.id))
+                ):
+                    continue
+                ended_ids.append(contest.id)
+
+        dispatched = 0
+        for index, contest_id in enumerate(ended_ids):
+            # 归档任务自身受 cn 域名门限制；这里只做短暂错峰，不创建长延迟任务。
+            try:
+                if index == 0:
+                    archive_contest.send(contest_id, "scheduled")
+                else:
+                    archive_contest.send_with_options(
+                        args=(contest_id, "scheduled"),
+                        delay=index * 1_000,
+                    )
+            except Exception as exc:
+                # 保留原状态，让下一分钟的到期检查继续尝试派发。
+                log.error(
+                    "contest.archive_dispatch_failed",
+                    contest_id=contest_id,
+                    error=str(exc),
+                )
+                continue
+
+            # 只有 broker 已接受消息后才写 queued；失败时保留原状态供下轮重试。
+            async with db_session() as session:
+                contest = await session.get(Contest, contest_id)
+                if contest and contest.status in {
+                    ContestArchiveStatus.discovered,
+                    ContestArchiveStatus.failed,
+                    ContestArchiveStatus.queued,
+                }:
+                    contest.status = ContestArchiveStatus.queued
+                    await session.commit()
+            dispatched += 1
+        return dispatched
 
 
 _CONTEST_PIPELINE_TTL_SEC = 7 * 24 * 3600
@@ -279,7 +299,7 @@ async def archive_one(
 
     raw_contest, raw_problems = await fetch_detail(contest_id)
     end_time = _to_datetime(raw_contest.get("endTime"))
-    if end_time > utcnow() and not force:
+    if end_time + _CONTEST_ARCHIVE_GRACE > utcnow() and not force:
         async with db_session() as session:
             contest = await session.get(Contest, contest_id)
             if contest:

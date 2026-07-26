@@ -51,10 +51,20 @@ async def job_crawl_judgement() -> None:
 
 
 async def job_discover_contests() -> None:
-    """每小时扫描比赛列表第一页，登记新比赛并归档刚结束的比赛。"""
+    """每小时扫描比赛列表第一页，登记新比赛。"""
     from app.tasks.actors.contest import discover_contests
 
     discover_contests.send()
+
+
+async def job_archive_finished_contests() -> None:
+    """每分钟按本地截止时间派发结束五分钟以上的比赛。"""
+
+    from app.services.contest_archive import dispatch_ready_contests
+
+    dispatched = await dispatch_ready_contests()
+    if dispatched:
+        log.info("contest.archive_due_enqueued", count=dispatched)
 
 
 async def job_probe_contest_official() -> None:
@@ -415,6 +425,12 @@ def build_scheduler() -> AsyncIOScheduler:
     sched.add_job(job_discover_article, "interval", minutes=10, id="discover_article")
     sched.add_job(job_crawl_judgement, "interval", hours=1, id="crawl_judgement")
     sched.add_job(job_discover_contests, "interval", hours=1, id="discover_contests")
+    sched.add_job(
+        job_archive_finished_contests,
+        "interval",
+        minutes=1,
+        id="archive_finished_contests",
+    )
     sched.add_job(
         job_probe_contest_official,
         "interval",
