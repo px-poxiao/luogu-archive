@@ -116,7 +116,7 @@ mkdir -p "$BACKEND"
 
 cat > "$BACKEND_ENV" <<EOF
 # ==== 由 install_worker.sh 生成于 $(date -Iseconds) ====
-# 远程 worker 配置。本机不跑 backend/frontend/scheduler，只跑 dramatiq worker。
+# 远程 worker 配置。本机不跑 backend/frontend/scheduler，只跑资源队列 worker。
 
 APP_NAME=luogu-archive-worker
 APP_ENV=production

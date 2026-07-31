@@ -7,7 +7,7 @@
 #
 # 启动列表：
 #   - backend  FastAPI (uvicorn)        监听 127.0.0.1:8000
-#   - worker   Dramatiq 消费 4 个队列
+#   - worker   资源感知队列，严格消费 3 个优先级
 #   - scheduler  APScheduler 定时任务
 #   - frontend  Nuxt 生产 node 服务      监听 127.0.0.1:3000
 #
@@ -27,7 +27,6 @@ FRONTEND="$ROOT_DIR/frontend"
 RUN="$ROOT_DIR/run"
 LOGS="$ROOT_DIR/logs"
 PY="$BACKEND/.venv/bin/python"
-DRAMATIQ="$BACKEND/.venv/bin/dramatiq"
 UVICORN="$BACKEND/.venv/bin/uvicorn"
 
 mkdir -p "$RUN" "$LOGS"
@@ -103,7 +102,6 @@ start_backend() {
 
 start_worker() {
     cd "$BACKEND"
-    export DRAMATIQ_BIN="$DRAMATIQ"
     start_one worker "$PY" -m scripts.priority_worker
 }
 

@@ -7,7 +7,7 @@ Body: { content_type: "article"|"paste"|"user"|"feed"|"judgement"|"problem"|"pro
 1. 校验 IP 限流（滑动窗口 60s / 5 次）
 2. 若 IP 已进入"需验证"状态 → 先校验 captcha_token
 3. 请求合并：若同 target 已有 pending 任务，返回已有 task_id
-4. 派发 Dramatiq 任务（高优先级队列）
+4. 派发资源队列任务（高优先级队列）
 5. 写 SaveRequest 审计
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ import re
 from typing import Literal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_client_ip
@@ -169,14 +169,14 @@ async def _try_merge_or_enqueue(
 ) -> tuple[str, bool]:
     """返回 (task_id, merged)。
 
-    此处"task_id"约定为 Dramatiq 消息 id。已有 pending → 复用；否则新派发。
+    此处"task_id"约定为资源队列任务 id。已有 pending → 复用；否则新派发。
     """
     from app.tasks.actors.crawl import (
         crawl_article,
         crawl_judgement_hi,
         crawl_paste,
-        crawl_user_manual,
         crawl_user_feeds_hi,
+        crawl_user_manual,
     )
     from app.tasks.problem_queue import (
         enqueue_problem_list_page,
@@ -305,7 +305,7 @@ async def save(req: SaveReq, request: Request) -> SaveResp:
 async def save_status(task_id: str) -> dict:
     """查询任务状态。
 
-    Dramatiq 原生没有"任务状态 API"。最简：看 Redis 是否还有 pending key 决定。
+    保存接口用 Redis pending key 暴露用户可见状态，不直接泄露内部队列结构。
     更精细需要接一个结果后端，后续加。这里先给前端轮询方案。
     """
     redis = get_redis()

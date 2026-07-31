@@ -1,6 +1,7 @@
 """站点概览 API。"""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
@@ -10,10 +11,10 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.core.redis_client import get_redis
 from app.models.admin import SiteAnnouncement
 from app.models.luogu_content import Article, Feed, Judgement, Paste
 from app.models.task import CrawlTask
+from app.tasks.broker import get_broker
 
 router = APIRouter(prefix="/site", tags=["site"])
 
@@ -87,24 +88,12 @@ async def _count(session: AsyncSession, model: type) -> int:
 
 
 async def _queue_len(name: str) -> int:
-    """读取 Dramatiq Redis 队列长度，兼容不同 broker key 类型。"""
-    redis = get_redis()
-    for key in (f"dramatiq:{name}.msgs", f"dramatiq:{name}"):
-        try:
-            kind = await redis.type(key)
-            if isinstance(kind, bytes):
-                kind = kind.decode()
-            if kind == "list":
-                return int(await redis.llen(key))
-            if kind == "hash":
-                return int(await redis.hlen(key))
-            if kind == "zset":
-                return int(await redis.zcard(key))
-            if kind == "stream":
-                return int(await redis.xlen(key))
-        except Exception:
-            continue
-    return 0
+    """读取资源队列的 pending 与 inflight 总数。"""
+
+    try:
+        return await asyncio.to_thread(get_broker().queue_size, name)
+    except Exception:
+        return 0
 
 
 def _task_target(task_type: str, url: str) -> str:

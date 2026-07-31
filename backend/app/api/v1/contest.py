@@ -1,13 +1,17 @@
 """公开比赛排行榜 API。"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.contest_problem_mapping import (
+    normalize_problem_details,
+    resolve_display_problem_ids,
+)
 from app.core.db import get_db
 from app.core.exceptions import NotFoundError
 from app.models._common import utcnow
@@ -18,7 +22,6 @@ from app.models.contest import (
     ContestProblem,
 )
 from app.models.luogu_user import LuoguUser
-
 
 router = APIRouter(tags=["contest"])
 PUBLIC_STATUSES = {
@@ -66,8 +69,16 @@ def _has_ended(contest: Contest) -> bool:
 
     end_time = contest.end_time
     if end_time.tzinfo is None:
-        end_time = end_time.replace(tzinfo=timezone.utc)
+        end_time = end_time.replace(tzinfo=UTC)
     return end_time <= utcnow()
+
+
+def _stored_scoreboard_pid(problem: ContestProblem) -> str | None:
+    """读取归档时保存的正式题号。旧数据没有该字段时返回空。"""
+
+    raw_data = problem.raw_data or {}
+    value = raw_data.get("scoreboardPid") if isinstance(raw_data, dict) else None
+    return str(value) if isinstance(value, str) and value else None
 
 
 @router.get(
@@ -224,6 +235,27 @@ async def contest_scoreboard(
         )
     ).scalars().all()
 
+    # 新归档直接使用 scoreboardPid。旧归档额外读取少量头部样本，部署后无需重爬
+    # 整场比赛也能恢复正式题号与每题成绩。
+    detail_samples: list[dict | None] = [
+        row.problem_details for row, _user in participants
+    ]
+    if problems and any(_stored_scoreboard_pid(problem) is None for problem in problems):
+        historical_samples = (
+            await db.execute(
+                select(ContestParticipant.problem_details)
+                .where(ContestParticipant.contest_id == contest_id)
+                .order_by(ContestParticipant.rank_order)
+                .limit(20)
+            )
+        ).scalars().all()
+        detail_samples.extend(historical_samples)
+    display_problem_ids = resolve_display_problem_ids(
+        [problem.pid for problem in problems],
+        [_stored_scoreboard_pid(problem) for problem in problems],
+        detail_samples,
+    )
+
     rated = contest.is_elo_rated
     official = contest.status == ContestArchiveStatus.official
     show_rating = rated and (contest.predicted_at is not None or official)
@@ -248,7 +280,11 @@ async def contest_scoreboard(
                 "score": row.score,
                 "running_time": row.running_time,
                 "penalized": row.is_penalized,
-                "problem_details": row.problem_details or {},
+                "problem_details": normalize_problem_details(
+                    row.problem_details,
+                    [problem.pid for problem in problems],
+                    display_problem_ids,
+                ),
                 "rating": rating if show_rating else None,
                 "delta": delta if show_rating else None,
                 "rating_pending": rated and not show_rating,
@@ -276,8 +312,8 @@ async def contest_scoreboard(
             "status": _status_text(contest),
         },
         "problems": [
-            {"pid": item.pid, "label": item.label, "title": item.title}
-            for item in problems
+            {"pid": pid, "label": item.label, "title": item.title}
+            for item, pid in zip(problems, display_problem_ids, strict=True)
         ],
         "items": items,
         "total": total,

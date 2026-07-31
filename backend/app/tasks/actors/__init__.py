@@ -1,4 +1,4 @@
-"""Dramatiq actor 集合。
+"""资源队列任务集合。
 
 每个 actor 对应一类爬取任务。真实爬取逻辑住在 app.crawler.sources；
 这里只做薄封装：接收参数 -> run_async 调用 -> 记录 CrawlTask。

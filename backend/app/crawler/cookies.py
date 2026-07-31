@@ -3,8 +3,8 @@
 职责：
 - 从数据库加载启用的 CrawlerAccount
 - 解密 Cookie 字段（Fernet 加密存储）
-- 轮换分配（最久未用优先）
-- 单账号串行化（通过分布式锁，保号）
+- 队列任务按最早可用时间选择账号
+- 单账号串行化并执行完成后冷却
 - 异常即禁用：403/429/isBanned → 禁用 + 写日志
 - 心跳自检：30 分钟扫一次
 
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select, update
@@ -23,11 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.db import db_session
 from app.core.exceptions import CrawlerError
-from app.core.locks import DistributedLock, lock_key
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
-from app.models.admin import CrawlerAccount
 from app.models._common import utcnow
+from app.models.admin import CrawlerAccount
+from app.tasks.broker import account_disabled_key
+from app.tasks.runtime import current_async_reservation
 
 log = get_logger(__name__)
 
@@ -101,6 +101,8 @@ async def lease_account(*, cn: bool = False):
                 ...,
             )
     """
+    reservation = current_async_reservation()
+    reserved_account_id = reservation.account_id if reservation is not None else None
     candidates: list[AccountCookies] = []
     async with db_session() as session:
         q = (
@@ -108,6 +110,9 @@ async def lease_account(*, cn: bool = False):
             .where(CrawlerAccount.enabled.is_(True))
             .order_by(CrawlerAccount.id.asc())  # 稳定顺序，便于 round-robin 索引
         )
+        if reserved_account_id is not None:
+            # 账号由队列按最短剩余冷却时间选定，这里只加载对应 Cookie。
+            q = q.where(CrawlerAccount.id == reserved_account_id)
         accounts = (await session.execute(q)).scalars().all()
         if not accounts:
             yield None
@@ -129,6 +134,20 @@ async def lease_account(*, cn: bool = False):
             )
 
     # 延迟导入避免 cookies -> http -> crawler 模块初始化环。
+    if reserved_account_id is not None:
+        if not candidates:
+            raise CrawlerError(f"队列预留的账号 {reserved_account_id} 已被禁用或删除")
+        async with db_session() as session:
+            await session.execute(
+                update(CrawlerAccount)
+                .where(CrawlerAccount.id == reserved_account_id)
+                .values(last_used_at=utcnow())
+            )
+            await session.commit()
+        # 资源门由 worker 在任务结束时统一转入冷却，避免业务层重复释放。
+        yield candidates[0]
+        return
+
     from app.core.exceptions import CrawlerCooldownDeferred
     from app.crawler.http import crawler_task_cooldown, try_acquire_account_slot
     from app.crawler.nodes import NodeKind, get_default_node
@@ -192,6 +211,20 @@ async def mark_account_failed(
         await session.execute(stmt)
         await session.commit()
     if disable:
+        # 新队列的账号池位于 Redis；禁用后立即移除，避免同步周期内再次选中。
+        try:
+            redis = get_redis()
+            pipe = redis.pipeline(transaction=True)
+            pipe.set(account_disabled_key(account_id), "1")
+            pipe.zrem("rq:accounts:available", account_id)
+            await pipe.execute()
+        except Exception as exc:
+            # 数据库是账号启用状态的准确信息源；Redis 恢复后由 worker 定时同步修正。
+            log.warning(
+                "crawler_account.queue_remove_failed",
+                account_id=account_id,
+                error=str(exc),
+            )
         log.error("crawler_account.disabled", account_id=account_id, reason=reason)
     else:
         log.warning("crawler_account.failed", account_id=account_id, reason=reason)

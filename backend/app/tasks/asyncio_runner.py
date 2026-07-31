@@ -1,6 +1,6 @@
-"""在同步 Dramatiq actor 里运行 async 代码的桥接。
+"""在同步队列任务里运行 async 代码的桥接。
 
-Dramatiq 自身是同步 API，我们的爬虫和数据库层是 async。方案：
+资源 worker 是同步执行器，我们的爬虫和数据库层是 async。方案：
 - 每个 worker 进程启动时创建一个 event loop（驻留）
 - actor 被调度时，把 async 协程 `run_coroutine_threadsafe` 到那个 loop
 - 等结果返回
@@ -14,6 +14,8 @@ import atexit
 import threading
 from collections.abc import Coroutine
 from typing import TypeVar
+
+from app.tasks.runtime import current_sync_reservation, run_with_reservation
 
 T = TypeVar("T")
 
@@ -54,8 +56,13 @@ def run_async(coro: Coroutine[None, None, T], *, timeout: float | None = None) -
     """在后台 loop 上执行协程，并等待它真实结束。
 
     HTTP 层已有独立超时。这里不能设置较短的总超时：
-    ``Future.result`` 超时不会取消后台协程，Dramatiq 重试后会与原任务重叠执行。
+    ``Future.result`` 超时不会取消后台协程，队列重试后会与原任务重叠执行。
     """
     loop = _ensure_loop()
-    fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    # 任务领取时预留的域名门和账号门需要跨越同步 worker 与异步桥线程。
+    reservation = current_sync_reservation()
+    fut = asyncio.run_coroutine_threadsafe(
+        run_with_reservation(coro, reservation),
+        loop,
+    )
     return fut.result(timeout=timeout)

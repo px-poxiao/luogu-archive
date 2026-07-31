@@ -36,6 +36,7 @@ from app.core.logging import get_logger
 from app.core.ratelimit import CompletionCooldownLimiter, ratelimit_key
 from app.crawler.lentille import extract_lentille_context
 from app.crawler.nodes.base import CrawlerNode, NodeKind
+from app.tasks.runtime import current_async_reservation
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -308,6 +309,10 @@ async def _request_slots(
 ):
     """占用账号门和域名门，退出上下文后分别开始冷却。"""
     active_keys = _active_cooldown_keys.get()
+    reservation = current_async_reservation()
+    if reservation is not None:
+        # 新队列已经原子预留资源，HTTP 层继承所有权，不能再次抢占同一个门。
+        active_keys = frozenset(set(active_keys) | set(reservation.resource_keys))
     account_key = (
         ratelimit_key("crawler_account_request", str(account_id))
         if account_id is not None

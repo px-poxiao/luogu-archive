@@ -1,241 +1,336 @@
-"""严格优先级 Dramatiq worker 监督进程。
+"""资源感知型严格优先级 worker。
 
-Dramatiq 可以让一个 worker 同时监听多条队列，但这不能保证队列之间的严格调度顺序。
-这里一次只运行一个单队列 Dramatiq 子进程，并按下面的顺序选择队列：
-
-    crawler.hi -> crawler.mid -> crawler.low
-
-注意：Dramatiq 的延迟队列 ``<queue>.DQ`` 里可能有未来才重试的消息。未来消息不能
-阻塞低优先级队列，否则一个高优先级重试任务就会让普通队列长期饿死。
+领取顺序固定为 ``crawler.hi -> crawler.mid -> crawler.low``。高优先级队列中
+暂时不满足域名或账号冷却条件的任务仍留在原位，worker 会继续寻找下一优先级中
+可以立即运行的任务。领取、资源预留和状态迁移全部由 Redis Lua 原子完成。
 """
 from __future__ import annotations
 
-import json
 import os
 import signal
-import subprocess
+import socket
+import threading
 import time
-from pathlib import Path
+from dataclasses import dataclass, field
 
-from redis import Redis
+from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.db import db_session
+from app.core.exceptions import CrawlerCooldownDeferred
+from app.core.logging import get_logger, setup_logging
+from app.models.admin import CrawlerAccount
 
-QUEUES = ("crawler.hi", "crawler.mid", "crawler.low")
+# 导入模块即完成 actor 注册。必须在迁移旧消息和开始领取之前执行。
+from app.tasks.actors import contest as _contest_actors  # noqa: F401
+from app.tasks.actors import crawl as _crawl_actors  # noqa: F401
+from app.tasks.asyncio_runner import run_async
+from app.tasks.broker import QUEUE_ORDER, ClaimedTask, ResourceQueueBroker, get_broker
+from app.tasks.runtime import TaskReservation, activate_sync_reservation
 
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-POLL_SEC = max(1, _env_int("PRIORITY_WORKER_POLL_SEC", 2))
-GRACE_SEC = max(1, _env_int("PRIORITY_WORKER_GRACE_SEC", 300))
-# 严格优先级和“任务完成后冷却”都要求同一时刻只执行一个 actor。
-# 不允许环境变量误把并发重新调高；横向扩容仍由 Redis 限流门兜底。
-PROCESSES = 1
-THREADS = 1
-DELAY_SCAN_LIMIT = max(1, _env_int("PRIORITY_WORKER_DELAY_SCAN_LIMIT", 500))
-
-BACKEND_DIR = Path(__file__).resolve().parents[1]
+setup_logging()
+log = get_logger(__name__)
 
 
-def _dramatiq_bin() -> str:
-    configured = os.getenv("DRAMATIQ_BIN")
-    if configured:
-        return configured
-
-    unix = BACKEND_DIR / ".venv" / "bin" / "dramatiq"
-    if unix.exists():
-        return str(unix)
-
-    win = BACKEND_DIR / ".venv" / "Scripts" / "dramatiq.exe"
-    if win.exists():
-        return str(win)
-
-    return "dramatiq"
+# 任务执行时由心跳持续续租，短租约既能覆盖 Redis 短暂抖动，也能在进程崩溃后较快恢复。
+LEASE_SEC = max(30.0, float(settings.RESOURCE_WORKER_LEASE_SEC))
+ACCOUNT_SYNC_SEC = max(5.0, float(settings.RESOURCE_WORKER_ACCOUNT_SYNC_SEC))
+RECOVER_SEC = max(2.0, float(settings.RESOURCE_WORKER_RECOVER_SEC))
+IDLE_WAIT_SEC = max(0.2, float(settings.RESOURCE_WORKER_IDLE_WAIT_SEC))
 
 
-def _log(message: str) -> None:
-    print(f"[priority-worker] {message}", flush=True)
+async def _enabled_account_ids() -> list[int]:
+    """从中心数据库读取当前启用的爬取账号。"""
+
+    async with db_session() as session:
+        result = await session.execute(
+            select(CrawlerAccount.id)
+            .where(CrawlerAccount.enabled.is_(True))
+            .order_by(CrawlerAccount.id.asc())
+        )
+        return [int(account_id) for account_id in result.scalars().all()]
 
 
-def _redis() -> Redis:
-    return Redis.from_url(settings.REDIS_URL, decode_responses=True)
+@dataclass(slots=True)
+class _LeaseHeartbeat:
+    """后台续签正在运行的任务，避免长任务被其他 worker 回收。"""
+
+    broker: ResourceQueueBroker
+    task: ClaimedTask
+    lease_ms: int
+    _stop: threading.Event = field(init=False, repr=False)
+    _lost: threading.Event = field(init=False, repr=False)
+    _thread: threading.Thread = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._stop = threading.Event()
+        self._lost = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"queue-heartbeat-{self.task.task_id[:8]}",
+            daemon=True,
+        )
+
+    @property
+    def lost(self) -> bool:
+        return self._lost.is_set()
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        interval_sec = max(5.0, self.lease_ms / 3000.0)
+        while not self._stop.wait(interval_sec):
+            try:
+                if not self.broker.renew(self.task, lease_ms=self.lease_ms):
+                    self._lost.set()
+                    log.error(
+                        "queue.lease_lost",
+                        task_id=self.task.task_id,
+                        actor=self.task.actor_name,
+                    )
+                    return
+            except Exception as exc:
+                # 单次 Redis 抖动不立即判定丢租；只要下次在租约到期前成功即可。
+                log.warning(
+                    "queue.lease_renew_failed",
+                    task_id=self.task.task_id,
+                    error=str(exc),
+                )
 
 
-def _key_count(redis: Redis, key: str) -> int:
-    try:
-        key_type = redis.type(key)
-        if key_type == "none":
-            return 0
-        if key_type == "hash":
-            return int(redis.hlen(key))
-        if key_type == "list":
-            return int(redis.llen(key))
-        if key_type == "zset":
-            return int(redis.zcard(key))
-        if key_type == "set":
-            return int(redis.scard(key))
-        if key_type == "stream":
-            return int(redis.xlen(key))
-        return 1
-    except Exception as exc:  # pragma: no cover - 运行时兜底日志
-        _log(f"failed to inspect redis key {key}: {exc}")
-        return 0
+class ResourceWorker:
+    """单进程执行器；多台机器运行同一实现即可横向扩容。"""
 
+    def __init__(self, broker: ResourceQueueBroker) -> None:
+        self.broker = broker
+        node_id = settings.NODE_ID.strip() or "local"
+        self.worker_id = f"{node_id}:{socket.gethostname()}:{os.getpid()}"
+        self.lease_ms = int(LEASE_SEC * 1000)
+        self.stopping = False
+        self._legacy_migration_pending = True
+        self._next_account_sync = 0.0
+        self._next_recover = 0.0
 
-def _message_eta_ms(raw: str | bytes | None) -> int | None:
-    """从 Dramatiq 消息体里读取 eta；没有 eta 的延迟消息按已到期处理。"""
-    if raw is None:
-        return None
-    try:
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8")
-        payload = json.loads(raw)
-        options = payload.get("options") if isinstance(payload, dict) else None
-        eta = options.get("eta") if isinstance(options, dict) else None
-        return int(eta) if eta is not None else None
-    except Exception:
-        return None
+    def request_stop(self, signum: int, _frame) -> None:  # noqa: ANN001
+        log.info("queue.worker_stop_requested", signal=signum)
+        self.stopping = True
 
-
-def _due_delayed_count(redis: Redis, queue: str, now_ms: int) -> int:
-    """统计已经到期的延迟消息，避免未来重试消息长期压住普通队列。"""
-    delayed_queue = f"dramatiq:{queue}.DQ"
-    messages_key = f"{delayed_queue}.msgs"
-    try:
-        if redis.type(delayed_queue) != "list":
-            return 0
-
-        message_ids = redis.lrange(delayed_queue, 0, DELAY_SCAN_LIMIT - 1)
-        if not message_ids:
-            return 0
-
-        raw_messages = redis.hmget(messages_key, message_ids)
-        due = 0
-        for raw in raw_messages:
-            eta = _message_eta_ms(raw)
-            if eta is None or eta <= now_ms:
-                due += 1
-        return due
-    except Exception as exc:  # pragma: no cover - 运行时兜底日志
-        _log(f"failed to inspect delayed queue {queue}: {exc}")
-        return 0
-
-
-def _queue_pending(redis: Redis, queue: str) -> int:
-    # RedisBroker 结构：
-    #   dramatiq:<queue>      ready message id list
-    #   dramatiq:<queue>.msgs message body hash
-    #   dramatiq:<queue>.DQ   delayed message id list
-    # 不能把 .msgs / .DQ / .XQ 总量当作 pending，否则未来重试和死信会阻塞低优先级。
-    now_ms = int(time.time() * 1000)
-    ready = _key_count(redis, f"dramatiq:{queue}")
-    due_delayed = _due_delayed_count(redis, queue, now_ms)
-    return ready + due_delayed
-
-
-def _choose_queue(redis: Redis) -> tuple[str | None, dict[str, int]]:
-    counts = {queue: _queue_pending(redis, queue) for queue in QUEUES}
-    for queue in QUEUES:
-        if counts[queue] > 0:
-            return queue, counts
-    return None, counts
-
-
-def _start_child(queue: str) -> subprocess.Popen:
-    cmd = [
-        _dramatiq_bin(),
-        "app.tasks.actors.crawl",
-        # 比赛使用独立队列，旧 worker 不会误取尚未注册的新 actor。
-        "app.tasks.actors.contest",
-        "--queues",
-        queue,
-        "--processes",
-        str(PROCESSES),
-        "--threads",
-        str(THREADS),
-    ]
-    _log(f"start {queue}: {' '.join(cmd)}")
-    return subprocess.Popen(cmd, cwd=BACKEND_DIR)
-
-
-def _stop_child(child: subprocess.Popen, *, reason: str) -> None:
-    if child.poll() is not None:
-        return
-
-    _log(f"stop child pid={child.pid}: {reason}")
-    child.terminate()
-    deadline = time.monotonic() + GRACE_SEC
-    while time.monotonic() < deadline:
-        if child.poll() is not None:
+    def _sync_accounts_if_due(self) -> None:
+        now = time.monotonic()
+        if now < self._next_account_sync:
             return
-        time.sleep(0.5)
+        self._next_account_sync = now + ACCOUNT_SYNC_SEC
+        try:
+            account_ids = run_async(_enabled_account_ids())
+            self.broker.sync_accounts(account_ids)
+            log.debug("queue.accounts_synced", count=len(account_ids))
+        except Exception as exc:
+            # 已同步到 Redis 的账号仍然可用，数据库短暂不可达不会清空账号池。
+            log.error("queue.accounts_sync_failed", error=str(exc))
 
-    _log(f"kill child pid={child.pid}: graceful stop timed out")
-    child.kill()
-    child.wait(timeout=5)
+    def _recover_if_due(self) -> None:
+        now = time.monotonic()
+        if now < self._next_recover:
+            return
+        self._next_recover = now + RECOVER_SEC
+        try:
+            recovered = self.broker.recover_expired()
+            if recovered:
+                log.warning("queue.expired_tasks_recovered", count=recovered)
+        except Exception as exc:
+            log.error("queue.recover_failed", error=str(exc))
+
+    def _migrate_legacy_if_needed(self) -> None:
+        """启动后迁移旧消息；Redis 暂时不可达时留在循环中稍后重试。"""
+
+        if not self._legacy_migration_pending:
+            return
+        migrated = self.broker.migrate_legacy_dramatiq()
+        self._legacy_migration_pending = False
+        log.info("queue.legacy_migration_finished", migrated=migrated)
+
+    def _claim_next(self) -> ClaimedTask | None:
+        """严格按优先级尝试；不可运行不等于空队列，因此不能删除任务。"""
+
+        for queue_name in QUEUE_ORDER:
+            task = self.broker.claim(
+                queue_name,
+                worker_id=self.worker_id,
+                lease_ms=self.lease_ms,
+            )
+            if task is not None:
+                return task
+        return None
+
+    def _finish_failure(self, task: ClaimedTask, exc: Exception) -> None:
+        actor_obj = self.broker.get_actor(task.actor_name)
+        error = f"{type(exc).__name__}: {exc}"
+
+        if isinstance(exc, CrawlerCooldownDeferred):
+            # 冷却竞态不算业务失败，不消耗重试次数。
+            self.broker.finish(
+                task,
+                outcome="retry",
+                delay_ms=max(1, exc.retry_after_ms + 100),
+                error=error,
+            )
+            log.info(
+                "queue.task_cooldown_deferred",
+                task_id=task.task_id,
+                actor=task.actor_name,
+                delay_ms=exc.retry_after_ms + 100,
+            )
+            return
+
+        if actor_obj.throws and isinstance(exc, actor_obj.throws):
+            self.broker.finish(
+                task,
+                outcome="dead",
+                error=error,
+                increment_attempt=True,
+            )
+            log.warning(
+                "queue.task_discarded",
+                task_id=task.task_id,
+                actor=task.actor_name,
+                error=error,
+            )
+            return
+
+        if task.attempts < actor_obj.max_retries:
+            delay_ms = self.broker.retry_delay_ms(actor_obj, task.attempts)
+            self.broker.finish(
+                task,
+                outcome="retry",
+                delay_ms=delay_ms,
+                error=error,
+                increment_attempt=True,
+            )
+            log.warning(
+                "queue.task_retry",
+                task_id=task.task_id,
+                actor=task.actor_name,
+                attempt=task.attempts + 1,
+                delay_ms=delay_ms,
+                error=error,
+            )
+            return
+
+        self.broker.finish(
+            task,
+            outcome="dead",
+            error=error,
+            increment_attempt=True,
+        )
+        log.error(
+            "queue.task_dead",
+            task_id=task.task_id,
+            actor=task.actor_name,
+            attempts=task.attempts + 1,
+            error=error,
+        )
+
+    def _execute(self, task: ClaimedTask) -> None:
+        try:
+            actor_obj = self.broker.get_actor(task.actor_name)
+        except KeyError as exc:
+            self.broker.finish(task, outcome="dead", error=str(exc))
+            log.error("queue.actor_missing", task_id=task.task_id, actor=task.actor_name)
+            return
+
+        reservation = TaskReservation(
+            task_id=task.task_id,
+            claim_token=task.claim_token,
+            domain_key=task.domain_key,
+            account_key=task.account_key,
+            account_id=task.account_id,
+        )
+        heartbeat = _LeaseHeartbeat(self.broker, task, self.lease_ms)
+        heartbeat.start()
+        started = time.monotonic()
+        log.info(
+            "queue.task_started",
+            task_id=task.task_id,
+            actor=task.actor_name,
+            queue=task.queue_name,
+            account_id=task.account_id,
+        )
+        failure: Exception | None = None
+        try:
+            with activate_sync_reservation(reservation):
+                actor_obj(*task.args, **task.kwargs)
+        except Exception as exc:
+            failure = exc
+            log.exception(
+                "queue.task_failed",
+                task_id=task.task_id,
+                actor=task.actor_name,
+                error=str(exc),
+            )
+        finally:
+            # 先停止续租再提交最终状态，避免心跳恰好在完成后把任务误报为丢租。
+            heartbeat.stop()
+
+        if heartbeat.lost:
+            log.error(
+                "queue.task_completed_after_lease_lost",
+                task_id=task.task_id,
+                actor=task.actor_name,
+            )
+
+        if failure is not None:
+            self._finish_failure(task, failure)
+        else:
+            if self.broker.finish(task, outcome="done"):
+                log.info(
+                    "queue.task_finished",
+                    task_id=task.task_id,
+                    actor=task.actor_name,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+            else:
+                log.error(
+                    "queue.task_finish_rejected",
+                    task_id=task.task_id,
+                    actor=task.actor_name,
+                )
+
+    def run(self) -> int:
+        log.info(
+            "queue.worker_started",
+            worker_id=self.worker_id,
+            priority_order=list(QUEUE_ORDER),
+        )
+
+        while not self.stopping:
+            try:
+                self._migrate_legacy_if_needed()
+                self._sync_accounts_if_due()
+                self._recover_if_due()
+                task = self._claim_next()
+                if task is None:
+                    self.broker.wait_for_work(timeout_sec=max(1, int(IDLE_WAIT_SEC)))
+                    continue
+                self._execute(task)
+            except Exception as exc:
+                # Redis 或数据库临时不可达时保留进程，避免由启动脚本高速重启刷日志。
+                log.exception("queue.worker_loop_failed", error=str(exc))
+                time.sleep(min(5.0, IDLE_WAIT_SEC))
+
+        log.info("queue.worker_stopped", worker_id=self.worker_id)
+        return 0
 
 
 def main() -> int:
-    redis = _redis()
-    child: subprocess.Popen | None = None
-    active_queue: str | None = None
-    stopping = False
-
-    def request_stop(signum: int, _frame) -> None:  # noqa: ANN001
-        nonlocal stopping
-        _log(f"received signal {signum}, shutting down")
-        stopping = True
-
-    signal.signal(signal.SIGTERM, request_stop)
-    signal.signal(signal.SIGINT, request_stop)
-
-    _log(
-        "strict priority enabled: "
-        f"{' > '.join(QUEUES)}, processes={PROCESSES}, threads={THREADS}"
-    )
-
-    try:
-        while not stopping:
-            desired_queue, counts = _choose_queue(redis)
-
-            if child is not None and child.poll() is not None:
-                code = child.returncode
-                _log(f"child for {active_queue} exited with code {code}")
-                child = None
-                active_queue = None
-                if code not in (0, None):
-                    time.sleep(min(5, POLL_SEC))
-
-            if desired_queue is None:
-                # ready 列表为空不代表 worker 空闲：最后一条消息可能已经被取走，
-                # 正在 actor 中执行。保留当前子进程，避免把长任务误当成空闲任务停止。
-                time.sleep(POLL_SEC)
-                continue
-
-            if active_queue != desired_queue:
-                if child is not None:
-                    _stop_child(
-                        child,
-                        reason=f"switch {active_queue} -> {desired_queue}, counts={counts}",
-                    )
-                child = _start_child(desired_queue)
-                active_queue = desired_queue
-
-            time.sleep(POLL_SEC)
-    finally:
-        if child is not None:
-            _stop_child(child, reason="supervisor shutdown")
-        redis.close()
-
-    return 0
+    worker = ResourceWorker(get_broker())
+    signal.signal(signal.SIGTERM, worker.request_stop)
+    signal.signal(signal.SIGINT, worker.request_stop)
+    return worker.run()
 
 
 if __name__ == "__main__":

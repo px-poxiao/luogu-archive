@@ -57,7 +57,7 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 
 @asynccontextmanager
 async def db_session() -> AsyncIterator[AsyncSession]:
-    """在非 HTTP 场景（如 Dramatiq actor、定时任务）里使用。
+    """在非 HTTP 场景（如队列任务、定时任务）里使用。
 
     用法：
         async with db_session() as session:

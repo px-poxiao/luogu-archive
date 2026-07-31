@@ -2,16 +2,17 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from math import ceil
 from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import and_, delete, func, or_, select
 
+from app.core.contest_problem_mapping import scoreboard_problem_ids
 from app.core.db import db_session
-from app.core.logging import get_logger
 from app.core.locks import DistributedLock
+from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.models._common import LuoguColor, utcnow
 from app.models.contest import (
@@ -29,7 +30,6 @@ from app.services.elo_rating import (
     predict_contest,
 )
 
-
 log = get_logger(__name__)
 
 # 比赛结束后排行榜仍可能有少量结算延迟，统一等待五分钟再开始归档。
@@ -39,13 +39,13 @@ _CONTEST_ARCHIVE_GRACE = timedelta(minutes=5)
 def _to_datetime(value: int | float | None) -> datetime:
     if not value:
         return utcnow()
-    return datetime.fromtimestamp(int(value), tz=timezone.utc)
+    return datetime.fromtimestamp(int(value), tz=UTC)
 
 
 def _utc_datetime(value: datetime) -> datetime:
     """MySQL 可能返回无时区 datetime，统一按 UTC 补齐后再在 Python 中比较。"""
 
-    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _safe_color(value: Any) -> LuoguColor:
@@ -409,6 +409,7 @@ async def archive_scoreboard_page(
     total = max(0, int(meta.get("count") or len(rows)))
     page_count = max(1, ceil(total / SCOREBOARD_PAGE_SIZE))
     offset = (page - 1) * SCOREBOARD_PAGE_SIZE
+    scoreboard_pids = scoreboard_problem_ids(rows) if page == 1 else []
     valid_rows: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
     for index, row in enumerate(rows, start=1):
         user = row.get("user") if isinstance(row.get("user"), dict) else {}
@@ -462,6 +463,25 @@ async def archive_scoreboard_page(
             participant.profile_refreshed_at = None
 
         if page == 1:
+            contest_problems = list(
+                (
+                    await session.execute(
+                        select(ContestProblem)
+                        .where(ContestProblem.contest_id == contest_id)
+                        .order_by(ContestProblem.order_index)
+                    )
+                ).scalars().all()
+            )
+            # 只有题目数量完全一致时才按列持久化，避免缺题榜单产生错位映射。
+            if len(scoreboard_pids) == len(contest_problems):
+                for problem, scoreboard_pid in zip(
+                    contest_problems,
+                    scoreboard_pids,
+                    strict=True,
+                ):
+                    raw_data = dict(problem.raw_data or {})
+                    raw_data["scoreboardPid"] = scoreboard_pid
+                    problem.raw_data = raw_data
             contest.participant_count = total
             raw_data = dict(contest.raw_data or {})
             raw_data["scoreboardMeta"] = meta

@@ -6,7 +6,7 @@
 - 入口页发现
 - Cookie 账号心跳自检
 
-这里只负责**派发 Dramatiq 任务**，不直接爬。
+这里只负责**派发资源队列任务**，不直接爬。
 """
 from __future__ import annotations
 
@@ -15,15 +15,16 @@ import secrets
 from datetime import timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 
 from app.core.db import db_session
-from app.core.logging import get_logger, setup_logging
 from app.core.locks import DistributedLock
+from app.core.logging import get_logger, setup_logging
 from app.core.redis_client import get_redis
 from app.models._common import utcnow
 from app.models.luogu_content import Problem
 from app.models.luogu_user import LuoguUser
+from app.tasks.broker import QUEUE_CRAWL_MID, get_broker
 
 log = get_logger(__name__)
 
@@ -139,12 +140,18 @@ async def job_feed_tiered_polling() -> None:
 
     interval_sec = max(float(settings.CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC), 0.001)
     utilization = min(max(float(settings.CRAWLER_FEED_SCHEDULE_UTILIZATION), 0.0), 1.0)
-    cycle_capacity = int(account_count * 600 / interval_sec * utilization)
+    cooldown_capacity = account_count * 600 / interval_sec
+    hourly_capacity = account_count * max(settings.CRAWLER_AUTH_QPH_PER_ACCOUNT, 1) / 6
+    # 十分钟调度容量同时受账号冷却和滚动一小时配额约束，取更紧的一项。
+    cycle_capacity = int(min(cooldown_capacity, hourly_capacity) * utilization)
     backlog_windows = max(int(settings.CRAWLER_FEED_BACKLOG_WINDOWS), 1)
 
-    # .msgs 包含准备、延迟和正在处理的消息，比只看 ready list 更适合做背压。
+    # 新队列统计同时包含 pending 和 inflight，比只看可立即领取的任务更适合做背压。
     try:
-        pending = int(await redis.hlen("dramatiq:crawler.mid.msgs"))
+        pending = await asyncio.to_thread(
+            get_broker().queue_size,
+            QUEUE_CRAWL_MID,
+        )
     except Exception:
         pending = 0
     backlog_target = cycle_capacity * backlog_windows
@@ -346,6 +353,7 @@ async def job_problem_tier_weekly() -> None:
     取最旧的 ceil(N/7) 条，每天派一次，7 天正好把全档转完一轮。
     """
     import math
+
     from app.tasks.problem_queue import enqueue_problem_solution
     now = utcnow()
 

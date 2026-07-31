@@ -2,7 +2,7 @@
 # ======================================================================
 # luogu-archive · 远程 worker 启动脚本
 # ======================================================================
-# 在多机部署下，每台远程 worker 机只跑 dramatiq 消费爬虫任务，不跑
+# 在多机部署下，每台远程 worker 机只跑资源队列消费进程，不跑
 # backend / frontend / scheduler。中心机的 redis 必须可远程访问，
 # 中心机的 mysql 也必须可远程访问（worker 要写 crawl_tasks 等表）。
 #
@@ -33,12 +33,11 @@ BACKEND="$ROOT_DIR/backend"
 RUN="$ROOT_DIR/run"
 LOGS="$ROOT_DIR/logs"
 PY="$BACKEND/.venv/bin/python"
-DRAMATIQ="$BACKEND/.venv/bin/dramatiq"
 
 mkdir -p "$RUN" "$LOGS"
 
 [ -f "$BACKEND/.env" ] || { echo "!! 缺 $BACKEND/.env" >&2; exit 1; }
-[ -x "$DRAMATIQ" ] || { echo "!! 缺 venv，先安装依赖" >&2; exit 1; }
+[ -x "$PY" ] || { echo "!! 缺 venv，先安装依赖" >&2; exit 1; }
 
 NODE_ID=$(grep -E "^NODE_ID=" "$BACKEND/.env" | head -1 | cut -d= -f2-)
 [ -n "$NODE_ID" ] || { echo "!! .env 必须有 NODE_ID（每台 worker 唯一）" >&2; exit 1; }
@@ -53,7 +52,6 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
 fi
 
 cd "$BACKEND"
-export DRAMATIQ_BIN="$DRAMATIQ"
 setsid "$PY" -m scripts.priority_worker \
     >> "$LOGFILE" 2>&1 < /dev/null &
 echo $! > "$PIDFILE"

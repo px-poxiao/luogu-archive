@@ -1,13 +1,13 @@
-"""Dramatiq 任务队列配置 + actor 定义。
+"""资源感知型 Redis 任务队列配置与任务定义。
 
 队列设计：
 - crawler.hi    用户正在等待的任务：手动保存、首次访问未收录内容、管理员强制爬取
 - crawler.mid   普通后台任务：发现、访问触发刷新、级联、定时犇犇 / 陶片
 - crawler.low   题目任务：题目列表页轮询、题解开放状态检测
 
-实际消费由 `scripts.priority_worker` 监督进程按 hi -> mid -> low 严格切换。
+实际消费由 `scripts.priority_worker` 按 hi -> mid -> low 严格尝试领取。
 
-- broker.py   broker 实例化
-- asyncio_runner.py   在同步 actor 里调度 async 函数
+- broker.py   原子入队、依赖判断、资源预留和领取
+- asyncio_runner.py   在同步任务里调度 async 函数
 - actors/     实际任务定义
 """

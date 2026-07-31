@@ -12,7 +12,7 @@
 | ---- | --------------------------------------------------------- |
 | 后端   | Python 3.11+ / FastAPI / SQLAlchemy 2.0 (async)           |
 | 数据库  | MySQL 8（aiomysql 异步 + pymysql 同步兜底）                       |
-| 任务队列 | Dramatiq + Redis（4 条优先级队列）                                |
+| 任务队列 | Redis Lua 资源队列（3 条严格优先级队列）                            |
 | 定时调度 | APScheduler                                               |
 | 爬虫   | httpx (HTTP/2) + lentille-context / `_feInjection` SSR 提取 |
 | 渲染   | 前端 markdown-it + KaTeX；后端 markdown-it-py 管线 + 洛谷语法插件      |
@@ -41,7 +41,7 @@ luogu-archive/
 │   │   │   └── lentille.py        # SSR JSON 提取
 │   │   ├── models/                # SQLAlchemy ORM
 │   │   ├── render/                # Markdown 渲染 + 洛谷专有语法插件
-│   │   ├── tasks/                 # Dramatiq broker + actors
+│   │   ├── tasks/                 # 资源队列 broker + 任务定义
 │   │   ├── main.py                # FastAPI 入口
 │   │   └── scheduler.py           # APScheduler 入口
 │   ├── alembic/                   # 数据库迁移
@@ -81,13 +81,13 @@ luogu-archive/
 
 **熔断**：单节点遇 429 / 明确反爬信号 → 该节点冷却 `CRAWLER_BREAKER_COOLDOWN_SEC`；10 分钟内连续 3 个节点被封 → 全局冷却。403/404 不直接熔断，走累计阈值 + 同类资源探针确认。
 
-**等待上限**：任务等待账号门和域名门的总时间，不超过本次请求涉及的最长冷却时间；超时后按限流失败交回任务重试机制。
+**等待方式**：任务依赖未满足时始终留在 pending 集合，不占 worker 执行槽，也不会反复出队、重新入队。
 
-**Cookie 账号池**：仅犇犇爬取挂 Cookie。多账号用 Redis `INCR` 轮询；同一账号严格串行，并在请求完成后冷却 `CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC`。账号失效自动禁用。
+**Cookie 账号池**：需要认证的任务在领取时从 Redis 有序集合中选择最早可用账号。同一账号严格串行，请求完成后冷却 `CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC`，并执行滚动一小时请求上限；账号失效自动禁用。
 
 ### 任务队列优先级
 
-Dramatiq 使用 3 条队列，`scripts.priority_worker` 监督进程按严格顺序消费：只有 `crawler.hi` 为空时才跑 `crawler.mid`，只有 `crawler.mid` 也为空时才跑 `crawler.low`。
+资源队列使用 3 条优先级。worker 始终按 `crawler.hi`、`crawler.mid`、`crawler.low` 顺序尝试原子领取；高优先级有可运行任务时绝不领取低优先级任务。若高优先级任务正在等待域名、账号或熔断恢复，则继续寻找下一优先级中可以立即执行的任务。
 
 | 队列            | 内容                               |
 | ------------- | -------------------------------- |
@@ -267,12 +267,13 @@ grep -iE "judgement|RateLimit|Blocked" /data/luogu-archive/logs/worker.log | tai
 ### Redis 运维
 
 ```bash
-# 队列堆积（注意 .msgs 是 hash，用 HLEN；就绪队列是 list，用 LLEN）
-redis-cli -a <密码> HLEN dramatiq:crawler.mid.msgs
-redis-cli -a <密码> LLEN dramatiq:crawler.hi
+# 查看三条队列的 pending + inflight 总数
+cd /root/luogu-archive/backend
+.venv/bin/python -c "from app.tasks.broker import *; b=get_broker(); print({q:b.queue_size(q) for q in QUEUE_ORDER})"
 
-# 清空某条队列（中断积压，已爬数据不丢）
-redis-cli -a <密码> DEL dramatiq:crawler.mid dramatiq:crawler.mid.msgs
+# 只读检查 / 确认后清理犇犇积压
+.venv/bin/python -m scripts.clean_feed_queue
+.venv/bin/python -m scripts.clean_feed_queue --apply
 
 # 清节点熔断状态
 redis-cli -a <密码> --scan --pattern 'crawler:breaker:*' | xargs -r redis-cli -a <密码> DEL

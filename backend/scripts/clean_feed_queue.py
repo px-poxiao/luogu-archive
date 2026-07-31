@@ -1,38 +1,30 @@
-"""Inspect or remove queued feed crawl messages without touching other actors."""
+"""查看或删除资源队列中的犇犇任务，不影响其他任务。"""
 from __future__ import annotations
 
 import argparse
-import json
 
 from redis import Redis
 
 from app.core.config import settings
 
-
-QUEUE_KEYS = (
-    "dramatiq:crawler.mid",
-    "dramatiq:crawler.mid.DQ",
-)
 FEED_ACTORS = {"crawl_user_feeds"}
 
-
-def _feed_message_ids(redis: Redis, queue_key: str) -> list[str]:
-    message_ids = redis.lrange(queue_key, 0, -1)
-    if not message_ids:
-        return []
-
-    raw_messages = redis.hmget(f"{queue_key}.msgs", message_ids)
-    matched: list[str] = []
-    for message_id, raw in zip(message_ids, raw_messages, strict=True):
-        if not raw:
-            continue
-        try:
-            payload = json.loads(raw)
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if payload.get("actor_name") in FEED_ACTORS:
-            matched.append(message_id)
-    return matched
+_DELETE_PENDING_LUA = r"""
+local task_key = KEYS[1]
+if redis.call('HGET', task_key, 'state') ~= 'pending' then
+    return 0
+end
+local queue_name = redis.call('HGET', task_key, 'queue')
+local lane = redis.call('HGET', task_key, 'lane')
+local task_id = redis.call('HGET', task_key, 'task_id')
+local pending_key = 'rq:pending:' .. queue_name .. ':' .. lane
+redis.call('ZREM', pending_key, task_id)
+if redis.call('ZCARD', pending_key) == 0 then
+    redis.call('SREM', 'rq:lanes:' .. queue_name, lane)
+end
+redis.call('DEL', task_key)
+return 1
+"""
 
 
 def main() -> int:
@@ -40,33 +32,38 @@ def main() -> int:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="delete the matched messages; without this flag the command is read-only",
+        help="实际删除匹配任务；不带该参数时只统计",
     )
     args = parser.parse_args()
 
     redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
-    total = 0
+    delete_pending = redis.register_script(_DELETE_PENDING_LUA)
+    matched: list[str] = []
+    removed = 0
     try:
-        for queue_key in QUEUE_KEYS:
-            matched = _feed_message_ids(redis, queue_key)
-            total += len(matched)
-            print(f"{queue_key}: matched={len(matched)}")
-            if args.apply and matched:
-                pipe = redis.pipeline(transaction=True)
-                for message_id in matched:
-                    pipe.lrem(queue_key, 0, message_id)
-                    pipe.hdel(f"{queue_key}.msgs", message_id)
-                pipe.execute()
+        for task_key in redis.scan_iter(match="rq:task:*", count=1000):
+            actor_name, state = redis.hmget(task_key, "actor", "state")
+            if actor_name in FEED_ACTORS and state == "pending":
+                matched.append(task_key)
 
-        dedup_keys = list(redis.scan_iter(match="scheduler:feed:queued:*", count=1000))
-        print(f"scheduler feed dedup keys: matched={len(dedup_keys)}")
-        if args.apply and dedup_keys:
-            redis.delete(*dedup_keys)
+        print(f"匹配到待执行犇犇任务：{len(matched)}")
+        if args.apply:
+            for task_key in matched:
+                removed += int(delete_pending(keys=[task_key]))
+
+            dedup_keys = list(
+                redis.scan_iter(match="scheduler:feed:queued:*", count=1000)
+            )
+            if dedup_keys:
+                redis.delete(*dedup_keys)
+            print(f"已清理调度去重键：{len(dedup_keys)}")
     finally:
         redis.close()
 
-    action = "removed" if args.apply else "would remove"
-    print(f"{action} {total} queued feed messages")
+    if args.apply:
+        print(f"已删除犇犇任务：{removed}")
+    else:
+        print("当前为只读预览；确认后可追加 --apply")
     return 0
 
 

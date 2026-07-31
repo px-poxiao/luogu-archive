@@ -11,7 +11,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     CRAWLER_GLOBAL_BREAKER_NODE_THRESHOLD: int = 3
     CRAWLER_TASK_LOCK_TTL_SEC: int = 300
     CRAWLER_REQUEST_TIMEOUT_SEC: int = 15
+
+    # ---------- 资源队列 worker ----------
+    RESOURCE_WORKER_LEASE_SEC: float = 120.0
+    RESOURCE_WORKER_ACCOUNT_SYNC_SEC: float = 30.0
+    RESOURCE_WORKER_RECOVER_SEC: float = 10.0
+    RESOURCE_WORKER_IDLE_WAIT_SEC: float = 1.0
 
     # ---------- 节点身份（多 worker 部署） ----------
     # 当前 worker 的节点 ID。同一个进程的所有匿名爬取 / 认证爬取共享同一个 ID。

@@ -1,13 +1,11 @@
-# Dramatiq 爬虫 worker。多个队列可以起多份，这里给一个通用模板。
+# 资源感知型爬虫 worker。每个实例都会按 hi -> mid -> low 严格尝试领取。
 # 部署示例：
 #   cp luogu-archive-worker@.service /etc/systemd/system/
-#   systemctl enable --now luogu-archive-worker@hi.service
-#   systemctl enable --now luogu-archive-worker@feed.service
-#
-# %i 代表 instance 名，要和 crawler.<name> 对应。
+#   systemctl enable --now luogu-archive-worker@1.service
+#   systemctl enable --now luogu-archive-worker@2.service
 
 [Unit]
-Description=luogu-archive worker (Dramatiq) queue=%i
+Description=luogu-archive resource worker instance=%i
 After=network.target redis.service mysql.service
 
 [Service]
@@ -16,12 +14,7 @@ User=luogu
 Group=luogu
 WorkingDirectory=/srv/luogu-archive/backend
 EnvironmentFile=/srv/luogu-archive/backend/.env
-# -p 2 两个进程，-t 4 每进程 4 个线程
-ExecStart=/srv/luogu-archive/backend/.venv/bin/dramatiq \
-  app.tasks.actors.crawl \
-  --queues crawler.%i \
-  --processes 1 \
-  --threads 4
+ExecStart=/srv/luogu-archive/backend/.venv/bin/python -m scripts.priority_worker
 Restart=always
 RestartSec=5
 ReadWritePaths=/srv/luogu-archive/backend /var/www/luogu-archive
