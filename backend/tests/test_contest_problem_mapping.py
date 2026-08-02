@@ -1,6 +1,7 @@
 """比赛临时题号与正式题号映射回归测试。"""
 
 from app.core.contest_problem_mapping import (
+    align_problem_ids,
     normalize_problem_details,
     resolve_display_problem_ids,
     scoreboard_problem_ids,
@@ -31,13 +32,13 @@ def test_temporary_problem_ids_map_to_scoreboard_ids() -> None:
     assert [normalized[pid]["score"] for pid in display_ids] == [100, 100, 100, 36]
 
 
-def test_stored_mapping_has_priority_over_legacy_sample() -> None:
+def test_unmatched_formal_ids_use_natural_order() -> None:
     display_ids = resolve_display_problem_ids(
         ["T1", "T2"],
         ["P20", "P10"],
         [{"P10": {}, "P20": {}}],
     )
-    assert display_ids == ["P20", "P10"]
+    assert display_ids == ["P10", "P20"]
 
 
 def test_same_problem_ids_keep_official_contest_order() -> None:
@@ -60,4 +61,28 @@ def test_same_problem_ids_keep_official_contest_order() -> None:
     assert display_ids == official_ids
 
     normalized = normalize_problem_details(raw_details, official_ids, display_ids)
+    assert [normalized[pid]["score"] for pid in display_ids] == [10, 20, 30, 40]
+
+
+def test_mixed_formal_and_temporary_ids_lock_exact_matches() -> None:
+    """新比赛部分题目发布为正式号时，不能被榜单键顺序带偏。"""
+
+    problem_ids = ["P17177", "P17178", "P17179", "T691524"]
+    scoreboard_ids = ["P17178", "P17179", "P17180", "P17177"]
+
+    display_ids = align_problem_ids(problem_ids, scoreboard_ids)
+    assert display_ids == [
+        "P17177",
+        "P17178",
+        "P17179",
+        "P17180",
+    ]
+
+    raw_details = {
+        "P17178": {"score": 20},
+        "P17179": {"score": 30},
+        "P17180": {"score": 40},
+        "P17177": {"score": 10},
+    }
+    normalized = normalize_problem_details(raw_details, problem_ids, display_ids)
     assert [normalized[pid]["score"] for pid in display_ids] == [10, 20, 30, 40]
