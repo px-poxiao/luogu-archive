@@ -2,6 +2,24 @@
 const colorMode = useColorMode()
 const auth = useAuthStore()
 const api = useApi()
+const runtimeConfig = useRuntimeConfig()
+
+// 只在公共布局加载 Umami；管理后台使用独立布局，不会混入公开站点统计。
+useHead(() => {
+  const scriptUrl = runtimeConfig.public.umamiScriptUrl
+  const websiteId = runtimeConfig.public.umamiWebsiteId
+  if (!scriptUrl || !websiteId) return {}
+
+  return {
+    script: [
+      {
+        src: scriptUrl,
+        defer: true,
+        'data-website-id': websiteId,
+      },
+    ],
+  }
+})
 
 function toggle() {
   colorMode.preference = colorMode.value === 'dark' ? 'light' : 'dark'

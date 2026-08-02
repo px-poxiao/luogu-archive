@@ -1,0 +1,36 @@
+# 档案馆 Umami 统计服务。
+# 密码和 APP_SECRET 放在同目录的 .env 中，不提交到 GitHub。
+services:
+  umami-db:
+    image: postgres:16-alpine
+    container_name: luogu-archive-umami-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${UMAMI_DB_NAME:-umami}
+      POSTGRES_USER: ${UMAMI_DB_USER:-umami}
+      POSTGRES_PASSWORD: ${UMAMI_DB_PASSWORD:?请在 .env 中设置 UMAMI_DB_PASSWORD}
+    volumes:
+      - umami-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${UMAMI_DB_USER:-umami} -d ${UMAMI_DB_NAME:-umami}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  umami:
+    image: ${UMAMI_IMAGE:-docker.umami.is/umami-software/umami:postgresql-latest}
+    container_name: luogu-archive-umami
+    restart: unless-stopped
+    depends_on:
+      umami-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${UMAMI_DB_USER:-umami}:${UMAMI_DB_PASSWORD}@umami-db:5432/${UMAMI_DB_NAME:-umami}
+      APP_SECRET: ${UMAMI_APP_SECRET:?请在 .env 中设置 UMAMI_APP_SECRET}
+      DISABLE_TELEMETRY: "1"
+    ports:
+      - "127.0.0.1:${UMAMI_LOCAL_PORT:-3001}:3000"
+
+volumes:
+  umami-postgres:
+    name: luogu-archive-umami-postgres

@@ -19,6 +19,9 @@ export default defineNuxtConfig({
       captchaAliyunPrefix: process.env.NUXT_PUBLIC_CAPTCHA_ALIYUN_PREFIX || '',
       captchaAliyunSceneId: process.env.NUXT_PUBLIC_CAPTCHA_ALIYUN_SCENE_ID || '',
       captchaAliyunRegion: process.env.NUXT_PUBLIC_CAPTCHA_ALIYUN_REGION || 'cn',
+      // Umami 统计只在公共布局中加载；留空时完全关闭统计。
+      umamiScriptUrl: process.env.NUXT_PUBLIC_UMAMI_SCRIPT_URL || '',
+      umamiWebsiteId: process.env.NUXT_PUBLIC_UMAMI_WEBSITE_ID || '',
     },
   },
   colorMode: {
