@@ -176,6 +176,8 @@ const { render } = useMarkdown()
 const introHtml = computed(() =>
   profile.value?.introduction_md ? render(profile.value.introduction_md) : '',
 )
+const completionTip = '此内容由洛谷档案馆根据回复链自动补全'
+
 function markMergedLinks(html: string, links: string[]) {
   let marked = html
   for (const link of links) {
@@ -183,19 +185,31 @@ function markMergedLinks(html: string, links: string[]) {
     if (!anchor || !marked.includes(anchor)) continue
     marked = marked.replace(
       anchor,
-      `<span class="feed-auto-merged-link">${anchor}</span>`,
+      `<span class="feed-completion-wrap" tabindex="0"><span class="feed-auto-merged-link">${anchor}</span><span class="feed-completion-popover" role="tooltip">${completionTip}</span></span>`,
     )
   }
   return marked
 }
 
+function renderMergedSuffix(content: string, mergedSuffix: string) {
+  const prefix = content.slice(0, Math.max(0, content.length - mergedSuffix.length))
+  const prefixHtml = render(prefix)
+  const suffixHtml = render(mergedSuffix)
+  const suffixParagraph = suffixHtml.match(/^<p>([\s\S]*)<\/p>\s*$/)
+
+  // 普通文字尾巴接回原段落；只有原 Markdown 明确换行或包含多个块时才另起一行。
+  if (!mergedSuffix.startsWith('\n') && suffixParagraph && /<\/p>\s*$/.test(prefixHtml)) {
+    const markedSuffix = `<span class="feed-completion-wrap" tabindex="0"><span class="feed-auto-merged">${suffixParagraph[1]}</span><span class="feed-completion-popover" role="tooltip">${completionTip}</span></span>`
+    return prefixHtml.replace(/<\/p>\s*$/, `${markedSuffix}</p>`)
+  }
+
+  return prefixHtml
+    + `<div class="feed-completion-wrap feed-completion-block" tabindex="0"><div class="feed-auto-merged">${suffixHtml}</div><span class="feed-completion-popover" role="tooltip">${completionTip}</span></div>`
+}
+
 function feedHtml(content: string, mergedSuffix?: string | null, mergedLinks: string[] = []) {
   let html = mergedSuffix
-    ? (() => {
-        const prefix = content.slice(0, Math.max(0, content.length - mergedSuffix.length))
-        return render(prefix)
-          + `<div class="feed-auto-merged" aria-label="系统补全内容">${render(mergedSuffix)}</div>`
-      })()
+    ? renderMergedSuffix(content, mergedSuffix)
     : render(content)
   if (mergedLinks.length) html = markMergedLinks(html, mergedLinks)
   return html
@@ -888,20 +902,58 @@ function formatScore(s: number): string {
   gap: 10px;
 }
 
-/* 自动补回的回复后缀用下划线区分，避免用户误以为是原回复正文。 */
+/* 自动补回内容使用淡蓝下划线，并提供与比赛页一致的悬浮说明。 */
+.lg-content :deep(.feed-completion-wrap) {
+  position: relative;
+  display: inline;
+  cursor: help;
+  outline: none;
+}
+.lg-content :deep(.feed-completion-block) {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+}
 .lg-content :deep(.feed-auto-merged) {
   text-decoration-line: underline;
-  text-decoration-thickness: 1px;
+  text-decoration-color: #7db9e8;
+  text-decoration-thickness: 2px;
   text-underline-offset: 3px;
 }
 .lg-content :deep(.feed-auto-merged img) {
-  box-shadow: 0 2px 0 currentColor;
+  box-shadow: 0 2px 0 #7db9e8;
 }
 .lg-content :deep(.feed-auto-merged-link),
 .lg-content :deep(.feed-auto-merged-link a) {
   text-decoration-line: underline;
-  text-decoration-thickness: 1px;
+  text-decoration-color: #7db9e8;
+  text-decoration-thickness: 2px;
   text-underline-offset: 3px;
+}
+.lg-content :deep(.feed-completion-popover) {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 9px);
+  left: 50%;
+  display: none;
+  width: max-content;
+  max-width: 280px;
+  padding: 8px 10px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+}
+.lg-content :deep(.feed-completion-wrap:hover > .feed-completion-popover),
+.lg-content :deep(.feed-completion-wrap:focus-within > .feed-completion-popover) {
+  display: block;
 }
 .feed-id {
   font-size: 11px;

@@ -415,8 +415,13 @@ def _random_svg(
         feed_id = f"#{feed.id}"
 
     def quote_line_svg(line: str, merged: bool, index: int) -> str:
-        decoration = ' text-decoration="underline"' if merged else ""
-        return f'<text x="72" y="{72 + index * 46}" class="quote"{decoration}>{_xml(line)}</text>'
+        decoration = (
+            ' text-decoration="underline" text-decoration-color="#7db9e8"'
+            if merged
+            else ""
+        )
+        title = "<title>此内容由洛谷档案馆根据回复链自动补全</title>" if merged else ""
+        return f'<text x="72" y="{72 + index * 46}" class="quote"{decoration}>{title}{_xml(line)}</text>'
 
     quote_svg = "\n".join(
         quote_line_svg(line, merged, index)
