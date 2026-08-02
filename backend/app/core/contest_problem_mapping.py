@@ -41,6 +41,17 @@ def resolve_display_problem_ids(
         if len(current) > len(legacy_ids):
             legacy_ids = current
 
+    # 榜单 details 是 JSON 对象，其键顺序不能视为官方题目顺序。若题号集合
+    # 完全相同，应直接沿用比赛页面的 A、B、C 顺序，避免把同一批题目错误置换。
+    complete_stored_ids = [str(pid) for pid in stored_ids if pid]
+    if len(complete_stored_ids) == len(problem_ids):
+        if set(complete_stored_ids) == set(problem_ids):
+            return list(problem_ids)
+        return complete_stored_ids
+
+    if len(legacy_ids) == len(problem_ids) and set(legacy_ids) == set(problem_ids):
+        return list(problem_ids)
+
     can_use_legacy_order = len(legacy_ids) == len(problem_ids)
     result: list[str] = []
     for index, (problem_id, stored_id) in enumerate(

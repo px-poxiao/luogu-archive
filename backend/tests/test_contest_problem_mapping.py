@@ -38,3 +38,26 @@ def test_stored_mapping_has_priority_over_legacy_sample() -> None:
         [{"P10": {}, "P20": {}}],
     )
     assert display_ids == ["P20", "P10"]
+
+
+def test_same_problem_ids_keep_official_contest_order() -> None:
+    """榜单 JSON 键即使乱序，也不能改变比赛页面定义的 A、B、C、D。"""
+
+    official_ids = ["T765776", "T765416", "T758482", "T758107"]
+    raw_details = {
+        "T758107": {"score": 40},
+        "T758482": {"score": 30},
+        "T765416": {"score": 20},
+        "T765776": {"score": 10},
+    }
+
+    # 模拟旧版本已经按 JSON 键顺序写入的错误映射。
+    display_ids = resolve_display_problem_ids(
+        official_ids,
+        ["T765416", "T758107", "T758482", "T765776"],
+        [raw_details],
+    )
+    assert display_ids == official_ids
+
+    normalized = normalize_problem_details(raw_details, official_ids, display_ids)
+    assert [normalized[pid]["score"] for pid in display_ids] == [10, 20, 30, 40]

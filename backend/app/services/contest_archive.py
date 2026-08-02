@@ -474,6 +474,11 @@ async def archive_scoreboard_page(
             )
             # 只有题目数量完全一致时才按列持久化，避免缺题榜单产生错位映射。
             if len(scoreboard_pids) == len(contest_problems):
+                problem_ids = [str(problem.pid) for problem in contest_problems]
+                # details 的键顺序不保证等于官方题序。同一批题号仅顺序不同时，
+                # 以比赛详情中的 A、B、C 顺序为准；不同题号才按位置保存映射。
+                if set(scoreboard_pids) == set(problem_ids):
+                    scoreboard_pids = problem_ids
                 for problem, scoreboard_pid in zip(
                     contest_problems,
                     scoreboard_pids,
