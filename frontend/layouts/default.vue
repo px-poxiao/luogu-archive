@@ -3,6 +3,57 @@ const colorMode = useColorMode()
 const auth = useAuthStore()
 const api = useApi()
 const runtimeConfig = useRuntimeConfig()
+const route = useRoute()
+
+type UmamiProps = Record<string, unknown>
+type UmamiTracker = {
+  track: (
+    payload?: UmamiProps | ((props: UmamiProps) => UmamiProps),
+  ) => void
+}
+type BrowserWindow = Window & { umami?: UmamiTracker }
+
+// 统计只保留页面类别，避免把用户编号、比赛编号等动态 ID 写入分析数据库。
+function sanitizeAnalyticsPath(value: string): string {
+  const pathname = value.split(/[?#]/, 1)[0] || '/'
+  const segments = pathname.split('/').filter(Boolean)
+  const sensitiveRoots = new Set(['user', 'contest', 'paste', 'article'])
+
+  if (segments.length >= 2 && sensitiveRoots.has(segments[0])) {
+    return `/${segments[0]}/:id`
+  }
+  return pathname
+}
+
+function sanitizeAnalyticsLocation(value: unknown): string {
+  if (typeof value !== 'string' || !value) return ''
+  try {
+    return sanitizeAnalyticsPath(new URL(value, window.location.origin).pathname)
+  } catch {
+    return sanitizeAnalyticsPath(value)
+  }
+}
+
+async function waitForUmami(): Promise<UmamiTracker | null> {
+  const browserWindow = window as BrowserWindow
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (browserWindow.umami) return browserWindow.umami
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  return null
+}
+
+async function trackSanitizedPageView() {
+  if (!import.meta.client) return
+  const tracker = await waitForUmami()
+  if (!tracker) return
+
+  tracker.track((props) => ({
+    ...props,
+    url: sanitizeAnalyticsPath(route.fullPath),
+    referrer: sanitizeAnalyticsLocation(props.referrer),
+  }))
+}
 
 // 只在公共布局加载 Umami；管理后台使用独立布局，不会混入公开站点统计。
 useHead(() => {
@@ -16,9 +67,18 @@ useHead(() => {
         src: scriptUrl,
         defer: true,
         'data-website-id': websiteId,
+        'data-auto-track': 'false',
       },
     ],
   }
+})
+
+// Nuxt 是单页应用，首次打开和后续路由切换都要手动补发一次脱敏后的页面访问。
+onMounted(() => {
+  void trackSanitizedPageView()
+})
+watch(() => route.fullPath, () => {
+  void trackSanitizedPageView()
 })
 
 function toggle() {
