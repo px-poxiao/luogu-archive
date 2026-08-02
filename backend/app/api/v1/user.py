@@ -90,6 +90,7 @@ class ActivityItem(BaseModel):
     feed_merged_suffix_md: str | None = None
     feed_merged_from_id: int | None = None
     feed_merged_link_md: list[str] = Field(default_factory=list)
+    feed_merged_image_md: list[str] = Field(default_factory=list)
     article_id: str | None = None
     article_title: str | None = None
     paste_id: str | None = None
@@ -227,6 +228,7 @@ async def user_activity(
                     feed_merged_suffix_md=display.merged_suffix_md,
                     feed_merged_from_id=display.merged_from_id,
                     feed_merged_link_md=list(display.merged_link_md),
+                    feed_merged_image_md=list(display.merged_image_md),
                 )
             )
 

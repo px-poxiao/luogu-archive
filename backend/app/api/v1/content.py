@@ -100,6 +100,7 @@ class FeedItem(BaseModel):
     merged_suffix_md: str | None = None
     merged_from_id: int | None = None
     merged_link_md: list[str] = Field(default_factory=list)
+    merged_image_md: list[str] = Field(default_factory=list)
     user: _UserBrief | None = None
 
 
@@ -340,6 +341,7 @@ async def global_feed(
                 merged_suffix_md=display.merged_suffix_md,
                 merged_from_id=display.merged_from_id,
                 merged_link_md=list(display.merged_link_md),
+                merged_image_md=list(display.merged_image_md),
                 user=user,
             )
         )

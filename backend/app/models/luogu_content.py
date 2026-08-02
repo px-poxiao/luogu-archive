@@ -158,6 +158,30 @@ class Feed(Base):
     )
 
 
+class FeedCompletion(Base):
+    """犇犇回复的展示层补全缓存，原始归档正文始终保留在 feeds 表。"""
+
+    __tablename__ = "feed_completions"
+    __table_args__ = (Index("ix_feed_completion_computed_at", "computed_at"),)
+
+    feed_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("feeds.id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+    content_md: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    merged_suffix_md: Mapped[str | None] = mapped_column(LONGTEXT, nullable=True)
+    merged_from_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    merged_link_md: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    merged_image_md: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    is_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    algorithm_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
 # ============================================================
 # 陶片放逐（追加式）
 # ============================================================

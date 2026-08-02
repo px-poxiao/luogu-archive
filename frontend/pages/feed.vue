@@ -11,6 +11,7 @@ interface FeedItem {
   merged_suffix_md: string | null
   merged_from_id: number | null
   merged_link_md?: string[]
+  merged_image_md?: string[]
   user: { uid: number; name: string; color: string; badge: string | null; avatar: string | null } | null
 }
 
@@ -54,7 +55,7 @@ async function loadMore() {
 const { render } = useMarkdown()
 const completionTip = '此内容由洛谷档案馆根据回复链自动补全'
 
-function markMergedLinks(html: string, links: string[]) {
+function markMergedMedia(html: string, links: string[], images: string[]) {
   let marked = html
   for (const link of links) {
     const anchor = render(link).match(/<a\b[^>]*>[\s\S]*?<\/a>/i)?.[0]
@@ -62,6 +63,14 @@ function markMergedLinks(html: string, links: string[]) {
     marked = marked.replace(
       anchor,
       `<span class="feed-completion-wrap" tabindex="0"><span class="feed-auto-merged-link">${anchor}</span><span class="feed-completion-popover" role="tooltip">${completionTip}</span></span>`,
+    )
+  }
+  for (const imageMd of images) {
+    const image = render(imageMd).match(/<img\b[^>]*>/i)?.[0]
+    if (!image || !marked.includes(image)) continue
+    marked = marked.replace(
+      image,
+      `<span class="feed-completion-wrap feed-auto-merged-image" tabindex="0">${image}<span class="feed-completion-popover" role="tooltip">${completionTip}</span></span>`,
     )
   }
   return marked
@@ -83,11 +92,18 @@ function renderMergedSuffix(content: string, mergedSuffix: string) {
     + `<div class="feed-completion-wrap feed-completion-block" tabindex="0"><div class="feed-auto-merged">${suffixHtml}</div><span class="feed-completion-popover" role="tooltip">${completionTip}</span></div>`
 }
 
-function feedHtml(content: string, mergedSuffix: string | null, mergedLinks: string[]) {
+function feedHtml(
+  content: string,
+  mergedSuffix: string | null,
+  mergedLinks: string[],
+  mergedImages: string[],
+) {
   let html = mergedSuffix
     ? renderMergedSuffix(content, mergedSuffix)
     : render(content)
-  if (mergedLinks.length) html = markMergedLinks(html, mergedLinks)
+  if (mergedLinks.length || mergedImages.length) {
+    html = markMergedMedia(html, mergedLinks, mergedImages)
+  }
   return html
 }
 
@@ -127,7 +143,7 @@ useCopyCode(listRef)
             <LuoguUserName :user="f.user" show-badge />
             <span class="time">{{ smart(f.time) }}</span>
           </header>
-          <div class="lg-content content" v-html="feedHtml(f.content_md, f.merged_suffix_md, f.merged_link_md || [])" />
+          <div class="lg-content content" v-html="feedHtml(f.content_md, f.merged_suffix_md, f.merged_link_md || [], f.merged_image_md || [])" />
           <footer class="feed-foot">
             <span class="feed-id">#{{ f.id }}</span>
             <FeedReplyButton :content="f.content_md" :sender-name="f.user?.name" />
@@ -272,6 +288,14 @@ useCopyCode(listRef)
 }
 .content :deep(.feed-auto-merged img) {
   box-shadow: 0 2px 0 #7db9e8;
+}
+.content :deep(.feed-auto-merged-image) {
+  display: inline-block;
+  max-width: 100%;
+  box-shadow: 0 2px 0 #7db9e8;
+}
+.content :deep(.feed-auto-merged-image img) {
+  display: block;
 }
 .content :deep(.feed-auto-merged-link),
 .content :deep(.feed-auto-merged-link a) {
