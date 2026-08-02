@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,7 @@ from app.models.luogu_user import (
     UserNameVersion,
     UserPrize,
 )
+from app.services.feed_merge import merge_feed_rows
 
 router = APIRouter(prefix="/user", tags=["user"])
 
@@ -86,6 +87,9 @@ class ActivityItem(BaseModel):
     # 任一类型的关键字段，前端分别渲染
     feed_id: int | None = None
     feed_content: str | None = None
+    feed_merged_suffix_md: str | None = None
+    feed_merged_from_id: int | None = None
+    feed_merged_link_md: list[str] = Field(default_factory=list)
     article_id: str | None = None
     article_title: str | None = None
     paste_id: str | None = None
@@ -210,13 +214,19 @@ async def user_activity(
         if before is not None:
             fq = fq.where(Feed.time < before)
         fq = fq.order_by(desc(Feed.time)).limit(limit)
-        for f in (await db.execute(fq)).scalars().all():
+        feed_rows = list((await db.execute(fq)).scalars().all())
+        merged_feeds = await merge_feed_rows(db, feed_rows)
+        for f in feed_rows:
+            display = merged_feeds[int(f.id)]
             items.append(
                 ActivityItem(
                     kind="feed",
                     time=f.time,
                     feed_id=f.id,
-                    feed_content=f.content_md,
+                    feed_content=display.content_md,
+                    feed_merged_suffix_md=display.merged_suffix_md,
+                    feed_merged_from_id=display.merged_from_id,
+                    feed_merged_link_md=list(display.merged_link_md),
                 )
             )
 

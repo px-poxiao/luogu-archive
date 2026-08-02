@@ -8,6 +8,9 @@ interface FeedItem {
   type: number
   time: string
   content_md: string
+  merged_suffix_md: string | null
+  merged_from_id: number | null
+  merged_link_md?: string[]
   user: { uid: number; name: string; color: string; badge: string | null; avatar: string | null } | null
 }
 
@@ -49,7 +52,30 @@ async function loadMore() {
 }
 
 const { render } = useMarkdown()
-function feedHtml(c: string) { return render(c) }
+function markMergedLinks(html: string, links: string[]) {
+  let marked = html
+  for (const link of links) {
+    const anchor = render(link).match(/<a\b[^>]*>[\s\S]*?<\/a>/i)?.[0]
+    if (!anchor || !marked.includes(anchor)) continue
+    marked = marked.replace(
+      anchor,
+      `<span class="feed-auto-merged-link">${anchor}</span>`,
+    )
+  }
+  return marked
+}
+
+function feedHtml(content: string, mergedSuffix: string | null, mergedLinks: string[]) {
+  let html = mergedSuffix
+    ? (() => {
+        const prefix = content.slice(0, Math.max(0, content.length - mergedSuffix.length))
+        return render(prefix)
+          + `<div class="feed-auto-merged" aria-label="系统补全内容">${render(mergedSuffix)}</div>`
+      })()
+    : render(content)
+  if (mergedLinks.length) html = markMergedLinks(html, mergedLinks)
+  return html
+}
 
 const listRef = ref<HTMLElement | null>(null)
 useCopyCode(listRef)
@@ -87,7 +113,7 @@ useCopyCode(listRef)
             <LuoguUserName :user="f.user" show-badge />
             <span class="time">{{ smart(f.time) }}</span>
           </header>
-          <div class="lg-content content" v-html="feedHtml(f.content_md)" />
+          <div class="lg-content content" v-html="feedHtml(f.content_md, f.merged_suffix_md, f.merged_link_md || [])" />
           <footer class="feed-foot">
             <span class="feed-id">#{{ f.id }}</span>
             <FeedReplyButton :content="f.content_md" :sender-name="f.user?.name" />
@@ -210,6 +236,22 @@ useCopyCode(listRef)
 .content :deep(img) {
   max-width: 100%;
   height: auto;
+}
+
+/* 自动补回的回复后缀保留原 Markdown，同时用下划线提示来源。 */
+.content :deep(.feed-auto-merged) {
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.content :deep(.feed-auto-merged img) {
+  box-shadow: 0 2px 0 currentColor;
+}
+.content :deep(.feed-auto-merged-link),
+.content :deep(.feed-auto-merged-link a) {
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 .feed-foot {
   margin-top: 8px;

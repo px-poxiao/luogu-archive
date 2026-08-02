@@ -19,6 +19,7 @@ from app.core.db import get_db
 from app.core.redis_client import get_redis
 from app.models.luogu_content import Feed
 from app.models.luogu_user import LuoguUser
+from app.services.feed_merge import FeedDisplay, merge_feed_rows
 
 router = APIRouter(prefix="/image/feed", tags=["image-card"])
 
@@ -94,7 +95,7 @@ def _display_name(user: LuoguUser | None, uid: int) -> str:
     return name or f"UID {uid}"
 
 
-def _strip_markdown(md: str) -> str:
+def _strip_markdown(md: str, *, fallback: bool = True) -> str:
     text = md or ""
     text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
@@ -105,7 +106,7 @@ def _strip_markdown(md: str) -> str:
     # Removing them as generic Markdown punctuation corrupts the quoted feed.
     text = re.sub(r"[#>*~\-]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-    return text or "这条犇犇暂时没有可展示的文字。"
+    return text or ("这条犇犇暂时没有可展示的文字。" if fallback else "")
 
 
 def _wrap_text(text: str, *, line_chars: int, max_lines: int) -> list[str]:
@@ -351,24 +352,75 @@ def _activity_svg(uid: int, user: LuoguUser | None, stats: dict[str, object], no
 </svg>'''
 
 
-def _random_svg(uid: int, user: LuoguUser | None, feed: Feed | None, now: datetime, avatar_href: str | None) -> str:
+def _random_svg(
+    uid: int,
+    user: LuoguUser | None,
+    feed: Feed | None,
+    now: datetime,
+    avatar_href: str | None,
+    display: FeedDisplay | None = None,
+) -> str:
     name = _xml(_display_name(user, uid))
     avatar = _avatar_svg(user, uid, cx=31, cy=31, r=31, clip_id="avatarClipSmall", font_size=23, avatar_href=avatar_href)
     generated_time = _xml(_format_time_only(now))
     generated_at = _xml(_format_generated_at(now))
 
     if feed is None:
-        quote_lines = ["暂时没有找到可展示的犇犇。"]
+        quote_lines = [("暂时没有找到可展示的犇犇。", False)]
         feed_date = now.strftime("%Y-%m-%d")
         feed_id = "暂无 ID"
     else:
-        quote_lines = _wrap_text(_strip_markdown(feed.content_md), line_chars=20, max_lines=3)
+        shown_content = display.content_md if display is not None else feed.content_md
+        if display is not None and display.merged_suffix_md:
+            # 将自动补回部分单独换行并加下划线，图卡也能明确提示来源。
+            prefix = shown_content[: -len(display.merged_suffix_md)]
+            prefix_text = _strip_markdown(prefix, fallback=False)
+            suffix_text = _strip_markdown(display.merged_suffix_md, fallback=False)
+            prefix_lines = (
+                _wrap_text(prefix_text, line_chars=20, max_lines=3)
+                if prefix_text
+                else []
+            )
+            suffix_lines = (
+                _wrap_text(suffix_text, line_chars=20, max_lines=max(1, 3 - len(prefix_lines)))
+                if suffix_text
+                else []
+            )
+            quote_lines = [(line, False) for line in prefix_lines]
+            quote_lines.extend((line, True) for line in suffix_lines)
+            quote_lines = quote_lines[:3]
+            if not quote_lines:
+                quote_lines = [("这条犇犇暂时没有可展示的文字。", False)]
+        else:
+            quote_lines = [
+                (line, False)
+                for line in _wrap_text(_strip_markdown(shown_content), line_chars=20, max_lines=3)
+            ]
+        if display is not None and display.merged_link_md:
+            # 图卡无法提供可点击链接，至少把自动补回链接所在的文字行加下划线。
+            merged_labels = [
+                match.group(1)
+                for link in display.merged_link_md
+                for match in [re.match(r"\[([^\]]+)\]\(", link)]
+                if match is not None
+            ]
+            quote_lines = [
+                (
+                    line,
+                    merged or any(label in line for label in merged_labels),
+                )
+                for line, merged in quote_lines
+            ]
         feed_date = _to_shanghai(feed.time).strftime("%Y-%m-%d")
         feed_id = f"#{feed.id}"
 
+    def quote_line_svg(line: str, merged: bool, index: int) -> str:
+        decoration = ' text-decoration="underline"' if merged else ""
+        return f'<text x="72" y="{72 + index * 46}" class="quote"{decoration}>{_xml(line)}</text>'
+
     quote_svg = "\n".join(
-        f'<text x="72" y="{72 + idx * 46}" class="quote">{_xml(line)}</text>'
-        for idx, line in enumerate(quote_lines)
+        quote_line_svg(line, merged, index)
+        for index, (line, merged) in enumerate(quote_lines)
     )
 
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" role="img" aria-label="{name} 的随机犇犇语录图卡">
@@ -428,6 +480,8 @@ async def feed_random_card(uid: int, db: AsyncSession = Depends(get_db)) -> Resp
     )
     rows = list((await db.execute(q)).scalars().all())
     feed = random.choice(rows) if rows else None
+    merged = await merge_feed_rows(db, rows)
     avatar_href = await _avatar_data_uri(user)
-    svg = _random_svg(uid, user, feed, now, avatar_href)
+    display = merged.get(int(feed.id)) if feed is not None else None
+    svg = _random_svg(uid, user, feed, now, avatar_href, display)
     return _svg_response(svg, cache_seconds=None)

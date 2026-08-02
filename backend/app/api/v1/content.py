@@ -8,7 +8,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +30,7 @@ from app.models.luogu_content import (
     Problem,
 )
 from app.models.luogu_user import LuoguUser
+from app.services.feed_merge import merge_feed_rows
 
 router = APIRouter(tags=["content"])
 
@@ -95,7 +96,11 @@ class FeedItem(BaseModel):
     type: int
     time: datetime
     content_md: str
-    user: _UserBrief | None
+    # 非空表示正文末尾有一段由回复关联自动补回的内容，前端会加下划线提示。
+    merged_suffix_md: str | None = None
+    merged_from_id: int | None = None
+    merged_link_md: list[str] = Field(default_factory=list)
+    user: _UserBrief | None = None
 
 
 class JudgementGroup(BaseModel):
@@ -320,16 +325,21 @@ async def global_feed(
     if before is not None:
         q = q.where(Feed.time < before)
     rows = (await db.execute(q)).scalars().all()
+    merged = await merge_feed_rows(db, rows)
 
     items: list[FeedItem] = []
     for r in rows:
         user = await _user_brief(db, r.author_uid)
+        display = merged[int(r.id)]
         items.append(
             FeedItem(
                 id=r.id,
                 type=r.type,
                 time=r.time,
-                content_md=r.content_md,
+                content_md=display.content_md,
+                merged_suffix_md=display.merged_suffix_md,
+                merged_from_id=display.merged_from_id,
+                merged_link_md=list(display.merged_link_md),
                 user=user,
             )
         )

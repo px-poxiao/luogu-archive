@@ -45,6 +45,9 @@ interface ActivityItem {
   time: string
   feed_id?: number
   feed_content?: string
+  feed_merged_suffix_md?: string | null
+  feed_merged_from_id?: number | null
+  feed_merged_link_md?: string[]
   article_id?: string
   article_title?: string
   paste_id?: string
@@ -173,7 +176,30 @@ const { render } = useMarkdown()
 const introHtml = computed(() =>
   profile.value?.introduction_md ? render(profile.value.introduction_md) : '',
 )
-function feedHtml(c: string) { return render(c) }
+function markMergedLinks(html: string, links: string[]) {
+  let marked = html
+  for (const link of links) {
+    const anchor = render(link).match(/<a\b[^>]*>[\s\S]*?<\/a>/i)?.[0]
+    if (!anchor || !marked.includes(anchor)) continue
+    marked = marked.replace(
+      anchor,
+      `<span class="feed-auto-merged-link">${anchor}</span>`,
+    )
+  }
+  return marked
+}
+
+function feedHtml(content: string, mergedSuffix?: string | null, mergedLinks: string[] = []) {
+  let html = mergedSuffix
+    ? (() => {
+        const prefix = content.slice(0, Math.max(0, content.length - mergedSuffix.length))
+        return render(prefix)
+          + `<div class="feed-auto-merged" aria-label="系统补全内容">${render(mergedSuffix)}</div>`
+      })()
+    : render(content)
+  if (mergedLinks.length) html = markMergedLinks(html, mergedLinks)
+  return html
+}
 
 const copiedIntroOriginal = ref(false)
 async function copyIntroOriginal() {
@@ -363,7 +389,10 @@ function formatScore(s: number): string {
               <span class="kind-tag">{{ KIND_LABEL[a.kind] || a.kind }}</span>
               <span class="time">{{ smart(a.time) }}</span>
               <template v-if="a.kind === 'feed'">
-                <div class="lg-content" v-html="feedHtml(a.feed_content || '')" />
+                <div
+                  class="lg-content"
+                  v-html="feedHtml(a.feed_content || '', a.feed_merged_suffix_md, a.feed_merged_link_md || [])"
+                />
                 <div class="feed-foot">
                   <span class="feed-id">#{{ a.feed_id }}</span>
                   <FeedReplyButton
@@ -857,6 +886,22 @@ function formatScore(s: number): string {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* 自动补回的回复后缀用下划线区分，避免用户误以为是原回复正文。 */
+.lg-content :deep(.feed-auto-merged) {
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.lg-content :deep(.feed-auto-merged img) {
+  box-shadow: 0 2px 0 currentColor;
+}
+.lg-content :deep(.feed-auto-merged-link),
+.lg-content :deep(.feed-auto-merged-link a) {
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 .feed-id {
   font-size: 11px;
