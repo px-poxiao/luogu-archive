@@ -6,7 +6,8 @@ import secrets
 from datetime import timedelta, timezone
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +37,27 @@ from app.services.plugin_marketplace import (
 
 
 router = APIRouter(prefix="/admin", tags=["admin-plugins"])
+DOWNLOAD_CHUNK_BYTES = 64 * 1024
+
+
+def _code_download_response(code: str, filename: str) -> StreamingResponse:
+    """管理员明确下载时分块发送完整代码，避免代理先缓冲整个响应。"""
+    content = code.encode("utf-8")
+
+    async def chunks():
+        for offset in range(0, len(content), DOWNLOAD_CHUNK_BYTES):
+            yield content[offset:offset + DOWNLOAD_CHUNK_BYTES]
+
+    encoded = quote(filename, safe="")
+    return StreamingResponse(
+        chunks(),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded}",
+            "Content-Length": str(len(content)),
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 class ReviewApplicationReq(BaseModel):
@@ -178,18 +200,13 @@ async def download_plugin_application_code(
     application_id: int,
     admin: Admin = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
-) -> Response:
+) -> StreamingResponse:
     """管理员明确下载时才传输待审核申请的完整代码。"""
     row = await db.get(PluginApplication, application_id)
     if row is None or row.snapshot_json == "{}":
         raise NotFoundError("插件申请代码不存在")
     snapshot = decode_snapshot(row.snapshot_json)
-    encoded = quote(snapshot.download_filename, safe="")
-    return Response(
-        content=snapshot.code.encode("utf-8"),
-        media_type="text/plain; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
-    )
+    return _code_download_response(snapshot.code, snapshot.download_filename)
 
 
 @router.post("/plugin-applications/{application_id}/review")

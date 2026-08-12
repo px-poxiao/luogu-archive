@@ -278,6 +278,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
       :plugin-name="displayName"
       :version="displayVersion"
       :action="action"
+      :public-download="detail.is_listed"
       @close="confirmOpen = false"
       @done="showToast"
       @analysis="activeTab = 'analysis'; confirmOpen = false"

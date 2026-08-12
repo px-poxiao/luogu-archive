@@ -7,9 +7,11 @@ const props = defineProps<{
   pluginName: string
   version: PluginVersion
   action: 'copy' | 'download'
+  publicDownload: boolean
 }>()
 const emit = defineEmits<{ close: []; done: [message: string]; analysis: [] }>()
 const api = useApi()
+const config = useRuntimeConfig()
 const { runtimeMode } = usePluginLabels()
 const codeBytes = computed(() => props.version.code_bytes)
 const copyBlocked = computed(() => props.action === 'copy' && codeBytes.value > 100 * 1024)
@@ -25,10 +27,24 @@ async function confirm() {
     return
   }
   try {
-    // 普通详情响应只有预览；用户确认后才单独获取完整代码。
-    const blob = await api<Blob>(`/plugins/${props.articleId}/download/${props.version.id}`, {
-      responseType: 'blob',
-    })
+    const path = `/api/v1/plugins/${props.articleId}/download/${props.version.id}`
+    if (props.action === 'download' && props.publicDownload) {
+      // 公开插件交给浏览器直接下载，避免先在 JavaScript 中静默缓存完整 Blob。
+      const base = String(config.public.apiBaseUrl || '').replace(/\/$/, '')
+      const anchor = document.createElement('a')
+      anchor.href = `${base}${path}`
+      anchor.download = props.version.download_filename
+      anchor.hidden = true
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      emit('done', '下载已经开始')
+      emit('close')
+      return
+    }
+
+    // 复制和下架插件下载需要携带登录凭据，因此仍按需读取完整代码。
+    const blob = await api<Blob>(path.replace('/api/v1', ''), { responseType: 'blob' })
     if (props.action === 'copy') {
       await navigator.clipboard.writeText(await blob.text())
       emit('done', '代码已复制')

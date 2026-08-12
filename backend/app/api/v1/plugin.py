@@ -4,7 +4,8 @@ from __future__ import annotations
 from datetime import timedelta
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +44,7 @@ from app.services.plugin_marketplace import (
 
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
+DOWNLOAD_CHUNK_BYTES = 64 * 1024
 
 
 class PublishApplicationReq(BaseModel):
@@ -57,6 +59,26 @@ class ReasonReq(BaseModel):
 class ReportReq(BaseModel):
     report_type: str
     description: str = Field(..., min_length=10, max_length=5000)
+
+
+def _code_download_response(code: str, filename: str) -> StreamingResponse:
+    """分块发送代码并关闭代理缓冲，让浏览器及时显示下载进度。"""
+    content = code.encode("utf-8")
+
+    async def chunks():
+        for offset in range(0, len(content), DOWNLOAD_CHUNK_BYTES):
+            yield content[offset:offset + DOWNLOAD_CHUNK_BYTES]
+
+    encoded = quote(filename, safe="")
+    return StreamingResponse(
+        chunks(),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded}",
+            "Content-Length": str(len(content)),
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _require_bound_user(user: SiteUser) -> None:
@@ -376,19 +398,14 @@ async def download_plugin_version(
     version_id: int,
     user: SiteUser | None = Depends(get_optional_site_user),
     db: AsyncSession = Depends(get_db),
-) -> Response:
+) -> StreamingResponse:
     plugin = (await db.execute(select(Plugin).where(Plugin.article_id == article_id))).scalar_one_or_none()
     if plugin is None or (not plugin.is_listed and (user is None or user.id != plugin.owner_user_id)):
         raise NotFoundError("插件不存在或已下架")
     version = await db.get(PluginVersion, version_id)
     if version is None or version.plugin_id != plugin.id:
         raise NotFoundError("代码版本不存在")
-    encoded = quote(version.download_filename, safe="")
-    return Response(
-        content=version.code.encode("utf-8"),
-        media_type="text/plain; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
-    )
+    return _code_download_response(version.code, version.download_filename)
 
 
 @router.post("/applications/publish")
@@ -578,18 +595,13 @@ async def download_own_application_code(
     application_id: int,
     user: SiteUser = Depends(get_current_site_user),
     db: AsyncSession = Depends(get_db),
-) -> Response:
+) -> StreamingResponse:
     """上传者明确查看或编辑申请时，才传输申请中的完整代码。"""
     row = await db.get(PluginApplication, application_id)
     if row is None or row.applicant_user_id != user.id or row.snapshot_json == "{}":
         raise NotFoundError("插件申请代码不存在")
     snapshot = decode_snapshot(row.snapshot_json)
-    encoded = quote(snapshot.download_filename, safe="")
-    return Response(
-        content=snapshot.code.encode("utf-8"),
-        media_type="text/plain; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
-    )
+    return _code_download_response(snapshot.code, snapshot.download_filename)
 
 
 @router.post("/{article_id}/reports")
