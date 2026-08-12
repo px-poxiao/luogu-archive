@@ -135,7 +135,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
           <span v-if="detail.is_official" class="trust official">官方插件</span>
           <span v-if="detail.is_recommended" class="trust recommended">推荐插件</span>
         </div>
-        <p>{{ displaySummary }}</p>
+        <p v-if="activeTab !== 'article'">{{ displaySummary }}</p>
         <div class="tag-row">
           <span v-for="tag in displayTags" :key="tag.id" class="tag">{{ tag.name }}</span>
         </div>
@@ -167,15 +167,9 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
     </nav>
 
     <section v-if="activeTab === 'article'" class="tab-content article-tab">
-      <div class="article-title-row">
-        <div>
-          <h2>{{ article.title }}</h2>
-          <p>插件原文始终跟随本站最新归档版本。</p>
-        </div>
-        <div class="article-actions">
-          <NuxtLink v-if="article.version_count > 1" :to="`/article/${articleId}/history`">历史版本</NuxtLink>
-          <a :href="`https://www.luogu.com.cn/article/${articleId}`" target="_blank" rel="noopener noreferrer">洛谷原文</a>
-        </div>
+      <div class="article-actions">
+        <NuxtLink v-if="article.version_count > 1" :to="`/article/${articleId}/history`">历史版本</NuxtLink>
+        <a :href="`https://www.luogu.com.cn/article/${articleId}`" target="_blank" rel="noopener noreferrer">洛谷原文</a>
       </div>
       <article ref="articleRef" class="lg-content" v-html="articleHtml" />
     </section>
@@ -211,19 +205,20 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
     </section>
 
     <section v-else-if="activeTab === 'analysis' && displayVersion" class="tab-content analysis-tab">
-      <div class="level-comparison">
-        <div><span>当前最终等级</span><PluginRequestLevelBadge :level="displayVersion.final_request_level" /></div>
+      <div class="level-comparison" :class="{ single: displayVersion.admin_request_level === null }">
         <div><span>用户提交等级</span><PluginRequestLevelBadge :level="displayVersion.user_request_level" /></div>
-        <div><span>管理员调整</span><strong>{{ displayVersion.admin_request_level === null ? '未调整' : '已调整' }}</strong></div>
+        <div v-if="displayVersion.admin_request_level !== null">
+          <span>管理员更改等级</span>
+          <PluginRequestLevelBadge :level="displayVersion.admin_request_level" />
+        </div>
       </div>
       <section>
         <h2>上传者请求分析</h2>
         <div class="lg-content analysis-content" v-html="userAnalysisHtml" />
       </section>
-      <section>
+      <section v-if="displayVersion.admin_request_analysis">
         <h2>管理组请求分析</h2>
-        <div v-if="displayVersion.admin_request_analysis" class="lg-content analysis-content" v-html="adminAnalysisHtml" />
-        <p v-else class="muted">管理组未补充请求分析。</p>
+        <div class="lg-content analysis-content" v-html="adminAnalysisHtml" />
       </section>
     </section>
 
@@ -284,10 +279,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
 .tabs button { border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--text-muted); padding: 10px 3px; font: inherit; font-size: 16px; cursor: pointer; }
 .tabs button.active { border-bottom-color: var(--link); color: var(--link); font-weight: 600; }
 .tab-content { min-width: 0; padding: 22px 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
-.article-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding-bottom: 18px; margin-bottom: 22px; border-bottom: 1px solid var(--border); }
-.article-title-row h2 { margin: 0; }
-.article-title-row p { margin: 5px 0 0; color: var(--text-muted); }
-.article-actions { display: flex; gap: 12px; white-space: nowrap; }
+.article-actions { display: flex; justify-content: flex-end; gap: 12px; padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .code-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
 .version-picker { display: grid; grid-template-columns: auto minmax(150px, 250px); align-items: center; gap: 6px 10px; }
 .version-picker > span { grid-column: 2; color: var(--text-muted); font-size: 12px; }
@@ -302,13 +294,13 @@ select, textarea { border: 1px solid var(--border); border-radius: 6px; backgrou
 .compat-grid dd { margin: 3px 0 0; overflow-wrap: anywhere; }
 .compat-grid code { font-size: 11px; }
 .code-view { max-height: 620px; overflow: auto; margin: 0; padding: 16px; border-radius: 6px; background: var(--hover); font-size: 13px; line-height: 1.55; white-space: pre; }
-.level-comparison { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin-bottom: 28px; background: var(--border); border: 1px solid var(--border); }
+.level-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin-bottom: 28px; background: var(--border); border: 1px solid var(--border); }
+.level-comparison.single { grid-template-columns: minmax(0, 1fr); }
 .level-comparison > div { display: grid; align-content: center; justify-items: start; gap: 8px; min-height: 82px; padding: 13px; background: var(--surface); }
 .level-comparison span { color: var(--text-muted); font-size: 13px; }
 .analysis-tab > section + section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); }
 .analysis-tab h2 { margin: 0 0 13px; font-size: 19px; }
 .analysis-content { min-height: 40px; }
-.muted { color: var(--text-muted); }
 .detail-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--text-muted); font-size: 13px; }
 .detail-footer > div { display: flex; align-items: center; gap: 12px; }
 .report-form { display: grid; grid-template-columns: 180px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 16px; border: 1px solid var(--border); background: var(--surface); }
@@ -317,7 +309,7 @@ select, textarea { border: 1px solid var(--border); border-radius: 6px; backgrou
 .toast { position: fixed; z-index: 900; left: 50%; bottom: 28px; transform: translateX(-50%); margin: 0; padding: 9px 15px; border-radius: 6px; background: #222; color: #fff; box-shadow: 0 8px 24px rgba(0,0,0,.24); }
 .error-box { padding: 36px; border: 1px solid var(--border); color: var(--lg-red); text-align: center; }
 @media (max-width: 760px) {
-  .plugin-header, .pending-banner, .article-title-row, .code-toolbar, .detail-footer { align-items: flex-start; flex-direction: column; }
+  .plugin-header, .pending-banner, .code-toolbar, .detail-footer { align-items: flex-start; flex-direction: column; }
   .compat-grid, .level-comparison { grid-template-columns: 1fr; }
   .compat-grid .wide { grid-column: auto; }
   .report-form { grid-template-columns: 1fr; }

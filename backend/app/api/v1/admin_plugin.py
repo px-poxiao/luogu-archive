@@ -45,7 +45,7 @@ class ReviewApplicationReq(BaseModel):
 
 
 class PluginAdminUpdateReq(BaseModel):
-    summary: str | None = Field(None, max_length=300)
+    summary: str | None = Field(None, max_length=50)
     is_official: bool | None = None
     is_recommended: bool | None = None
     tag_ids: list[int] | None = Field(None, max_length=20)

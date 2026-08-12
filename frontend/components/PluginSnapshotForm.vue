@@ -39,7 +39,7 @@ function toggleTag(tagId: number, checked: boolean) {
         <span>简短介绍（可选）</span>
         <textarea
           v-model.trim="model.summary"
-          maxlength="300"
+          maxlength="50"
           rows="3"
           placeholder="留空时从文章正文中自动生成"
         />

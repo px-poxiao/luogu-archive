@@ -59,3 +59,9 @@ def test_summary_can_be_omitted() -> None:
 def test_article_summary_uses_visible_markdown_text() -> None:
     result = article_summary("# 标题\n\n这是[链接](https://example.com)和 `代码`。", "后备标题")
     assert result == "标题 这是链接和 代码。"
+
+
+def test_article_summary_is_limited_to_fifty_characters() -> None:
+    result = article_summary("这" * 80, "后备标题")
+    assert len(result) == 50
+    assert result.endswith("…")

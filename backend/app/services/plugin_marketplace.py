@@ -28,7 +28,7 @@ REPORT_STATUSES = {"pending", "resolved", "dismissed"}
 class PluginSnapshot(BaseModel):
     """发布或更新申请的完整快照。"""
 
-    summary: str | None = Field(None, max_length=300)
+    summary: str | None = Field(None, max_length=50)
     version: str = Field(..., min_length=1, max_length=64)
     code: str = Field(..., min_length=1)
     download_filename: str = Field(..., min_length=1, max_length=128)
@@ -116,7 +116,7 @@ def code_sha256(code: str) -> str:
     return hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 
-def article_summary(content_md: str, fallback: str, *, max_length: int = 300) -> str:
+def article_summary(content_md: str, fallback: str, *, max_length: int = 50) -> str:
     """从文章 Markdown 的可见文本生成简介，避免把链接语法或 HTML 标签带进广场。"""
     parts: list[str] = []
     for token in MarkdownIt("commonmark", {"html": False}).parse(content_md):

@@ -100,7 +100,7 @@ onMounted(async () => {
 
       <section v-if="editing" class="edit-pane">
         <h2>编辑 {{ editing.name }}</h2>
-        <label>简介（留空则从文章正文生成）<textarea v-model.trim="editing.summary" rows="3" maxlength="300" /></label>
+        <label>简介（留空则从文章正文生成）<textarea v-model.trim="editing.summary" rows="3" maxlength="50" /></label>
         <fieldset><legend>可信度徽章</legend>
           <label class="inline"><input v-model="editing.is_official" type="checkbox">官方插件</label>
           <label class="inline"><input v-model="editing.is_recommended" type="checkbox">推荐插件</label>
