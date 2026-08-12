@@ -25,10 +25,43 @@ const reportType = ref('dangerous_request')
 const reportDescription = ref('')
 useCopyCode(articleRef)
 
+const CODE_PREVIEW_MAX_LINES = 1000
+const CODE_PREVIEW_MAX_BYTES = 50 * 1024
+const CODE_COPY_MAX_BYTES = 100 * 1024
+
+/**
+ * 代码页只渲染有限内容，避免超长代码阻塞页面。
+ * 原始代码始终保留在版本对象中，复制、下载和哈希计算都不受影响。
+ */
+function buildCodePreview(code: string) {
+  const encoder = new TextEncoder()
+  const decoder = new TextDecoder()
+  const sourceBytes = encoder.encode(code)
+  const lines = code.split('\n')
+  const overLineLimit = lines.length > CODE_PREVIEW_MAX_LINES
+  const overByteLimit = sourceBytes.length > CODE_PREVIEW_MAX_BYTES
+  let preview = overLineLimit
+    ? lines.slice(0, CODE_PREVIEW_MAX_LINES).join('\n')
+    : code
+  const previewBytes = overLineLimit ? encoder.encode(preview) : sourceBytes
+
+  if (previewBytes.length > CODE_PREVIEW_MAX_BYTES) {
+    // 截断点落在 UTF-8 连续字节中间时，退回到完整字符的起始位置。
+    let end = CODE_PREVIEW_MAX_BYTES
+    while (end > 0 && (previewBytes[end] & 0xc0) === 0x80) end -= 1
+    preview = decoder.decode(previewBytes.subarray(0, end))
+  }
+
+  return {
+    code: preview,
+    truncated: overLineLimit || overByteLimit,
+    sourceBytes: sourceBytes.length,
+  }
+}
+
 const pendingSnapshot = computed(() => detail.value?.pending_application?.snapshot || null)
 const displaySnapshot = computed<PluginSnapshot | null>(() => showPending.value ? pendingSnapshot.value : null)
 const displayName = computed(() => article.value?.title || detail.value?.name || '插件')
-const displaySummary = computed(() => displaySnapshot.value?.summary || detail.value?.summary || '')
 const displayTags = computed(() => showPending.value
   ? detail.value?.pending_application?.tags || []
   : detail.value?.tags || [])
@@ -55,6 +88,9 @@ const displayVersion = computed<PluginVersion | null>(() => {
     published_at: '',
   }
 })
+
+const codePreview = computed(() => buildCodePreview(displayVersion.value?.code || ''))
+const copyDisabled = computed(() => codePreview.value.sourceBytes > CODE_COPY_MAX_BYTES)
 
 const userAnalysisHtml = computed(() => render(displayVersion.value?.user_request_analysis || ''))
 const adminAnalysisHtml = computed(() => render(displayVersion.value?.admin_request_analysis || ''))
@@ -87,6 +123,10 @@ async function selectVersion(versionId: string) {
 function openInstall(nextAction: 'copy' | 'download') {
   if (showPending.value) {
     toast.value = '待审核代码仅供上传者预览，审核通过后才能复制或下载。'
+    return
+  }
+  if (nextAction === 'copy' && copyDisabled.value) {
+    showToast('完整代码超过 100 KiB，请下载文件')
     return
   }
   action.value = nextAction
@@ -135,7 +175,6 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
           <span v-if="detail.is_official" class="trust official">官方插件</span>
           <span v-if="detail.is_recommended" class="trust recommended">推荐插件</span>
         </div>
-        <p v-if="activeTab !== 'article'">{{ displaySummary }}</p>
         <div class="tag-row">
           <span v-for="tag in displayTags" :key="tag.id" class="tag">{{ tag.name }}</span>
         </div>
@@ -161,16 +200,18 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
     </div>
 
     <nav class="tabs" aria-label="插件内容">
-      <button type="button" :class="{ active: activeTab === 'article' }" @click="activeTab = 'article'">原文</button>
-      <button type="button" :class="{ active: activeTab === 'code' }" @click="activeTab = 'code'">代码</button>
-      <button type="button" :class="{ active: activeTab === 'analysis' }" @click="activeTab = 'analysis'">请求分析</button>
-    </nav>
-
-    <section v-if="activeTab === 'article'" class="tab-content article-tab">
-      <div class="article-actions">
+      <div class="tab-options">
+        <button type="button" :class="{ active: activeTab === 'article' }" @click="activeTab = 'article'">原文</button>
+        <button type="button" :class="{ active: activeTab === 'code' }" @click="activeTab = 'code'">代码</button>
+        <button type="button" :class="{ active: activeTab === 'analysis' }" @click="activeTab = 'analysis'">请求分析</button>
+      </div>
+      <div class="article-links">
         <NuxtLink v-if="article.version_count > 1" :to="`/article/${articleId}/history`">历史版本</NuxtLink>
         <a :href="`https://www.luogu.com.cn/article/${articleId}`" target="_blank" rel="noopener noreferrer">洛谷原文</a>
       </div>
+    </nav>
+
+    <section v-if="activeTab === 'article'" class="tab-content article-tab">
       <article ref="articleRef" class="lg-content" v-html="articleHtml" />
     </section>
 
@@ -191,11 +232,24 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
           <span v-if="displayVersion.published_at">发布于 {{ format(displayVersion.published_at) }}</span>
         </div>
         <div class="code-actions">
-          <button type="button" title="复制代码" @click="openInstall('copy')">复制代码</button>
+          <button
+            type="button"
+            :disabled="copyDisabled"
+            :title="copyDisabled ? '完整代码超过 100 KiB，仅支持下载' : '复制代码'"
+            @click="openInstall('copy')"
+          >复制代码</button>
           <button type="button" title="下载代码" @click="openInstall('download')">下载文件</button>
         </div>
       </div>
-      <pre class="code-view"><code>{{ displayVersion.code }}</code></pre>
+      <div v-if="codePreview.truncated" class="code-truncation" role="status">
+        <strong>代码较长，已截断显示</strong>
+        <span>页面最多展示前 1000 行且不超过 50 KiB，完整代码未被修改。</span>
+      </div>
+      <div v-if="copyDisabled" class="copy-restriction" role="status">
+        <strong>复制已禁用</strong>
+        <span>完整代码超过 100 KiB，请下载文件。</span>
+      </div>
+      <pre class="code-view"><code>{{ codePreview.code }}</code></pre>
       <dl class="compat-grid">
         <div><dt>运行方式</dt><dd>{{ runtimeMode(displayVersion.runtime_mode) }}</dd></div>
         <div><dt>兼容设备</dt><dd>{{ [displayVersion.supports_desktop ? '桌面端' : '', displayVersion.supports_mobile ? '移动端' : ''].filter(Boolean).join('、') }}</dd></div>
@@ -265,7 +319,6 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
 .header-main { min-width: 0; }
 .title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
 .title-line h1 { margin: 0; font-size: 29px; overflow-wrap: anywhere; }
-.header-main > p { margin: 9px 0 0; color: var(--text-muted); }
 .trust, .tag { border-radius: 4px; padding: 2px 8px; font-size: 12px; }
 .official { background: var(--lg-blue); color: #fff; }
 .recommended { background: var(--lg-yellow); color: #332800; }
@@ -275,11 +328,12 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
 .pending-banner p { margin: 3px 0 0; color: var(--text-muted); font-size: 13px; }
 .pending-banner button { flex-shrink: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 7px 11px; cursor: pointer; }
 .down-banner { justify-content: flex-start; border-left-color: var(--lg-red); }
-.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--border); }
+.tabs { display: flex; align-items: flex-end; justify-content: space-between; gap: 22px; border-bottom: 1px solid var(--border); }
+.tab-options { display: flex; gap: 22px; }
 .tabs button { border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--text-muted); padding: 10px 3px; font: inherit; font-size: 16px; cursor: pointer; }
 .tabs button.active { border-bottom-color: var(--link); color: var(--link); font-weight: 600; }
+.article-links { display: flex; align-items: center; gap: 14px; padding: 10px 3px 12px; white-space: nowrap; font-size: 14px; }
 .tab-content { min-width: 0; padding: 22px 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
-.article-actions { display: flex; justify-content: flex-end; gap: 12px; padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .code-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
 .version-picker { display: grid; grid-template-columns: auto minmax(150px, 250px); align-items: center; gap: 6px 10px; }
 .version-picker > span { grid-column: 2; color: var(--text-muted); font-size: 12px; }
@@ -287,6 +341,13 @@ select, textarea { border: 1px solid var(--border); border-radius: 6px; backgrou
 .code-actions { display: flex; gap: 9px; }
 .code-actions button, .detail-footer button, .report-form button { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 7px 11px; cursor: pointer; font: inherit; }
 .code-actions button:first-child, .report-form button { border-color: var(--link); background: var(--link); color: #fff; }
+.code-actions button:disabled { border-color: var(--border); background: var(--hover); color: var(--text-muted); cursor: not-allowed; opacity: .7; }
+.code-truncation { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 10px; padding: 10px 12px; border-left: 4px solid var(--lg-yellow); background: color-mix(in srgb, var(--lg-yellow) 10%, var(--surface)); }
+.code-truncation strong { font-size: 14px; }
+.code-truncation span { color: var(--text-muted); font-size: 13px; }
+.copy-restriction { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 10px; padding: 10px 12px; border-left: 4px solid var(--lg-red); background: color-mix(in srgb, var(--lg-red) 8%, var(--surface)); }
+.copy-restriction strong { font-size: 14px; }
+.copy-restriction span { color: var(--text-muted); font-size: 13px; }
 .compat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 18px 0 0; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
 .compat-grid > div { min-width: 0; padding: 11px 12px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .compat-grid .wide { grid-column: 1 / -1; }
@@ -310,6 +371,9 @@ select, textarea { border: 1px solid var(--border); border-radius: 6px; backgrou
 .error-box { padding: 36px; border: 1px solid var(--border); color: var(--lg-red); text-align: center; }
 @media (max-width: 760px) {
   .plugin-header, .pending-banner, .code-toolbar, .detail-footer { align-items: flex-start; flex-direction: column; }
+  .tabs { align-items: stretch; flex-direction: column; gap: 0; }
+  .tab-options { overflow-x: auto; }
+  .article-links { align-self: flex-end; padding-top: 7px; }
   .compat-grid, .level-comparison { grid-template-columns: 1fr; }
   .compat-grid .wide { grid-column: auto; }
   .report-form { grid-template-columns: 1fr; }
