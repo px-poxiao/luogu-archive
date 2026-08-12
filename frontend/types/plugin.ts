@@ -19,12 +19,16 @@ export interface PluginSnapshot {
   last_verified_on: string
   admin_request_level?: number | null
   admin_request_analysis?: string | null
+  code_bytes?: number
+  code_truncated?: boolean
 }
 
 export interface PluginVersion {
   id: number
   version: string
   code: string
+  code_bytes: number
+  code_truncated: boolean
   code_sha256: string
   download_filename: string
   user_request_level: number

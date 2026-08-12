@@ -32,9 +32,11 @@ from app.services.plugin_marketplace import (
     REPORT_TYPES,
     PluginSnapshot,
     article_summary,
+    code_preview,
     decode_snapshot,
     encode_snapshot,
     plugin_tag_names,
+    snapshot_preview_dict,
     validate_tag_ids,
     verified_admin_emails,
 )
@@ -92,7 +94,12 @@ def _version_dict(row: PluginVersion, *, include_code: bool = True) -> dict:
         "published_at": row.published_at.isoformat(),
     }
     if include_code:
-        result["code"] = row.code
+        preview, source_bytes, truncated = code_preview(row.code)
+        result.update({
+            "code": preview,
+            "code_bytes": source_bytes,
+            "code_truncated": truncated,
+        })
     return result
 
 
@@ -299,7 +306,7 @@ async def plugin_detail(
             "pending_application": {
                 "id": pending.id,
                 "type": pending.application_type,
-                "snapshot": snapshot.model_dump(mode="json"),
+                "snapshot": snapshot_preview_dict(snapshot),
                 "tags": await _tags_by_ids(db, snapshot.tag_ids),
             },
             "current": None,
@@ -339,7 +346,7 @@ async def plugin_detail(
         "pending_application": ({
             "id": pending.id,
             "type": pending.application_type,
-            "snapshot": pending_snapshot.model_dump(mode="json"),
+            "snapshot": snapshot_preview_dict(pending_snapshot),
             "tags": await _tags_by_ids(db, pending_snapshot.tag_ids),
         } if pending and pending_snapshot else None),
     }
@@ -564,6 +571,25 @@ async def cancel_application(
     row.status = "cancelled"
     await db.commit()
     return {"message": "申请已撤销"}
+
+
+@router.get("/applications/{application_id}/download")
+async def download_own_application_code(
+    application_id: int,
+    user: SiteUser = Depends(get_current_site_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """上传者明确查看或编辑申请时，才传输申请中的完整代码。"""
+    row = await db.get(PluginApplication, application_id)
+    if row is None or row.applicant_user_id != user.id or row.snapshot_json == "{}":
+        raise NotFoundError("插件申请代码不存在")
+    snapshot = decode_snapshot(row.snapshot_json)
+    encoded = quote(snapshot.download_filename, safe="")
+    return Response(
+        content=snapshot.code.encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
+    )
 
 
 @router.post("/{article_id}/reports")

@@ -20,12 +20,12 @@ const submitSucceeded = ref(false)
 const message = ref('')
 const errorText = ref('')
 
-function snapshotFromVersion(detail: PluginDetail): PluginSnapshot {
+function snapshotFromVersion(detail: PluginDetail, fullCode: string): PluginSnapshot {
   const version = detail.current!
   return {
     summary: detail.summary || '',
     version: '',
-    code: version.code,
+    code: fullCode,
     download_filename: version.download_filename,
     user_request_level: version.user_request_level,
     user_request_analysis: version.user_request_analysis,
@@ -37,6 +37,11 @@ function snapshotFromVersion(detail: PluginDetail): PluginSnapshot {
     admin_request_level: null,
     admin_request_analysis: null,
   }
+}
+
+async function loadFullCode(path: string): Promise<string> {
+  const blob = await api<Blob>(path, { responseType: 'blob' })
+  return blob.text()
 }
 
 async function inspectArticle() {
@@ -63,10 +68,12 @@ async function inspectArticle() {
       editing.value = !detail.pending_only
       if (detail.pending_application) {
         hasPending.value = true
-        snapshot.value = { ...detail.pending_application.snapshot }
+        const fullCode = await loadFullCode(`/plugins/applications/${detail.pending_application.id}/download`)
+        snapshot.value = { ...detail.pending_application.snapshot, code: fullCode }
         message.value = '已载入你的待审核申请，可以查看但不能重复提交。'
       } else if (detail.current) {
-        snapshot.value = snapshotFromVersion(detail)
+        const fullCode = await loadFullCode(`/plugins/${articleId.value}/download/${detail.current.id}`)
+        snapshot.value = snapshotFromVersion(detail, fullCode)
       }
     } catch (error: any) {
       if (error?.statusCode !== 404 && error?.response?.status !== 404) throw error

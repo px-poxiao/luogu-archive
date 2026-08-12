@@ -17,6 +17,8 @@ from app.models.plugin import PluginTag, PluginTagLink, PluginVersion
 
 
 CODE_MAX_BYTES = 5 * 1024 * 1024
+CODE_PREVIEW_MAX_LINES = 1000
+CODE_PREVIEW_MAX_BYTES = 50 * 1024
 ANALYSIS_MAX_CHARS = 20_000
 RUNTIME_MODES = {"userscript", "extension", "bookmarklet", "other"}
 APPLICATION_TYPES = {"publish", "update", "recommend", "delete"}
@@ -110,6 +112,31 @@ def encode_snapshot(snapshot: PluginSnapshot) -> str:
 
 def decode_snapshot(value: str) -> PluginSnapshot:
     return PluginSnapshot.model_validate_json(value)
+
+
+def code_preview(code: str) -> tuple[str, int, bool]:
+    """生成用于 JSON 响应的代码预览，完整代码只允许通过按需下载接口传输。"""
+    source = code.encode("utf-8")
+    lines = code.split("\n")
+    preview = "\n".join(lines[:CODE_PREVIEW_MAX_LINES])
+    preview_bytes = preview.encode("utf-8")
+    truncated = len(lines) > CODE_PREVIEW_MAX_LINES or len(source) > CODE_PREVIEW_MAX_BYTES
+    if len(preview_bytes) > CODE_PREVIEW_MAX_BYTES:
+        # errors="ignore" 只会丢弃末尾被切开的 UTF-8 字符，不会产生乱码。
+        preview = preview_bytes[:CODE_PREVIEW_MAX_BYTES].decode("utf-8", errors="ignore")
+    return preview, len(source), truncated
+
+
+def snapshot_preview_dict(snapshot: PluginSnapshot) -> dict:
+    """序列化申请快照，但不把完整代码塞进普通详情响应。"""
+    result = snapshot.model_dump(mode="json")
+    preview, source_bytes, truncated = code_preview(snapshot.code)
+    result.update({
+        "code": preview,
+        "code_bytes": source_bytes,
+        "code_truncated": truncated,
+    })
+    return result
 
 
 def code_sha256(code: str) -> str:

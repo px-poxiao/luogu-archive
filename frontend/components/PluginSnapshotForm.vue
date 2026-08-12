@@ -1,23 +1,13 @@
 <script setup lang="ts">
 import type { PluginSnapshot, PluginTag } from '~/types/plugin'
+import { PLUGIN_CODE_COPY_MAX_BYTES } from '~/utils/pluginCode'
 
 const model = defineModel<PluginSnapshot>({ required: true })
-const props = defineProps<{ tags: PluginTag[]; adminFields?: boolean }>()
-
-const adminAnalysis = computed({
-  get: () => model.value.admin_request_analysis || '',
-  set: value => { model.value.admin_request_analysis = value || null },
-})
-
-const adminLevelEnabled = computed({
-  get: () => model.value.admin_request_level !== null && model.value.admin_request_level !== undefined,
-  set: (enabled: boolean) => {
-    model.value.admin_request_level = enabled ? model.value.user_request_level : null
-  },
-})
+const props = defineProps<{ tags: PluginTag[] }>()
 
 const codeBytes = computed(() => new TextEncoder().encode(model.value.code || '').length)
 const codeTooLarge = computed(() => codeBytes.value > 5 * 1024 * 1024)
+const copyRestricted = computed(() => codeBytes.value > PLUGIN_CODE_COPY_MAX_BYTES)
 const codeSizeText = computed(() => {
   if (codeBytes.value < 1024) return `${codeBytes.value} B`
   if (codeBytes.value < 1024 * 1024) return `${(codeBytes.value / 1024).toFixed(1)} KiB`
@@ -29,6 +19,7 @@ function toggleTag(tagId: number, checked: boolean) {
   checked ? values.add(tagId) : values.delete(tagId)
   model.value.tag_ids = [...values]
 }
+
 </script>
 
 <template>
@@ -72,6 +63,9 @@ function toggleTag(tagId: number, checked: boolean) {
         <span>代码内容</span>
         <textarea v-model="model.code" class="code-input" rows="18" spellcheck="false" required />
       </label>
+      <p v-if="copyRestricted" class="copy-limit-note">
+        完整代码超过 100 KiB，发布后公开页面将禁用复制，只允许下载。
+      </p>
       <label>
         <span>下载文件名</span>
         <input v-model.trim="model.download_filename" maxlength="128" placeholder="plugin.user.js" required>
@@ -124,30 +118,6 @@ function toggleTag(tagId: number, checked: boolean) {
         placeholder="使用 Markdown 描述插件的网络请求行为"
       />
 
-      <template v-if="adminFields">
-        <label class="admin-level-toggle">
-          <input v-model="adminLevelEnabled" type="checkbox">
-          <span>由管理员调整请求等级</span>
-        </label>
-        <div
-          v-if="adminLevelEnabled"
-          class="level-editor admin-level"
-          :class="`level-${model.admin_request_level ?? model.user_request_level}`"
-        >
-          <div class="level-heading">
-            <span>管理员请求等级</span>
-            <PluginRequestLevelBadge :level="model.admin_request_level ?? model.user_request_level" />
-          </div>
-          <input v-model.number="model.admin_request_level" type="range" min="0" max="3" step="1" aria-label="管理员请求等级">
-          <div class="level-ticks" aria-hidden="true"><span>0</span><span>1</span><span>2</span><span>3</span></div>
-        </div>
-        <PluginMarkdownEditor
-          v-model="adminAnalysis"
-          label="管理组请求分析"
-          :maxlength="20000"
-          placeholder="管理组人工审核结论（可留空）"
-        />
-      </template>
     </section>
   </div>
 </template>
@@ -177,6 +147,7 @@ input, textarea, select {
 }
 textarea { resize: vertical; line-height: 1.55; }
 .code-input { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; tab-size: 2; }
+.copy-limit-note { margin: -4px 0 0; padding: 9px 11px; border-left: 4px solid var(--lg-red); background: color-mix(in srgb, var(--lg-red) 8%, var(--surface)); color: var(--text-muted); font-size: 13px; }
 fieldset { margin: 0; padding: 0; border: 0; }
 legend { margin-bottom: 8px; }
 .choice-row { display: flex; flex-wrap: wrap; gap: 8px 16px; }
@@ -191,8 +162,6 @@ legend { margin-bottom: 8px; }
 .level-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-size: 14px; font-weight: 600; }
 .level-editor input[type="range"] { width: 100%; padding: 0; border: 0; accent-color: var(--level-color); cursor: pointer; }
 .level-ticks { display: flex; justify-content: space-between; padding: 0 2px; color: var(--text-muted); font-size: 11px; }
-.admin-level-toggle { display: inline-flex; grid-template-columns: none; align-items: center; justify-self: start; gap: 8px; }
-.admin-level-toggle input { width: 16px; height: 16px; margin: 0; }
 @media (max-width: 700px) {
   .form-grid.two { grid-template-columns: 1fr; }
 }

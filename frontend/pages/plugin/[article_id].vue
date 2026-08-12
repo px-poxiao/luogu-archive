@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { PluginDetail, PluginSnapshot, PluginVersion } from '~/types/plugin'
+import { PLUGIN_CODE_COPY_MAX_BYTES } from '~/utils/pluginCode'
 
 const route = useRoute()
 const articleId = String(route.params.article_id)
@@ -25,40 +26,6 @@ const reportType = ref('dangerous_request')
 const reportDescription = ref('')
 useCopyCode(articleRef)
 
-const CODE_PREVIEW_MAX_LINES = 1000
-const CODE_PREVIEW_MAX_BYTES = 50 * 1024
-const CODE_COPY_MAX_BYTES = 100 * 1024
-
-/**
- * 代码页只渲染有限内容，避免超长代码阻塞页面。
- * 原始代码始终保留在版本对象中，复制、下载和哈希计算都不受影响。
- */
-function buildCodePreview(code: string) {
-  const encoder = new TextEncoder()
-  const decoder = new TextDecoder()
-  const sourceBytes = encoder.encode(code)
-  const lines = code.split('\n')
-  const overLineLimit = lines.length > CODE_PREVIEW_MAX_LINES
-  const overByteLimit = sourceBytes.length > CODE_PREVIEW_MAX_BYTES
-  let preview = overLineLimit
-    ? lines.slice(0, CODE_PREVIEW_MAX_LINES).join('\n')
-    : code
-  const previewBytes = overLineLimit ? encoder.encode(preview) : sourceBytes
-
-  if (previewBytes.length > CODE_PREVIEW_MAX_BYTES) {
-    // 截断点落在 UTF-8 连续字节中间时，退回到完整字符的起始位置。
-    let end = CODE_PREVIEW_MAX_BYTES
-    while (end > 0 && (previewBytes[end] & 0xc0) === 0x80) end -= 1
-    preview = decoder.decode(previewBytes.subarray(0, end))
-  }
-
-  return {
-    code: preview,
-    truncated: overLineLimit || overByteLimit,
-    sourceBytes: sourceBytes.length,
-  }
-}
-
 const pendingSnapshot = computed(() => detail.value?.pending_application?.snapshot || null)
 const displaySnapshot = computed<PluginSnapshot | null>(() => showPending.value ? pendingSnapshot.value : null)
 const displayName = computed(() => article.value?.title || detail.value?.name || '插件')
@@ -74,6 +41,8 @@ const displayVersion = computed<PluginVersion | null>(() => {
     id: 0,
     version: snapshot.version,
     code: snapshot.code,
+    code_bytes: snapshot.code_bytes ?? new TextEncoder().encode(snapshot.code).length,
+    code_truncated: snapshot.code_truncated ?? false,
     code_sha256: '审核通过后由后端计算',
     download_filename: snapshot.download_filename,
     user_request_level: snapshot.user_request_level,
@@ -89,8 +58,11 @@ const displayVersion = computed<PluginVersion | null>(() => {
   }
 })
 
-const codePreview = computed(() => buildCodePreview(displayVersion.value?.code || ''))
-const copyDisabled = computed(() => codePreview.value.sourceBytes > CODE_COPY_MAX_BYTES)
+const codePreview = computed(() => ({
+  code: displayVersion.value?.code || '',
+  truncated: displayVersion.value?.code_truncated ?? false,
+}))
+const copyDisabled = computed(() => (displayVersion.value?.code_bytes ?? 0) > PLUGIN_CODE_COPY_MAX_BYTES)
 
 const userAnalysisHtml = computed(() => render(displayVersion.value?.user_request_analysis || ''))
 const adminAnalysisHtml = computed(() => render(displayVersion.value?.admin_request_analysis || ''))

@@ -6,7 +6,14 @@ from datetime import date
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from app.services.plugin_marketplace import PluginSnapshot, article_summary, code_sha256
+from app.services.plugin_marketplace import (
+    CODE_PREVIEW_MAX_BYTES,
+    PluginSnapshot,
+    article_summary,
+    code_preview,
+    code_sha256,
+    snapshot_preview_dict,
+)
 
 
 def valid_snapshot(**changes) -> PluginSnapshot:
@@ -65,3 +72,28 @@ def test_article_summary_is_limited_to_fifty_characters() -> None:
     result = article_summary("这" * 80, "后备标题")
     assert len(result) == 50
     assert result.endswith("…")
+
+
+def test_code_preview_is_limited_to_one_thousand_lines() -> None:
+    code = "\n".join(f"line-{index}" for index in range(1001))
+    preview, source_bytes, truncated = code_preview(code)
+    assert len(preview.split("\n")) == 1000
+    assert "line-1000" not in preview
+    assert source_bytes == len(code.encode("utf-8"))
+    assert truncated is True
+
+
+def test_code_preview_is_utf8_safe_and_limited_to_fifty_kib() -> None:
+    code = "测试" * 20_000
+    preview, source_bytes, truncated = code_preview(code)
+    assert len(preview.encode("utf-8")) <= CODE_PREVIEW_MAX_BYTES
+    assert source_bytes == len(code.encode("utf-8"))
+    assert truncated is True
+
+
+def test_snapshot_response_does_not_expose_full_code() -> None:
+    snapshot = valid_snapshot(code="x" * (CODE_PREVIEW_MAX_BYTES + 100))
+    result = snapshot_preview_dict(snapshot)
+    assert len(result["code"].encode("utf-8")) == CODE_PREVIEW_MAX_BYTES
+    assert result["code_bytes"] == CODE_PREVIEW_MAX_BYTES + 100
+    assert result["code_truncated"] is True

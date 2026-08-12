@@ -4,9 +4,10 @@ from __future__ import annotations
 import hashlib
 import secrets
 from datetime import timedelta, timezone
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, EmailStr, Field
+from fastapi import APIRouter, Depends, Query, Request, Response
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,10 +25,11 @@ from app.models.site_user import SiteUser
 from app.services.plugin_marketplace import (
     PluginSnapshot,
     article_summary,
+    code_preview,
     decode_snapshot,
-    encode_snapshot,
     plugin_tag_names,
     replace_plugin_tags,
+    snapshot_preview_dict,
     validate_tag_ids,
     version_from_snapshot,
 )
@@ -37,18 +39,28 @@ router = APIRouter(prefix="/admin", tags=["admin-plugins"])
 
 
 class ReviewApplicationReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     approved: bool
     rejection_reason: str | None = Field(None, max_length=5000)
-    snapshot: PluginSnapshot | None = None
     admin_request_level: int | None = Field(None, ge=0, le=3)
     admin_request_analysis: str | None = Field(None, max_length=20_000)
 
 
 class PluginAdminUpdateReq(BaseModel):
-    summary: str | None = Field(None, max_length=50)
+    model_config = ConfigDict(extra="forbid")
+
     is_official: bool | None = None
     is_recommended: bool | None = None
-    tag_ids: list[int] | None = Field(None, max_length=20)
+
+
+class PluginAdminEvaluationReq(BaseModel):
+    """管理员只能补充自己的请求评估，不能覆盖用户提交内容。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    admin_request_level: int | None = Field(None, ge=0, le=3)
+    admin_request_analysis: str | None = Field(None, max_length=20_000)
 
 
 class PluginStateReq(BaseModel):
@@ -108,7 +120,7 @@ def _application_dict(row: PluginApplication, *, include_snapshot: bool = False)
         "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at else None,
     }
     if include_snapshot:
-        result["snapshot"] = decode_snapshot(row.snapshot_json).model_dump(mode="json") if row.snapshot_json != "{}" else {}
+        result["snapshot"] = snapshot_preview_dict(decode_snapshot(row.snapshot_json)) if row.snapshot_json != "{}" else {}
     return result
 
 
@@ -141,11 +153,14 @@ async def plugin_application_detail(
     result = _application_dict(row, include_snapshot=True)
     plugin = await db.get(Plugin, row.plugin_id) if row.plugin_id else None
     current = await db.get(PluginVersion, plugin.current_version_id) if plugin and plugin.current_version_id else None
+    current_preview = code_preview(current.code) if current else None
     result["current"] = ({
         "name": plugin.name,
         "summary": plugin.summary,
         "version": current.version,
-        "code": current.code,
+        "code": current_preview[0],
+        "code_bytes": current_preview[1],
+        "code_truncated": current_preview[2],
         "final_request_level": current.final_request_level,
         "tags": await plugin_tag_names(db, plugin.id),
     } if plugin and current else None)
@@ -156,6 +171,25 @@ async def plugin_application_detail(
         "luogu_uid": applicant.luogu_uid,
     } if applicant else None)
     return result
+
+
+@router.get("/plugin-applications/{application_id}/download")
+async def download_plugin_application_code(
+    application_id: int,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """管理员明确下载时才传输待审核申请的完整代码。"""
+    row = await db.get(PluginApplication, application_id)
+    if row is None or row.snapshot_json == "{}":
+        raise NotFoundError("插件申请代码不存在")
+    snapshot = decode_snapshot(row.snapshot_json)
+    encoded = quote(snapshot.download_filename, safe="")
+    return Response(
+        content=snapshot.code.encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
+    )
 
 
 @router.post("/plugin-applications/{application_id}/review")
@@ -186,7 +220,8 @@ async def review_plugin_application(
 
     if body.approved:
         if row.application_type in {"publish", "update"}:
-            snapshot = body.snapshot or decode_snapshot(row.snapshot_json)
+            # 审核始终使用数据库里的用户原始快照；请求体不能代改用户内容。
+            user_snapshot = decode_snapshot(row.snapshot_json)
             article = await db.get(Article, row.article_id)
             article_version = (
                 await db.get(ArticleVersion, article.current_version_id)
@@ -195,8 +230,8 @@ async def review_plugin_application(
             )
             if article is None or article_version is None:
                 raise NotFoundError("原文章或当前版本不存在")
-            snapshot = snapshot.model_copy(update={
-                "summary": snapshot.summary
+            snapshot = user_snapshot.model_copy(update={
+                "summary": user_snapshot.summary
                 or article_summary(article_version.content_md, article.title),
                 "admin_request_level": body.admin_request_level,
                 "admin_request_analysis": (body.admin_request_analysis or "").strip() or None,
@@ -247,9 +282,8 @@ async def review_plugin_application(
             plugin.summary = snapshot.summary
             plugin.current_version_id = version.id
             await replace_plugin_tags(db, plugin.id, snapshot.tag_ids)
-            row.snapshot_json = encode_snapshot(snapshot)
-            row.version = snapshot.version
-            row.user_request_level = snapshot.user_request_level
+            row.version = user_snapshot.version
+            row.user_request_level = user_snapshot.user_request_level
             plugin_name = article.title
         elif row.application_type == "recommend":
             if plugin is None:
@@ -308,19 +342,28 @@ async def admin_list_plugins(
     if not include_unlisted:
         q = q.where(Plugin.is_listed.is_(True))
     rows = (await db.execute(q)).all()
-    return [{
-        "id": row.id,
-        "article_id": row.article_id,
-        "owner_user_id": row.owner_user_id,
-        "name": article.title,
-        "summary": row.summary,
-        "is_official": row.is_official,
-        "is_recommended": row.is_recommended,
-        "is_listed": row.is_listed,
-        "down_reason": row.down_reason,
-        "tags": await plugin_tag_names(db, row.id),
-        "updated_at": row.updated_at.isoformat(),
-    } for row, article in rows]
+    result: list[dict] = []
+    for row, article in rows:
+        current = await db.get(PluginVersion, row.current_version_id) if row.current_version_id else None
+        result.append({
+            "id": row.id,
+            "article_id": row.article_id,
+            "owner_user_id": row.owner_user_id,
+            "name": article.title,
+            "summary": row.summary,
+            "is_official": row.is_official,
+            "is_recommended": row.is_recommended,
+            "is_listed": row.is_listed,
+            "down_reason": row.down_reason,
+            "tags": await plugin_tag_names(db, row.id),
+            "user_request_level": current.user_request_level if current else None,
+            "user_request_analysis": current.user_request_analysis if current else None,
+            "admin_request_level": current.admin_request_level if current else None,
+            "admin_request_analysis": current.admin_request_analysis if current else None,
+            "final_request_level": current.final_request_level if current else None,
+            "updated_at": row.updated_at.isoformat(),
+        })
+    return result
 
 
 @router.get("/plugins/{plugin_id}")
@@ -329,7 +372,7 @@ async def admin_plugin_detail(
     admin: Admin = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """返回管理员创建新版本所需的完整当前快照。"""
+    """返回管理员只读检查当前版本所需的完整快照。"""
     plugin = await db.get(Plugin, plugin_id)
     if plugin is None:
         raise NotFoundError("插件不存在")
@@ -358,7 +401,7 @@ async def admin_plugin_detail(
         "is_listed": plugin.is_listed,
         "is_official": plugin.is_official,
         "is_recommended": plugin.is_recommended,
-        "snapshot": snapshot.model_dump(mode="json"),
+        "snapshot": snapshot_preview_dict(snapshot),
     }
 
 
@@ -373,76 +416,48 @@ async def admin_update_plugin(
     plugin = await db.get(Plugin, plugin_id)
     if plugin is None:
         raise NotFoundError("插件不存在")
-    if body.summary is not None:
-        summary = body.summary.strip()
-        if summary:
-            plugin.summary = summary
-        else:
-            article = await db.get(Article, plugin.article_id)
-            article_version = (
-                await db.get(ArticleVersion, article.current_version_id)
-                if article and article.current_version_id
-                else None
-            )
-            if article is None or article_version is None:
-                raise NotFoundError("原文章或当前版本不存在")
-            plugin.name = article.title[:80]
-            plugin.summary = article_summary(article_version.content_md, article.title)
     if body.is_official is not None:
         plugin.is_official = body.is_official
     if body.is_recommended is not None:
         plugin.is_recommended = body.is_recommended
-    if body.tag_ids is not None:
-        await validate_tag_ids(db, body.tag_ids, allow_inactive=True)
-        await replace_plugin_tags(db, plugin.id, body.tag_ids)
-    await _audit(db, admin, request, "plugin_update", target_type="plugin", target_id=str(plugin.id))
+    await _audit(db, admin, request, "plugin_state_update", target_type="plugin", target_id=str(plugin.id))
     await db.commit()
-    return {"message": "插件信息已更新"}
+    return {"message": "插件管理状态已更新"}
 
 
-@router.post("/plugins/{plugin_id}/versions")
-async def admin_create_plugin_version(
+@router.put("/plugins/{plugin_id}/evaluation")
+async def admin_update_plugin_evaluation(
     plugin_id: int,
-    snapshot: PluginSnapshot,
+    body: PluginAdminEvaluationReq,
     request: Request,
     admin: Admin = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    plugin = (
-        await db.execute(select(Plugin).where(Plugin.id == plugin_id).with_for_update())
-    ).scalar_one_or_none()
+    plugin = await db.get(Plugin, plugin_id)
     if plugin is None:
         raise NotFoundError("插件不存在")
-    article = await db.get(Article, plugin.article_id)
-    article_version = (
-        await db.get(ArticleVersion, article.current_version_id)
-        if article and article.current_version_id
-        else None
+    current = await db.get(PluginVersion, plugin.current_version_id) if plugin.current_version_id else None
+    if current is None:
+        raise NotFoundError("插件当前版本缺失")
+
+    current.admin_request_level = body.admin_request_level
+    current.admin_request_analysis = (body.admin_request_analysis or "").strip() or None
+    current.final_request_level = (
+        body.admin_request_level
+        if body.admin_request_level is not None
+        else current.user_request_level
     )
-    if article is None or article_version is None:
-        raise NotFoundError("原文章或当前版本不存在")
-    snapshot = snapshot.model_copy(update={
-        "summary": snapshot.summary or article_summary(article_version.content_md, article.title),
-    })
-    await validate_tag_ids(db, snapshot.tag_ids, allow_inactive=True)
-    duplicate = await db.scalar(select(func.count()).select_from(PluginVersion).where(
-        PluginVersion.plugin_id == plugin.id, PluginVersion.version == snapshot.version
-    ))
-    if duplicate:
-        raise ConflictError("该版本号已经存在")
-    version = version_from_snapshot(plugin.id, snapshot, admin_id=admin.id, source_application_id=None)
-    db.add(version)
-    await db.flush()
-    plugin.name = article.title[:80]
-    plugin.summary = snapshot.summary
-    plugin.current_version_id = version.id
-    await replace_plugin_tags(db, plugin.id, snapshot.tag_ids)
     await _audit(
-        db, admin, request, "plugin_version_create",
-        target_type="plugin", target_id=str(plugin.id), params={"version": snapshot.version},
+        db,
+        admin,
+        request,
+        "plugin_evaluation_update",
+        target_type="plugin",
+        target_id=str(plugin.id),
+        params={"admin_request_level": body.admin_request_level},
     )
     await db.commit()
-    return {"message": "新代码版本已发布", "version_id": version.id}
+    return {"message": "管理员请求评估已更新"}
 
 
 @router.post("/plugins/{plugin_id}/unlist")

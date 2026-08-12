@@ -11,7 +11,7 @@ const props = defineProps<{
 const emit = defineEmits<{ close: []; done: [message: string]; analysis: [] }>()
 const api = useApi()
 const { runtimeMode } = usePluginLabels()
-const codeBytes = computed(() => new TextEncoder().encode(props.version.code).length)
+const codeBytes = computed(() => props.version.code_bytes)
 const copyBlocked = computed(() => props.action === 'copy' && codeBytes.value > 100 * 1024)
 const codeSize = computed(() => {
   if (codeBytes.value < 1024 * 1024) return `${Math.ceil(codeBytes.value / 1024)} KiB`
@@ -25,14 +25,14 @@ async function confirm() {
     return
   }
   try {
+    // 普通详情响应只有预览；用户确认后才单独获取完整代码。
+    const blob = await api<Blob>(`/plugins/${props.articleId}/download/${props.version.id}`, {
+      responseType: 'blob',
+    })
     if (props.action === 'copy') {
-      await navigator.clipboard.writeText(props.version.code)
+      await navigator.clipboard.writeText(await blob.text())
       emit('done', '代码已复制')
     } else {
-      // 使用 API 客户端下载，确保插件下架后上传者仍能携带登录凭据取回文件。
-      const blob = await api<Blob>(`/plugins/${props.articleId}/download/${props.version.id}`, {
-        responseType: 'blob',
-      })
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
