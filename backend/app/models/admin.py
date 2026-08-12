@@ -38,6 +38,18 @@ class Admin(Base, TimestampMixin):
     last_login_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # 插件申请通知邮箱独立于登录身份；令牌只保存 SHA-256 哈希。
+    notification_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    notification_email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    notification_email_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    notification_email_expires: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
 
 class AdminAuditLog(Base):
     """管理员操作审计。**只能插入，不能删除**（应用层保证）。"""

@@ -11,6 +11,13 @@ let cooldownTimer: ReturnType<typeof setInterval> | null = null
 
 const api = useApi()
 const auth = useAuthStore()
+const route = useRoute()
+
+// 登录后只允许跳回本站路径，避免 redirect 参数被利用成开放重定向。
+const safeRedirect = computed(() => {
+  const value = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
+  return value.startsWith('/') && !value.startsWith('//') ? value : '/'
+})
 
 async function submit() {
   err.value = ''
@@ -23,7 +30,7 @@ async function submit() {
       body: form.value,
     })
     auth.setTokens(data)
-    navigateTo('/')
+    navigateTo(safeRedirect.value)
   } catch (e: any) {
     err.value = e?.data?.message || '登录失败'
     // 后端对未验证邮箱返回"请先验证邮箱"

@@ -10,7 +10,6 @@
 所有模型从 app.core.db.Base 继承。
 """
 from app.core.db import Base
-from app.models.contest import Contest, ContestParticipant, ContestProblem
 from app.models.admin import (
     Admin,
     AdminAuditLog,
@@ -45,6 +44,15 @@ from app.models.site_user import (
     SiteUser,
     SiteUserFollow,
 )
+from app.models.contest import Contest, ContestParticipant, ContestProblem
+from app.models.plugin import (
+    Plugin,
+    PluginApplication,
+    PluginReport,
+    PluginTag,
+    PluginTagLink,
+    PluginVersion,
+)
 from app.models.task import (
     CrawlTask,
     SaveRequest,
@@ -70,6 +78,12 @@ __all__ = [
     "PasteVersion",
     "Problem",
     "ProblemSolutionHistory",
+    "Plugin",
+    "PluginApplication",
+    "PluginReport",
+    "PluginTag",
+    "PluginTagLink",
+    "PluginVersion",
     "SaveRequest",
     "SiteAnnouncement",
     "SiteComment",

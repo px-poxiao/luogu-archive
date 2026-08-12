@@ -22,6 +22,10 @@ function sanitizeAnalyticsPath(value: string): string {
   if (segments.length >= 2 && sensitiveRoots.has(segments[0])) {
     return `/${segments[0]}/:id`
   }
+  // 插件详情使用文章编号；提交和个人管理是固定页面，不应被合并。
+  if (segments.length >= 2 && segments[0] === 'plugin' && !['submit', 'manage'].includes(segments[1])) {
+    return '/plugin/:id'
+  }
   return pathname
 }
 
@@ -125,6 +129,11 @@ const navItems = [
     to: '/contest',
     label: '比赛',
     icon: 'M8 4h8v3a4 4 0 01-8 0V4zM6 5H3v2a4 4 0 004 4M18 5h3v2a4 4 0 01-4 4M12 11v5M8 20h8M9 16h6',
+  },
+  {
+    to: '/plugin',
+    label: '插件',
+    icon: 'M8 3v5H3v8h5v5h8v-5h5V8h-5V3H8zM8 8h8v8H8V8z',
   },
   {
     to: '/solution/fix',

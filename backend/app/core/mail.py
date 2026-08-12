@@ -115,6 +115,51 @@ async def send_verification_email(to: str, verify_url: str) -> bool:
     return await send_email(to, subject, text, html)
 
 
+async def send_plugin_result_email(
+    to: str,
+    *,
+    plugin_name: str,
+    application_type: str,
+    approved: bool,
+    reason: str | None = None,
+) -> bool:
+    """申请审核结果邮件；调用方必须在数据库事务提交后发送。"""
+    action_names = {
+        "publish": "首次发布",
+        "update": "版本更新",
+        "recommend": "推荐申请",
+        "delete": "删除申请",
+    }
+    action = action_names.get(application_type, "插件申请")
+    result = "已通过" if approved else "未通过"
+    subject = f"[洛谷档案馆] {plugin_name}：{action}{result}"
+    text = f"插件：{plugin_name}\n申请类型：{action}\n审核结果：{result}\n"
+    if reason:
+        text += f"原因：{reason}\n"
+    return await send_email(to, subject, text)
+
+
+async def send_plugin_admin_notice(
+    recipients: list[str],
+    *,
+    event_name: str,
+    plugin_name: str,
+    detail: str,
+) -> None:
+    """逐个通知管理员；单封邮件失败只记日志，不影响业务事务。"""
+    subject = f"[洛谷档案馆] 新的插件{event_name}：{plugin_name}"
+    body = f"插件：{plugin_name}\n事件：{event_name}\n{detail}\n请登录管理后台处理。"
+    for recipient in recipients:
+        ok = await send_email(recipient, subject, body)
+        if not ok:
+            log.error(
+                "email.plugin_admin_notice_failed",
+                to=recipient,
+                event=event_name,
+                plugin=plugin_name,
+            )
+
+
 def _verification_html(verify_url: str) -> str:
     """邮箱验证邮件的 HTML 模板。
 

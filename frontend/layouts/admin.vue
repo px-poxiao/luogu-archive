@@ -19,6 +19,11 @@ function logout() {
           <NuxtLink to="/admin/accounts">爬取账号</NuxtLink>
           <NuxtLink to="/admin/problems">题库刷新</NuxtLink>
           <NuxtLink to="/admin/contests">比赛归档</NuxtLink>
+          <NuxtLink to="/admin/plugin-applications">插件申请</NuxtLink>
+          <NuxtLink to="/admin/plugins">插件管理</NuxtLink>
+          <NuxtLink to="/admin/plugin-tags">插件标签</NuxtLink>
+          <NuxtLink to="/admin/plugin-reports">插件举报</NuxtLink>
+          <NuxtLink to="/admin/notification-email">通知邮箱</NuxtLink>
           <NuxtLink to="/admin/audit">审计日志</NuxtLink>
         </nav>
         <div v-if="admin.isLoggedIn" class="right">
@@ -49,7 +54,7 @@ header {
   gap: 20px;
 }
 .brand { color: #fff; font-weight: 700; }
-nav { display: flex; gap: 16px; flex: 1; }
+nav { display: flex; gap: 16px; flex: 1; overflow-x: auto; white-space: nowrap; }
 nav a { color: #ddd; }
 .right { display: flex; gap: 10px; align-items: center; }
 .right button {
@@ -64,5 +69,10 @@ main {
   max-width: 1200px;
   margin: 0 auto;
   padding: 20px 16px;
+}
+@media (max-width: 760px) {
+  .inner { align-items: flex-start; flex-wrap: wrap; }
+  nav { order: 3; width: 100%; padding-bottom: 4px; }
+  main { padding: 16px 12px; }
 }
 </style>
