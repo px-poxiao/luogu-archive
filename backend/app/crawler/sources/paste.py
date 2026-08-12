@@ -43,6 +43,17 @@ async def crawl_one(paste_id: str, *, trigger: str = "manual") -> None:
         await _crawl_inner(paste_id, trigger=trigger)
 
 
+async def fetch_fields_without_saving(paste_id: str) -> dict[str, Any]:
+    """读取公开剪贴板内容，但不创建任务记录，也不写入归档数据库。"""
+    result = await fetch_anon(
+        f"/paste/{paste_id}",
+        redis=get_redis(),
+        parse="html",
+    )
+    kind, page_data = extract_page_data(result.body_text)
+    return _extract_paste_fields(kind, page_data)
+
+
 def _extract_paste_fields(kind: str, data: dict) -> dict[str, Any]:
     """从两种 SSR 结构里取字段。
 

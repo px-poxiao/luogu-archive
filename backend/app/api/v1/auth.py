@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_client_ip
@@ -82,6 +84,22 @@ class MeResp(BaseModel):
     display_name: str
     email_verified: bool
     follow_count: int
+    luogu_uid: int | None
+    luogu_bound_at: datetime | None
+
+
+class LuoguBindChallengeResp(BaseModel):
+    verification_text: str
+    expires_in: int
+
+
+class LuoguBindVerifyReq(BaseModel):
+    paste_id: str = Field(..., min_length=1, max_length=128)
+
+
+class LuoguBindVerifyResp(BaseModel):
+    message: str
+    luogu_uid: int
 
 
 # ============================================================
@@ -94,6 +112,23 @@ _PWD_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d).{8,128}$")
 def _check_password(pw: str) -> None:
     if not _PWD_RE.match(pw):
         raise ValidationError("密码至少 8 位，且包含字母和数字")
+
+
+_BIND_CHALLENGE_TTL_SEC = 600
+_PASTE_ID_RE = re.compile(
+    r"^(?:https?://(?:www\.)?luogu\.com\.cn/paste/)?([a-zA-Z0-9]{1,32})/?$"
+)
+
+
+def _bind_challenge_key(user_id: int) -> str:
+    return f"auth:luogu_bind:{user_id}"
+
+
+def _parse_paste_id(raw: str) -> str:
+    match = _PASTE_ID_RE.fullmatch(raw.strip())
+    if match is None:
+        raise ValidationError("请输入正确的剪贴板 ID 或链接")
+    return match.group(1)
 
 
 # ============================================================
@@ -377,7 +412,88 @@ async def me(
         display_name=user.display_name,
         email_verified=user.email_verified,
         follow_count=cnt,
+        luogu_uid=user.luogu_uid,
+        luogu_bound_at=user.luogu_bound_at,
     )
+
+
+@router.post("/auth/luogu-bind/challenge", response_model=LuoguBindChallengeResp)
+async def create_luogu_bind_challenge(
+    user: SiteUser = Depends(get_current_site_user),
+) -> LuoguBindChallengeResp:
+    if user.luogu_uid is not None:
+        raise ConflictError(f"本站账号已绑定洛谷 UID {user.luogu_uid}")
+
+    nonce = secrets.token_urlsafe(24)
+    verification_text = (
+        "洛谷档案馆账号绑定验证\n"
+        f"站点账号编号：{user.id}\n"
+        f"验证码：{nonce}"
+    )
+    await get_redis().set(
+        _bind_challenge_key(user.id),
+        json.dumps({"verification_text": verification_text}, ensure_ascii=False),
+        ex=_BIND_CHALLENGE_TTL_SEC,
+    )
+    return LuoguBindChallengeResp(
+        verification_text=verification_text,
+        expires_in=_BIND_CHALLENGE_TTL_SEC,
+    )
+
+
+@router.post("/auth/luogu-bind/verify", response_model=LuoguBindVerifyResp)
+async def verify_luogu_binding(
+    req: LuoguBindVerifyReq,
+    request: Request,
+    user: SiteUser = Depends(get_current_site_user),
+    db: AsyncSession = Depends(get_db),
+) -> LuoguBindVerifyResp:
+    if user.luogu_uid is not None:
+        raise ConflictError(f"本站账号已绑定洛谷 UID {user.luogu_uid}")
+
+    redis = get_redis()
+    ok, _ = await SlidingWindowLimiter(redis).acquire(
+        ratelimit_key("luogu_bind_verify", f"{user.id}:{get_client_ip(request)}"),
+        window_sec=600,
+        limit=10,
+    )
+    if not ok:
+        raise RateLimitError("验证尝试过于频繁，请稍后再试", retry_after_sec=600)
+
+    challenge_raw = await redis.get(_bind_challenge_key(user.id))
+    if not challenge_raw:
+        raise ValidationError("验证文本已过期，请重新生成")
+    try:
+        verification_text = str(json.loads(challenge_raw)["verification_text"])
+    except (KeyError, TypeError, ValueError) as exc:
+        await redis.delete(_bind_challenge_key(user.id))
+        raise ValidationError("验证文本已失效，请重新生成") from exc
+
+    paste_id = _parse_paste_id(req.paste_id)
+    from app.crawler.sources.paste import fetch_fields_without_saving
+
+    fields = await fetch_fields_without_saving(paste_id)
+    author_uid = fields.get("author_uid")
+    if author_uid is None:
+        raise ValidationError("无法识别剪贴板作者，请确认剪贴板为公开状态")
+    if verification_text not in fields["content_md"]:
+        raise ValidationError("剪贴板中没有本次生成的完整验证文本")
+
+    existing = (
+        await db.execute(select(SiteUser.id).where(SiteUser.luogu_uid == author_uid))
+    ).scalar_one_or_none()
+    if existing is not None and existing != user.id:
+        raise ConflictError("该洛谷账号已被其他本站账号绑定")
+
+    user.luogu_uid = int(author_uid)
+    user.luogu_bound_at = utcnow()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError("该洛谷账号已被其他本站账号绑定") from exc
+    await redis.delete(_bind_challenge_key(user.id))
+    return LuoguBindVerifyResp(message="洛谷账号绑定成功", luogu_uid=int(author_uid))
 
 
 # ============================================================

@@ -38,6 +38,14 @@ class SiteUser(Base, TimestampMixin):
     display_name: Mapped[str] = mapped_column(String(64), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    # 经洛谷公开剪贴板所有权验证后绑定的账号。
+    luogu_uid: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, unique=True, index=True
+    )
+    luogu_bound_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # 邮箱验证
     email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     email_verification_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
