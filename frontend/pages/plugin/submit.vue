@@ -16,13 +16,13 @@ const hasPending = ref(false)
 const blocked = ref(false)
 const loading = ref(true)
 const submitting = ref(false)
+const submitSucceeded = ref(false)
 const message = ref('')
 const errorText = ref('')
 
 function snapshotFromVersion(detail: PluginDetail): PluginSnapshot {
   const version = detail.current!
   return {
-    name: detail.name || '',
     summary: detail.summary || '',
     version: '',
     code: version.code,
@@ -33,10 +33,7 @@ function snapshotFromVersion(detail: PluginDetail): PluginSnapshot {
     runtime_mode: version.runtime_mode,
     supports_desktop: version.supports_desktop,
     supports_mobile: version.supports_mobile,
-    target_pages: version.target_pages,
     last_verified_on: new Date().toISOString().slice(0, 10),
-    min_compatible_date: version.min_compatible_date,
-    compatibility_notes: version.compatibility_notes,
     admin_request_level: null,
     admin_request_analysis: null,
   }
@@ -83,6 +80,7 @@ async function inspectArticle() {
 async function submit() {
   errorText.value = ''
   message.value = ''
+  submitSucceeded.value = false
   if (!auth.isLoggedIn) {
     await navigateTo(`/login?redirect=${encodeURIComponent(route.fullPath)}`)
     return
@@ -116,7 +114,9 @@ async function submit() {
         body: { article_id: articleId.value, snapshot: snapshot.value },
       })
     }
-    message.value = '申请已提交，审核结果会发送到你的注册邮箱。'
+    hasPending.value = true
+    submitSucceeded.value = true
+    message.value = '提交成功。申请已进入审核，结果会发送到你的注册邮箱。'
   } catch (error: any) {
     errorText.value = error?.data?.message || '提交失败'
   } finally {
@@ -163,7 +163,7 @@ useHead({ title: '提交插件 - 洛谷档案馆' })
       </div>
     </section>
 
-    <p v-if="message" class="message ok">{{ message }}</p>
+    <p v-if="message" class="message ok" :class="{ submitted: submitSucceeded }" role="status">{{ message }}</p>
     <p v-if="errorText" class="message error">{{ errorText }}</p>
 
     <form v-if="article && !blocked" class="plugin-form" @submit.prevent="submit">
@@ -193,6 +193,7 @@ button { cursor: pointer; }
 .article-result strong { color: var(--text); }
 .message { margin: 0; padding: 10px 13px; border-left: 3px solid; background: var(--surface); }
 .message.ok { border-color: var(--lg-green); }
+.message.submitted { position: fixed; z-index: 850; left: 50%; bottom: 28px; width: min(560px, calc(100vw - 32px)); box-sizing: border-box; transform: translateX(-50%); border: 1px solid var(--lg-green); border-left-width: 5px; border-radius: 7px; background: var(--surface); color: var(--text); font-size: 15px; font-weight: 600; box-shadow: 0 12px 36px rgba(0, 0, 0, .22); }
 .message.error { border-color: var(--lg-red); color: var(--lg-red); }
 .submit-actions { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 13px; }
 .submit-actions button { padding-inline: 20px; font-size: 15px; }

@@ -6,12 +6,11 @@ from datetime import date
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from app.services.plugin_marketplace import PluginSnapshot, code_sha256
+from app.services.plugin_marketplace import PluginSnapshot, article_summary, code_sha256
 
 
 def valid_snapshot(**changes) -> PluginSnapshot:
     values = {
-        "name": "测试插件",
         "summary": "用于验证插件广场字段。",
         "version": "1.0.0",
         "code": "console.log('ok')",
@@ -22,10 +21,7 @@ def valid_snapshot(**changes) -> PluginSnapshot:
         "runtime_mode": "userscript",
         "supports_desktop": True,
         "supports_mobile": False,
-        "target_pages": "/problem/*",
         "last_verified_on": date(2026, 8, 12),
-        "min_compatible_date": date(2026, 1, 1),
-        "compatibility_notes": None,
     }
     values.update(changes)
     return PluginSnapshot(**values)
@@ -56,6 +52,10 @@ def test_at_least_one_device_is_required() -> None:
         valid_snapshot(supports_desktop=False, supports_mobile=False)
 
 
-def test_compatibility_date_or_note_is_required() -> None:
-    with pytest.raises(PydanticValidationError):
-        valid_snapshot(min_compatible_date=None, compatibility_notes="")
+def test_summary_can_be_omitted() -> None:
+    assert valid_snapshot(summary="").summary is None
+
+
+def test_article_summary_uses_visible_markdown_text() -> None:
+    result = article_summary("# 标题\n\n这是[链接](https://example.com)和 `代码`。", "后备标题")
+    assert result == "标题 这是链接和 代码。"

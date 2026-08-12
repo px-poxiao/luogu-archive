@@ -20,7 +20,8 @@ async function load() {
 }
 
 function beginEdit(row: any) {
-  editing.value = structuredClone(row)
+  // 表格行已经是 Vue Proxy，复制前先还原成普通对象。
+  editing.value = structuredClone(toRaw(row))
   showVersionForm.value = false
 }
 
@@ -28,7 +29,6 @@ async function saveMetadata() {
   await api(`/admin/plugins/${editing.value.id}`, {
     method: 'PUT',
     body: {
-      name: editing.value.name,
       summary: editing.value.summary,
       is_official: editing.value.is_official,
       is_recommended: editing.value.is_recommended,
@@ -100,8 +100,7 @@ onMounted(async () => {
 
       <section v-if="editing" class="edit-pane">
         <h2>编辑 {{ editing.name }}</h2>
-        <label>名称<input v-model.trim="editing.name" maxlength="80"></label>
-        <label>简介<textarea v-model.trim="editing.summary" rows="3" maxlength="300" /></label>
+        <label>简介（留空则从文章正文生成）<textarea v-model.trim="editing.summary" rows="3" maxlength="300" /></label>
         <fieldset><legend>可信度徽章</legend>
           <label class="inline"><input v-model="editing.is_official" type="checkbox">官方插件</label>
           <label class="inline"><input v-model="editing.is_recommended" type="checkbox">推荐插件</label>

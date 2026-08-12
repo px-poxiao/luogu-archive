@@ -50,7 +50,6 @@ async function confirm() {
           <div><dt>版本</dt><dd>{{ version.version }}</dd></div>
           <div><dt>请求等级</dt><dd><PluginRequestLevelBadge :level="version.final_request_level" compact /></dd></div>
           <div><dt>运行方式</dt><dd>{{ runtimeMode(version.runtime_mode) }}</dd></div>
-          <div><dt>生效页面</dt><dd>{{ version.target_pages }}</dd></div>
           <div><dt>最后验证</dt><dd>{{ version.last_verified_on }}</dd></div>
           <div><dt>SHA-256</dt><dd><code>{{ version.code_sha256 }}</code></dd></div>
         </dl>

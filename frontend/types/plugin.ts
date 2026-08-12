@@ -6,7 +6,6 @@ export interface PluginTag {
 }
 
 export interface PluginSnapshot {
-  name: string
   summary: string
   version: string
   code: string
@@ -17,10 +16,7 @@ export interface PluginSnapshot {
   runtime_mode: string
   supports_desktop: boolean
   supports_mobile: boolean
-  target_pages: string
   last_verified_on: string
-  min_compatible_date: string | null
-  compatibility_notes: string | null
   admin_request_level?: number | null
   admin_request_analysis?: string | null
 }
@@ -39,10 +35,7 @@ export interface PluginVersion {
   runtime_mode: string
   supports_desktop: boolean
   supports_mobile: boolean
-  target_pages: string
   last_verified_on: string
-  min_compatible_date: string | null
-  compatibility_notes: string | null
   published_at: string
 }
 
@@ -75,7 +68,6 @@ export interface PluginDetail {
 
 export function emptyPluginSnapshot(): PluginSnapshot {
   return {
-    name: '',
     summary: '',
     version: '',
     code: '',
@@ -86,10 +78,7 @@ export function emptyPluginSnapshot(): PluginSnapshot {
     runtime_mode: 'userscript',
     supports_desktop: true,
     supports_mobile: false,
-    target_pages: '',
     last_verified_on: new Date().toISOString().slice(0, 10),
-    min_compatible_date: null,
-    compatibility_notes: null,
     admin_request_level: null,
     admin_request_analysis: null,
   }

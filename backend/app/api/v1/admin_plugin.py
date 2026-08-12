@@ -18,10 +18,12 @@ from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.mail import send_email, send_plugin_result_email
 from app.models._common import utcnow
 from app.models.admin import Admin, AdminAuditLog
+from app.models.luogu_content import Article, ArticleVersion
 from app.models.plugin import Plugin, PluginApplication, PluginReport, PluginTag, PluginVersion
 from app.models.site_user import SiteUser
 from app.services.plugin_marketplace import (
     PluginSnapshot,
+    article_summary,
     decode_snapshot,
     encode_snapshot,
     plugin_tag_names,
@@ -43,8 +45,7 @@ class ReviewApplicationReq(BaseModel):
 
 
 class PluginAdminUpdateReq(BaseModel):
-    name: str | None = Field(None, min_length=1, max_length=80)
-    summary: str | None = Field(None, min_length=1, max_length=300)
+    summary: str | None = Field(None, max_length=300)
     is_official: bool | None = None
     is_recommended: bool | None = None
     tag_ids: list[int] | None = Field(None, max_length=20)
@@ -186,7 +187,17 @@ async def review_plugin_application(
     if body.approved:
         if row.application_type in {"publish", "update"}:
             snapshot = body.snapshot or decode_snapshot(row.snapshot_json)
+            article = await db.get(Article, row.article_id)
+            article_version = (
+                await db.get(ArticleVersion, article.current_version_id)
+                if article and article.current_version_id
+                else None
+            )
+            if article is None or article_version is None:
+                raise NotFoundError("原文章或当前版本不存在")
             snapshot = snapshot.model_copy(update={
+                "summary": snapshot.summary
+                or article_summary(article_version.content_md, article.title),
                 "admin_request_level": body.admin_request_level,
                 "admin_request_analysis": (body.admin_request_analysis or "").strip() or None,
             })
@@ -201,7 +212,8 @@ async def review_plugin_application(
                 plugin = Plugin(
                     article_id=row.article_id,
                     owner_user_id=row.applicant_user_id,
-                    name=snapshot.name,
+                    # 主表旧字段长度为 80；公开名称始终从文章表读取完整标题。
+                    name=article.title[:80],
                     summary=snapshot.summary,
                     is_listed=True,
                     is_official=False,
@@ -231,14 +243,14 @@ async def review_plugin_application(
             )
             db.add(version)
             await db.flush()
-            plugin.name = snapshot.name
+            plugin.name = article.title[:80]
             plugin.summary = snapshot.summary
             plugin.current_version_id = version.id
             await replace_plugin_tags(db, plugin.id, snapshot.tag_ids)
             row.snapshot_json = encode_snapshot(snapshot)
             row.version = snapshot.version
             row.user_request_level = snapshot.user_request_level
-            plugin_name = snapshot.name
+            plugin_name = article.title
         elif row.application_type == "recommend":
             if plugin is None:
                 raise NotFoundError("对应插件不存在")
@@ -288,15 +300,19 @@ async def admin_list_plugins(
     admin: Admin = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    q = select(Plugin).order_by(desc(Plugin.updated_at))
+    q = (
+        select(Plugin, Article)
+        .join(Article, Article.article_id == Plugin.article_id)
+        .order_by(desc(Plugin.updated_at))
+    )
     if not include_unlisted:
         q = q.where(Plugin.is_listed.is_(True))
-    rows = (await db.execute(q)).scalars().all()
+    rows = (await db.execute(q)).all()
     return [{
         "id": row.id,
         "article_id": row.article_id,
         "owner_user_id": row.owner_user_id,
-        "name": row.name,
+        "name": article.title,
         "summary": row.summary,
         "is_official": row.is_official,
         "is_recommended": row.is_recommended,
@@ -304,7 +320,7 @@ async def admin_list_plugins(
         "down_reason": row.down_reason,
         "tags": await plugin_tag_names(db, row.id),
         "updated_at": row.updated_at.isoformat(),
-    } for row in rows]
+    } for row, article in rows]
 
 
 @router.get("/plugins/{plugin_id}")
@@ -322,7 +338,6 @@ async def admin_plugin_detail(
         raise NotFoundError("插件当前版本缺失")
     tags = await plugin_tag_names(db, plugin.id)
     snapshot = PluginSnapshot(
-        name=plugin.name,
         summary=plugin.summary,
         version=current.version,
         code=current.code,
@@ -333,10 +348,7 @@ async def admin_plugin_detail(
         runtime_mode=current.runtime_mode,
         supports_desktop=current.supports_desktop,
         supports_mobile=current.supports_mobile,
-        target_pages=current.target_pages,
         last_verified_on=current.last_verified_on,
-        min_compatible_date=current.min_compatible_date,
-        compatibility_notes=current.compatibility_notes,
         admin_request_level=current.admin_request_level,
         admin_request_analysis=current.admin_request_analysis,
     )
@@ -361,10 +373,21 @@ async def admin_update_plugin(
     plugin = await db.get(Plugin, plugin_id)
     if plugin is None:
         raise NotFoundError("插件不存在")
-    if body.name is not None:
-        plugin.name = body.name.strip()
     if body.summary is not None:
-        plugin.summary = body.summary.strip()
+        summary = body.summary.strip()
+        if summary:
+            plugin.summary = summary
+        else:
+            article = await db.get(Article, plugin.article_id)
+            article_version = (
+                await db.get(ArticleVersion, article.current_version_id)
+                if article and article.current_version_id
+                else None
+            )
+            if article is None or article_version is None:
+                raise NotFoundError("原文章或当前版本不存在")
+            plugin.name = article.title[:80]
+            plugin.summary = article_summary(article_version.content_md, article.title)
     if body.is_official is not None:
         plugin.is_official = body.is_official
     if body.is_recommended is not None:
@@ -390,6 +413,17 @@ async def admin_create_plugin_version(
     ).scalar_one_or_none()
     if plugin is None:
         raise NotFoundError("插件不存在")
+    article = await db.get(Article, plugin.article_id)
+    article_version = (
+        await db.get(ArticleVersion, article.current_version_id)
+        if article and article.current_version_id
+        else None
+    )
+    if article is None or article_version is None:
+        raise NotFoundError("原文章或当前版本不存在")
+    snapshot = snapshot.model_copy(update={
+        "summary": snapshot.summary or article_summary(article_version.content_md, article.title),
+    })
     await validate_tag_ids(db, snapshot.tag_ids, allow_inactive=True)
     duplicate = await db.scalar(select(func.count()).select_from(PluginVersion).where(
         PluginVersion.plugin_id == plugin.id, PluginVersion.version == snapshot.version
@@ -399,7 +433,7 @@ async def admin_create_plugin_version(
     version = version_from_snapshot(plugin.id, snapshot, admin_id=admin.id, source_application_id=None)
     db.add(version)
     await db.flush()
-    plugin.name = snapshot.name
+    plugin.name = article.title[:80]
     plugin.summary = snapshot.summary
     plugin.current_version_id = version.id
     await replace_plugin_tags(db, plugin.id, snapshot.tag_ids)

@@ -27,7 +27,7 @@ useCopyCode(articleRef)
 
 const pendingSnapshot = computed(() => detail.value?.pending_application?.snapshot || null)
 const displaySnapshot = computed<PluginSnapshot | null>(() => showPending.value ? pendingSnapshot.value : null)
-const displayName = computed(() => displaySnapshot.value?.name || detail.value?.name || '插件')
+const displayName = computed(() => article.value?.title || detail.value?.name || '插件')
 const displaySummary = computed(() => displaySnapshot.value?.summary || detail.value?.summary || '')
 const displayTags = computed(() => showPending.value
   ? detail.value?.pending_application?.tags || []
@@ -51,10 +51,7 @@ const displayVersion = computed<PluginVersion | null>(() => {
     runtime_mode: snapshot.runtime_mode,
     supports_desktop: snapshot.supports_desktop,
     supports_mobile: snapshot.supports_mobile,
-    target_pages: snapshot.target_pages,
     last_verified_on: snapshot.last_verified_on,
-    min_compatible_date: snapshot.min_compatible_date,
-    compatibility_notes: snapshot.compatibility_notes,
     published_at: '',
   }
 })
@@ -204,16 +201,13 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
           <button type="button" title="下载代码" @click="openInstall('download')">下载文件</button>
         </div>
       </div>
+      <pre class="code-view"><code>{{ displayVersion.code }}</code></pre>
       <dl class="compat-grid">
         <div><dt>运行方式</dt><dd>{{ runtimeMode(displayVersion.runtime_mode) }}</dd></div>
         <div><dt>兼容设备</dt><dd>{{ [displayVersion.supports_desktop ? '桌面端' : '', displayVersion.supports_mobile ? '移动端' : ''].filter(Boolean).join('、') }}</dd></div>
-        <div><dt>生效页面</dt><dd>{{ displayVersion.target_pages }}</dd></div>
         <div><dt>最后验证</dt><dd>{{ displayVersion.last_verified_on }}</dd></div>
-        <div><dt>最低适配</dt><dd>{{ displayVersion.min_compatible_date || '见兼容说明' }}</dd></div>
         <div><dt>SHA-256</dt><dd><code>{{ displayVersion.code_sha256 }}</code></dd></div>
-        <div v-if="displayVersion.compatibility_notes" class="wide"><dt>兼容说明</dt><dd>{{ displayVersion.compatibility_notes }}</dd></div>
       </dl>
-      <pre class="code-view"><code>{{ displayVersion.code }}</code></pre>
     </section>
 
     <section v-else-if="activeTab === 'analysis' && displayVersion" class="tab-content analysis-tab">
@@ -301,7 +295,7 @@ select, textarea { border: 1px solid var(--border); border-radius: 6px; backgrou
 .code-actions { display: flex; gap: 9px; }
 .code-actions button, .detail-footer button, .report-form button { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 7px 11px; cursor: pointer; font: inherit; }
 .code-actions button:first-child, .report-form button { border-color: var(--link); background: var(--link); color: #fff; }
-.compat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0 0 18px; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
+.compat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 18px 0 0; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
 .compat-grid > div { min-width: 0; padding: 11px 12px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .compat-grid .wide { grid-column: 1 / -1; }
 .compat-grid dt { color: var(--text-muted); font-size: 12px; }

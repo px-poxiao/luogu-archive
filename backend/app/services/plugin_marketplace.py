@@ -6,6 +6,7 @@ import re
 from datetime import date
 from pathlib import PurePath
 
+from markdown_it import MarkdownIt
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,8 +28,7 @@ REPORT_STATUSES = {"pending", "resolved", "dismissed"}
 class PluginSnapshot(BaseModel):
     """发布或更新申请的完整快照。"""
 
-    name: str = Field(..., min_length=1, max_length=80)
-    summary: str = Field(..., min_length=1, max_length=300)
+    summary: str | None = Field(None, max_length=300)
     version: str = Field(..., min_length=1, max_length=64)
     code: str = Field(..., min_length=1)
     download_filename: str = Field(..., min_length=1, max_length=128)
@@ -38,16 +38,13 @@ class PluginSnapshot(BaseModel):
     runtime_mode: str
     supports_desktop: bool = True
     supports_mobile: bool = False
-    target_pages: str = Field(..., min_length=1, max_length=5000)
     last_verified_on: date
-    min_compatible_date: date | None = None
-    compatibility_notes: str | None = Field(None, max_length=5000)
 
     # 管理员审核时可覆盖；普通用户提交接口会忽略这些字段。
     admin_request_level: int | None = Field(None, ge=0, le=3)
     admin_request_analysis: str | None = Field(None, max_length=ANALYSIS_MAX_CHARS)
 
-    @field_validator("name", "summary", "version", "user_request_analysis", "target_pages")
+    @field_validator("version", "user_request_analysis")
     @classmethod
     def strip_required(cls, value: str) -> str:
         value = value.strip()
@@ -55,7 +52,7 @@ class PluginSnapshot(BaseModel):
             raise ValueError("不能为空")
         return value
 
-    @field_validator("compatibility_notes", "admin_request_analysis")
+    @field_validator("summary", "admin_request_analysis")
     @classmethod
     def strip_optional(cls, value: str | None) -> str | None:
         if value is None:
@@ -97,11 +94,9 @@ class PluginSnapshot(BaseModel):
         return list(dict.fromkeys(value))
 
     @model_validator(mode="after")
-    def valid_compatibility(self) -> "PluginSnapshot":
+    def valid_devices(self) -> "PluginSnapshot":
         if not self.supports_desktop and not self.supports_mobile:
             raise ValueError("至少选择一种兼容设备")
-        if self.min_compatible_date is None and not self.compatibility_notes:
-            raise ValueError("最低适配日期和兼容说明至少填写一项")
         return self
 
     @property
@@ -119,6 +114,25 @@ def decode_snapshot(value: str) -> PluginSnapshot:
 
 def code_sha256(code: str) -> str:
     return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def article_summary(content_md: str, fallback: str, *, max_length: int = 300) -> str:
+    """从文章 Markdown 的可见文本生成简介，避免把链接语法或 HTML 标签带进广场。"""
+    parts: list[str] = []
+    for token in MarkdownIt("commonmark", {"html": False}).parse(content_md):
+        if token.type != "inline" or not token.children:
+            continue
+        for child in token.children:
+            if child.type in {"text", "code_inline", "image"} and child.content:
+                parts.append(child.content)
+            elif child.type in {"softbreak", "hardbreak"}:
+                parts.append(" ")
+        parts.append(" ")
+
+    text = re.sub(r"\s+", " ", "".join(parts)).strip() or fallback.strip()
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 1].rstrip() + "…"
 
 
 async def validate_tag_ids(
@@ -174,10 +188,11 @@ def version_from_snapshot(
         runtime_mode=snapshot.runtime_mode,
         supports_desktop=snapshot.supports_desktop,
         supports_mobile=snapshot.supports_mobile,
-        target_pages=snapshot.target_pages,
+        # 旧数据库列暂时保留以兼容已发布版本，新版不再采集或公开这些字段。
+        target_pages="",
         last_verified_on=snapshot.last_verified_on,
-        min_compatible_date=snapshot.min_compatible_date,
-        compatibility_notes=snapshot.compatibility_notes,
+        min_compatible_date=None,
+        compatibility_notes=None,
         source_application_id=source_application_id,
         reviewed_by_admin_id=admin_id,
     )

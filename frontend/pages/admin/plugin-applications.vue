@@ -31,10 +31,12 @@ async function openApplication(id: number) {
   loading.value = true
   errorText.value = ''
   try {
-    selected.value = await api(`/admin/plugin-applications/${id}`)
-    snapshot.value = Object.keys(selected.value.snapshot || {}).length
-      ? structuredClone(selected.value.snapshot)
+    const data = await api<any>(`/admin/plugin-applications/${id}`)
+    // 先复制普通响应对象，再放进 ref；Vue 的响应式 Proxy 不能直接 structuredClone。
+    snapshot.value = Object.keys(data.snapshot || {}).length
+      ? structuredClone(data.snapshot)
       : null
+    selected.value = data
   } catch (error: any) {
     errorText.value = error?.data?.message || '申请详情加载失败'
   } finally {
@@ -116,7 +118,6 @@ watch([status, applicationType], () => { void loadList() })
           <p v-if="selected.reason" class="reason">申请理由：{{ selected.reason }}</p>
           <section v-if="snapshot && selected.current" class="diff">
             <h3>当前版与申请版</h3>
-            <div><span>名称</span><del>{{ selected.current.name }}</del><ins>{{ snapshot.name }}</ins></div>
             <div><span>版本</span><del>{{ selected.current.version }}</del><ins>{{ snapshot.version }}</ins></div>
             <details>
               <summary>查看代码差异原文</summary>

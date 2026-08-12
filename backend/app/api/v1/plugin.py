@@ -17,7 +17,7 @@ from app.core.mail import send_plugin_admin_notice
 from app.core.ratelimit import SlidingWindowLimiter, ratelimit_key
 from app.core.redis_client import get_redis
 from app.models._common import utcnow
-from app.models.luogu_content import Article
+from app.models.luogu_content import Article, ArticleVersion
 from app.models.luogu_user import LuoguUser
 from app.models.plugin import (
     Plugin,
@@ -31,6 +31,7 @@ from app.models.site_user import SiteUser
 from app.services.plugin_marketplace import (
     REPORT_TYPES,
     PluginSnapshot,
+    article_summary,
     decode_snapshot,
     encode_snapshot,
     plugin_tag_names,
@@ -87,15 +88,31 @@ def _version_dict(row: PluginVersion, *, include_code: bool = True) -> dict:
         "runtime_mode": row.runtime_mode,
         "supports_desktop": row.supports_desktop,
         "supports_mobile": row.supports_mobile,
-        "target_pages": row.target_pages,
         "last_verified_on": row.last_verified_on.isoformat(),
-        "min_compatible_date": row.min_compatible_date.isoformat() if row.min_compatible_date else None,
-        "compatibility_notes": row.compatibility_notes,
         "published_at": row.published_at.isoformat(),
     }
     if include_code:
         result["code"] = row.code
     return result
+
+
+async def _complete_snapshot(
+    db: AsyncSession,
+    article: Article,
+    snapshot: PluginSnapshot,
+    *,
+    clear_admin_fields: bool,
+) -> PluginSnapshot:
+    """补齐可省略的简介；文章标题本身作为插件名称，不接受用户另填名称。"""
+    version = await db.get(ArticleVersion, article.current_version_id)
+    if version is None:
+        raise NotFoundError("文章版本缺失")
+    updates: dict = {
+        "summary": snapshot.summary or article_summary(version.content_md, article.title),
+    }
+    if clear_admin_fields:
+        updates.update({"admin_request_level": None, "admin_request_analysis": None})
+    return snapshot.model_copy(update=updates)
 
 
 async def _pending_for_owner(
@@ -188,7 +205,7 @@ async def list_plugins(
     for plugin, version, article, author in rows:
         items.append({
             "article_id": plugin.article_id,
-            "name": plugin.name,
+            "name": article.title,
             "summary": plugin.summary,
             "article_title": article.title,
             "article_author": ({
@@ -221,9 +238,12 @@ async def manage_plugins(
 ) -> dict:
     plugin_rows = (
         await db.execute(
-            select(Plugin).where(Plugin.owner_user_id == user.id).order_by(desc(Plugin.updated_at))
+            select(Plugin, Article)
+            .join(Article, Article.article_id == Plugin.article_id)
+            .where(Plugin.owner_user_id == user.id)
+            .order_by(desc(Plugin.updated_at))
         )
-    ).scalars().all()
+    ).all()
     app_rows = (
         await db.execute(
             select(PluginApplication)
@@ -236,12 +256,12 @@ async def manage_plugins(
         "plugins": [{
             "id": row.id,
             "article_id": row.article_id,
-            "name": row.name,
+            "name": article.title,
             "is_listed": row.is_listed,
             "is_official": row.is_official,
             "is_recommended": row.is_recommended,
             "updated_at": row.updated_at.isoformat(),
-        } for row in plugin_rows],
+        } for row, article in plugin_rows],
         "applications": [{
             "id": row.id,
             "plugin_id": row.plugin_id,
@@ -390,7 +410,9 @@ async def apply_publish(
     if pending:
         raise ConflictError("该文章已有待审核的首次发布申请")
     await validate_tag_ids(db, body.snapshot.tag_ids)
-    snapshot = body.snapshot.model_copy(update={"admin_request_level": None, "admin_request_analysis": None})
+    snapshot = await _complete_snapshot(
+        db, article, body.snapshot, clear_admin_fields=True
+    )
     row = PluginApplication(
         article_id=body.article_id,
         applicant_user_id=user.id,
@@ -423,6 +445,9 @@ async def apply_update(
         raise NotFoundError("插件不存在")
     if plugin.owner_user_id != user.id:
         raise ForbiddenError("只有插件上传者可以提交更新")
+    article = await db.get(Article, article_id)
+    if article is None or article.current_version_id is None:
+        raise NotFoundError("文章尚未被本站完整收录")
     pending = await db.scalar(select(func.count()).select_from(PluginApplication).where(
         PluginApplication.plugin_id == plugin.id,
         PluginApplication.application_type == "update",
@@ -436,7 +461,7 @@ async def apply_update(
     if version_exists:
         raise ConflictError("该代码版本号已经存在")
     await validate_tag_ids(db, snapshot.tag_ids)
-    clean = snapshot.model_copy(update={"admin_request_level": None, "admin_request_analysis": None})
+    clean = await _complete_snapshot(db, article, snapshot, clear_admin_fields=True)
     row = PluginApplication(
         plugin_id=plugin.id,
         article_id=article_id,

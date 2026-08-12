@@ -112,8 +112,7 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
       <NuxtLink v-for="row in rows" :key="row.article_id" :to="`/plugin/${row.article_id}`" class="plugin-card">
         <div class="card-head">
           <div>
-            <h2>{{ row.name }}</h2>
-            <p class="article-source">原文：{{ row.article_title }}</p>
+            <h2>{{ row.article_title }}</h2>
           </div>
           <PluginRequestLevelBadge :level="row.final_request_level" compact />
         </div>
@@ -157,7 +156,6 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
 .plugin-card:hover { border-color: var(--link); transform: translateY(-1px); text-decoration: none; }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .card-head h2 { margin: 0; font-size: 20px; }
-.article-source { margin: 5px 0 0; color: var(--text-muted); font-size: 13px; }
 .summary { margin: 0; min-height: 3.2em; color: var(--text-muted); }
 .badges { display: flex; flex-wrap: wrap; gap: 7px; }
 .trust, .tag { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
