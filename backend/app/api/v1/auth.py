@@ -19,6 +19,7 @@ import json
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, EmailStr, Field
@@ -94,7 +95,7 @@ class LuoguBindChallengeResp(BaseModel):
 
 
 class LuoguBindVerifyReq(BaseModel):
-    paste_id: str = Field(..., min_length=1, max_length=128)
+    paste_id: str = Field(..., min_length=1, max_length=256)
 
 
 class LuoguBindVerifyResp(BaseModel):
@@ -115,9 +116,8 @@ def _check_password(pw: str) -> None:
 
 
 _BIND_CHALLENGE_TTL_SEC = 600
-_PASTE_ID_RE = re.compile(
-    r"^(?:https?://(?:www\.)?luogu\.com\.cn/paste/)?([a-zA-Z0-9]{1,32})/?$"
-)
+_PASTE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_LUOGU_HOSTS = {"www.luogu.com.cn", "luogu.com.cn", "www.luogu.com", "luogu.com"}
 
 
 def _bind_challenge_key(user_id: int) -> str:
@@ -125,9 +125,21 @@ def _bind_challenge_key(user_id: int) -> str:
 
 
 def _parse_paste_id(raw: str) -> str:
-    match = _PASTE_ID_RE.fullmatch(raw.strip())
+    value = raw.strip()
+    if _PASTE_ID_RE.fullmatch(value):
+        return value
+
+    if re.match(r"^(?:www\.)?luogu\.", value, flags=re.IGNORECASE):
+        value = f"https://{value}"
+    if re.match(r"^https?://", value, flags=re.IGNORECASE):
+        parsed = urlsplit(value)
+        if parsed.hostname is None or parsed.hostname.lower() not in _LUOGU_HOSTS:
+            raise ValidationError("只支持洛谷剪贴板链接")
+        value = parsed.path
+
+    match = re.fullmatch(r"/paste/([A-Za-z0-9_-]{1,64})/?", value, flags=re.IGNORECASE)
     if match is None:
-        raise ValidationError("请输入正确的剪贴板 ID 或链接")
+        raise ValidationError("支持 /paste/{id}、洛谷剪贴板链接或纯剪贴板 ID")
     return match.group(1)
 
 

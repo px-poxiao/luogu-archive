@@ -70,7 +70,6 @@ async function verify() {
         <header class="dialog-head">
           <div>
             <h2 id="bind-title">绑定洛谷账号</h2>
-            <p>用公开剪贴板证明账号归属。</p>
           </div>
           <button class="close-btn" type="button" title="关闭" aria-label="关闭" @click="open = false">×</button>
         </header>
@@ -85,7 +84,7 @@ async function verify() {
 
           <div class="step-row">
             <span>2. 用要绑定的账号新建公开剪贴板并粘贴文本</span>
-            <a href="https://www.luogu.com.cn/paste/new" target="_blank" rel="noopener noreferrer">新建剪贴板</a>
+            <a href="https://www.luogu.com.cn/paste" target="_blank" rel="noopener noreferrer">新建剪贴板</a>
           </div>
 
           <label class="field-label" for="paste-id">3. 输入剪贴板 ID</label>
@@ -94,7 +93,7 @@ async function verify() {
             v-model="pasteId"
             type="text"
             autocomplete="off"
-            placeholder="例如 8 位剪贴板 ID"
+            placeholder="剪贴板 ID、/paste/ID 或完整链接"
             @keyup.enter="verify"
           >
         </template>
