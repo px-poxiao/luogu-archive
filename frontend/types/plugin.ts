@@ -24,6 +24,9 @@ export interface PluginSnapshot {
 }
 
 export interface PluginVersion {
+
+  download_count: number
+
   id: number
   version: string
   code: string

@@ -102,6 +102,9 @@ def _version_dict(row: PluginVersion, *, include_code: bool = True) -> dict:
     result = {
         "id": row.id,
         "version": row.version,
+
+        "download_count": row.download_count,
+
         "code_sha256": row.code_sha256,
         "download_filename": row.download_filename,
         "user_request_level": row.user_request_level,
@@ -249,6 +252,9 @@ async def list_plugins(
             } if author else None),
             "version": version.version,
             "final_request_level": version.final_request_level,
+
+            "download_count": version.download_count,
+
             "runtime_mode": version.runtime_mode,
             "supports_desktop": version.supports_desktop,
             "supports_mobile": version.supports_mobile,
@@ -405,8 +411,15 @@ async def download_plugin_version(
     version = await db.get(PluginVersion, version_id)
     if version is None or version.plugin_id != plugin.id:
         raise NotFoundError("代码版本不存在")
-    return _code_download_response(version.code, version.download_filename)
+    # return _code_download_response(version.code, version.download_filename)
 
+    # 叠加下载次数（人次）
+    version.download_count += 1
+    await db.commit()
+    return _code_download_response(
+        version.code,
+        version.download_filename
+    )
 
 @router.post("/applications/publish")
 async def apply_publish(
