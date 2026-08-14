@@ -171,7 +171,7 @@ function totalFor(k: string): number {
           · 上次更新：{{ relTime }}
         </span>
         <button
-          class="hero-save-btn"
+          class="archive-action-button hero-save-btn"
           :class="{
             success: saveState === 'success',
             error: saveState === 'failed',
@@ -180,7 +180,7 @@ function totalFor(k: string): number {
           :disabled="saveState === 'pending'"
           @click="saveProblemList"
         >
-          <span v-if="saveState === 'idle'">🔄 立即更新</span>
+          <span v-if="saveState === 'idle'">立即更新</span>
           <span v-else>{{ saveMessage }}</span>
         </button>
         <CaptchaChallenge
@@ -297,23 +297,6 @@ function totalFor(k: string): number {
 }
 .hero-save-btn {
   flex-shrink: 0;
-  padding: 6px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--hero-border);
-  background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-  font-size: 13.5px;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s, color 0.15s;
-}
-.hero-save-btn:hover:not(:disabled) {
-  border-color: var(--link);
-  color: var(--link);
-  transform: translateY(-1px);
-}
-.hero-save-btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
 }
 .hero-save-btn.success { color: var(--lg-green); border-color: var(--lg-green); }
 .hero-save-btn.error { color: var(--lg-red); border-color: var(--lg-red); }

@@ -92,8 +92,8 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
         <p>浏览经管理组审核的洛谷插件与请求说明</p>
       </div>
       <div class="hero-actions">
-        <NuxtLink to="/plugin/manage" class="secondary-btn">我的插件</NuxtLink>
-        <NuxtLink to="/plugin/submit" class="primary-btn">提交插件</NuxtLink>
+        <NuxtLink to="/plugin/manage" class="archive-action-button">我的插件</NuxtLink>
+        <NuxtLink to="/plugin/submit" class="archive-action-button">提交插件</NuxtLink>
       </div>
     </header>
 
@@ -172,8 +172,8 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
         </div>
 
         <div class="filter-actions">
-          <button type="button" class="apply-btn" @click="applyFilters">应用筛选</button>
-          <button v-if="hasFilters" type="button" class="reset-btn" @click="resetFilters">清除筛选</button>
+          <button type="button" class="archive-action-button" @click="applyFilters">应用筛选</button>
+          <button v-if="hasFilters" type="button" class="archive-action-button" @click="resetFilters">清除筛选</button>
         </div>
       </aside>
 
@@ -224,9 +224,9 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
         <div v-else class="state-box">没有符合条件的插件</div>
 
         <nav v-if="total > 20" class="pagination" aria-label="分页">
-          <button type="button" :disabled="page <= 1" @click="page--; load()">上一页</button>
+          <button type="button" class="archive-action-button" :disabled="page <= 1" @click="page--; load()">上一页</button>
           <span>第 {{ page }} 页，共 {{ Math.ceil(total / 20) }} 页</span>
-          <button type="button" :disabled="page * 20 >= total" @click="page++; load()">下一页</button>
+          <button type="button" class="archive-action-button" :disabled="page * 20 >= total" @click="page++; load()">下一页</button>
         </nav>
       </main>
     </div>
@@ -239,9 +239,6 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
 .market-heading h1 { margin: 0; font-size: 28px; }
 .market-heading p { margin: 6px 0 0; color: var(--hero-text-muted); }
 .hero-actions { display: flex; gap: 10px; flex-shrink: 0; }
-.primary-btn, .secondary-btn { display: inline-flex; align-items: center; min-height: 38px; padding: 0 15px; border-radius: 6px; text-decoration: none; }
-.primary-btn { background: var(--link); color: #fff; }
-.secondary-btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); }
 
 .market-shell { display: grid; grid-template-columns: minmax(215px, 250px) minmax(0, 1fr); align-items: start; gap: 18px; }
 .filter-sidebar { position: sticky; top: 18px; display: grid; gap: 18px; padding: 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
@@ -261,9 +258,7 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
 .filter-fields label { display: grid; gap: 5px; color: var(--text-muted); font-size: 13px; }
 .filter-fields select { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); padding: 8px 9px; font: inherit; }
 .filter-actions { display: grid; gap: 8px; }
-.filter-actions button { min-height: 36px; border: 1px solid var(--border); border-radius: 5px; font: inherit; cursor: pointer; }
-.apply-btn { border-color: var(--link) !important; background: var(--link); color: #fff; }
-.reset-btn { background: var(--surface); color: var(--text-muted); }
+.filter-actions .archive-action-button { width: 100%; min-height: 36px; }
 
 .results-pane { min-width: 0; }
 .results-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 46px; margin-bottom: 12px; padding: 0 2px; }
@@ -303,8 +298,6 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
 .state-box { padding: 42px 18px; border: 1px solid var(--border); text-align: center; color: var(--text-muted); }
 .state-box.error { color: var(--lg-red); }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 18px; }
-.pagination button { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 7px 12px; cursor: pointer; }
-.pagination button:disabled { opacity: .45; cursor: default; }
 
 @media (max-width: 860px) {
   .market-shell { grid-template-columns: 1fr; }
@@ -317,7 +310,7 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
   .market-heading { align-items: flex-start; flex-direction: column; padding: 20px 17px; }
   .market-heading h1 { font-size: 24px; }
   .hero-actions { width: 100%; }
-  .primary-btn, .secondary-btn { flex: 1; justify-content: center; }
+  .hero-actions .archive-action-button { flex: 1; }
   .filter-sidebar { padding: 15px; }
   .tag-options, .filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .plugin-row { padding: 16px; }

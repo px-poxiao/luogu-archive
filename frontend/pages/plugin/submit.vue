@@ -153,7 +153,7 @@ useHead({ title: '提交插件 - 洛谷档案馆' })
         <h1>{{ editing ? '提交版本更新' : '发布插件' }}</h1>
         <p>插件原文始终使用文章的最新归档版本，代码作为独立内容提交审核。</p>
       </div>
-      <NuxtLink to="/plugin/manage">返回我的插件</NuxtLink>
+      <NuxtLink to="/plugin/manage" class="archive-action-button">返回我的插件</NuxtLink>
     </header>
 
     <section class="article-picker">
@@ -161,7 +161,7 @@ useHead({ title: '提交插件 - 洛谷档案馆' })
         <span>洛谷文章编号</span>
         <div class="input-action">
           <input v-model.trim="articleId" maxlength="16" placeholder="例如 jbekb3o8" :disabled="editing || hasPending">
-          <button type="button" @click="inspectArticle">确认文章</button>
+          <button type="button" class="archive-action-button" @click="inspectArticle">确认文章</button>
         </div>
       </label>
       <div v-if="article" class="article-result">
@@ -177,7 +177,7 @@ useHead({ title: '提交插件 - 洛谷档案馆' })
       <PluginSnapshotForm v-model="snapshot" :tags="tags" />
       <div class="submit-actions">
         <span>提交即表示你确认代码和请求说明真实、完整。</span>
-        <button type="submit" :disabled="submitting || hasPending">{{ hasPending ? '已有待审核申请' : submitting ? '提交中…' : '提交审核' }}</button>
+        <button type="submit" class="archive-action-button" :disabled="submitting || hasPending">{{ hasPending ? '已有待审核申请' : submitting ? '提交中…' : '提交审核' }}</button>
       </div>
     </form>
   </div>
@@ -193,9 +193,7 @@ useHead({ title: '提交插件 - 洛谷档案馆' })
 .article-picker label { display: grid; gap: 7px; font-weight: 600; }
 .input-action { display: flex; gap: 9px; }
 .input-action input { flex: 1; min-width: 0; }
-input, button { box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px; background: var(--surface); color: var(--text); font: inherit; }
-button { cursor: pointer; }
-.input-action button, .submit-actions button { border-color: var(--link); background: var(--link); color: #fff; }
+input { box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px; background: var(--surface); color: var(--text); font: inherit; }
 .article-result { display: flex; justify-content: space-between; gap: 12px; color: var(--text-muted); }
 .article-result strong { color: var(--text); }
 .message { margin: 0; padding: 10px 13px; border-left: 3px solid; background: var(--surface); }
@@ -203,8 +201,6 @@ button { cursor: pointer; }
 .message.submitted { position: fixed; z-index: 850; left: 50%; bottom: 28px; width: min(560px, calc(100vw - 32px)); box-sizing: border-box; transform: translateX(-50%); border: 1px solid var(--lg-green); border-left-width: 5px; border-radius: 7px; background: var(--surface); color: var(--text); font-size: 15px; font-weight: 600; box-shadow: 0 12px 36px rgba(0, 0, 0, .22); }
 .message.error { border-color: var(--lg-red); color: var(--lg-red); }
 .submit-actions { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 13px; }
-.submit-actions button { padding-inline: 20px; font-size: 15px; }
-.submit-actions button:disabled { opacity: .55; cursor: default; }
 @media (max-width: 650px) {
   .page-head, .article-result, .submit-actions { align-items: flex-start; flex-direction: column; }
   .input-action { flex-direction: column; }

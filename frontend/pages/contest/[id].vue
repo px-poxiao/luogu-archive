@@ -129,7 +129,7 @@ function toggleWarning(uid: number) {
           </div>
           <form class="search" @submit.prevent="search">
             <input v-model="keyword" placeholder="用户名或 UID" aria-label="搜索参赛者">
-            <button type="submit">搜索</button>
+            <button type="submit" class="archive-action-button">搜索</button>
           </form>
         </header>
 
@@ -220,9 +220,9 @@ function toggleWarning(uid: number) {
         </div>
 
         <nav v-if="totalPages > 1" class="pagination" aria-label="排行榜分页">
-          <button :disabled="page <= 1" @click="page--">上一页</button>
+          <button class="archive-action-button" :disabled="page <= 1" @click="page--">上一页</button>
           <span>第 {{ page }} / {{ totalPages }} 页</span>
-          <button :disabled="page >= totalPages" @click="page++">下一页</button>
+          <button class="archive-action-button" :disabled="page >= totalPages" @click="page++">下一页</button>
         </nav>
       </section>
     </template>
@@ -259,10 +259,6 @@ function toggleWarning(uid: number) {
 .search input {
   width: 220px; min-width: 0; padding: 7px 9px; border: 1px solid var(--border);
   border-radius: 4px; background: var(--bg); color: var(--text); font: inherit;
-}
-.search button, .pagination button {
-  border: 1px solid var(--border); border-radius: 4px; background: var(--surface);
-  color: var(--text); padding: 7px 13px; cursor: pointer;
 }
 .table-scroll { overflow-x: auto; max-width: 100%; }
 .scoreboard-table { width: 100%; min-width: max-content; border-collapse: separate; border-spacing: 0; }
@@ -316,7 +312,6 @@ tbody tr:nth-last-child(-n + 2) .warning-popover {
   bottom: calc(100% + 9px);
 }
 .pagination { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 16px 22px; border-top: 1px solid var(--border); }
-.pagination button:disabled { opacity: .45; cursor: default; }
 .empty, .load-error { padding: 38px; text-align: center; color: var(--text-muted); }
 @media (max-width: 768px) {
   .contest-summary {

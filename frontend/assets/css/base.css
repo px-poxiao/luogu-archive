@@ -85,6 +85,39 @@ a:hover {
   text-decoration: underline;
 }
 
+/* 页面命令按钮：与题目库“立即更新”保持一致。 */
+.archive-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border: 1px solid var(--hero-border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s, color 0.15s;
+}
+.archive-action-button:hover:not(:disabled) {
+  border-color: var(--link);
+  color: var(--link);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+.archive-action-button:disabled,
+.archive-action-button[aria-disabled="true"] {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .container {
   width: min(calc(100% - (var(--page-gutter) * 2)), var(--page-max-width));
   max-width: none;

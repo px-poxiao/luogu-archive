@@ -86,8 +86,8 @@ async function confirm() {
         </p>
         <footer>
           <button type="button" class="analysis-link" @click="emit('analysis')">查看请求分析</button>
-          <button type="button" class="secondary" @click="emit('close')">取消</button>
-          <button type="button" class="primary" :disabled="copyBlocked" @click="confirm">确认{{ action === 'copy' ? '复制' : '下载' }}</button>
+          <button type="button" class="archive-action-button" @click="emit('close')">取消</button>
+          <button type="button" class="archive-action-button" :disabled="copyBlocked" @click="confirm">确认{{ action === 'copy' ? '复制' : '下载' }}</button>
         </footer>
       </section>
     </div>
@@ -109,10 +109,6 @@ code { font-size: 12px; }
 .notice { margin: 0 18px; padding: 11px 13px; border-left: 3px solid var(--lg-orange); background: var(--hover); color: var(--text-muted); font-size: 13px; }
 .copy-warning { margin: 10px 18px 0; padding: 11px 13px; border-left: 3px solid var(--lg-yellow); background: color-mix(in srgb, var(--lg-yellow) 10%, var(--surface)); color: var(--text-muted); font-size: 13px; }
 footer { justify-content: flex-end; gap: 10px; }
-footer button { border-radius: 6px; padding: 8px 15px; cursor: pointer; font: inherit; }
-.secondary { border: 1px solid var(--border); background: var(--surface); color: var(--text); }
-.primary { border: 1px solid var(--link); background: var(--link); color: #fff; }
-.primary:disabled { border-color: var(--border); background: var(--hover); color: var(--text-muted); cursor: not-allowed; }
 .analysis-link { margin-right: auto; border: 0; background: transparent; color: var(--link); }
 @media (max-width: 520px) { dl > div { grid-template-columns: 1fr; gap: 3px; } }
 </style>

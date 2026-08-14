@@ -56,7 +56,7 @@ useHead({ title: '我的插件 - 洛谷档案馆' })
   <div class="manage-page">
     <header class="manage-head">
       <div><h1>我的插件</h1><p>查看公开插件、待审核版本和历史申请。</p></div>
-      <NuxtLink to="/plugin/submit">提交新插件</NuxtLink>
+      <NuxtLink to="/plugin/submit" class="archive-action-button">提交新插件</NuxtLink>
     </header>
     <LoadingPanel v-if="loading" title="loading……" text="" />
     <p v-else-if="errorText" class="error">{{ errorText }}</p>
@@ -70,9 +70,9 @@ useHead({ title: '我的插件 - 洛谷档案馆' })
               <p>文章 {{ plugin.article_id }} · {{ plugin.is_listed ? '公开展示' : '已下架' }}</p>
             </div>
             <div class="row-actions">
-              <NuxtLink :to="`/plugin/submit?article_id=${plugin.article_id}`">提交更新</NuxtLink>
-              <button v-if="!plugin.is_recommended" type="button" @click="reasonAction(plugin.article_id, 'recommend')">申请推荐</button>
-              <button type="button" class="danger" @click="reasonAction(plugin.article_id, 'delete')">申请删除</button>
+              <NuxtLink :to="`/plugin/submit?article_id=${plugin.article_id}`" class="archive-action-button">提交更新</NuxtLink>
+              <button v-if="!plugin.is_recommended" type="button" class="archive-action-button" @click="reasonAction(plugin.article_id, 'recommend')">申请推荐</button>
+              <button type="button" class="archive-action-button danger" @click="reasonAction(plugin.article_id, 'delete')">申请删除</button>
             </div>
           </article>
         </div>
@@ -89,7 +89,7 @@ useHead({ title: '我的插件 - 洛谷档案馆' })
             </div>
             <div class="application-status">
               <span :class="`status ${application.status}`">{{ statusNames[application.status] || application.status }}</span>
-              <button v-if="application.status === 'pending'" type="button" @click="cancel(application.id)">撤销</button>
+              <button v-if="application.status === 'pending'" type="button" class="archive-action-button" @click="cancel(application.id)">撤销</button>
             </div>
             <p v-if="application.review_note" class="review-note">审核意见：{{ application.review_note }}</p>
           </article>
@@ -105,14 +105,12 @@ useHead({ title: '我的插件 - 洛谷档案馆' })
 .manage-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 22px 26px; border: 1px solid var(--hero-border); border-radius: 8px; background: var(--hero-bg); }
 .manage-head h1 { margin: 0; font-size: 27px; }
 .manage-head p { margin: 6px 0 0; color: var(--text-muted); }
-.manage-head > a { padding: 8px 14px; border-radius: 6px; background: var(--link); color: #fff; text-decoration: none; }
 section > h2 { margin: 0 0 12px; font-size: 20px; }
 .plugin-list, .applications { border-top: 1px solid var(--border); }
 .plugin-row, .application-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px 20px; padding: 15px 2px; border-bottom: 1px solid var(--border); }
 .plugin-row h3 { margin: 0; font-size: 17px; }
 .plugin-row p, .application-row span { margin: 4px 0 0; color: var(--text-muted); font-size: 13px; }
 .row-actions, .application-status { display: flex; align-items: center; gap: 9px; }
-.row-actions a, .row-actions button, .application-status button { border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); padding: 6px 9px; text-decoration: none; cursor: pointer; font: inherit; font-size: 13px; }
 .row-actions .danger { color: var(--lg-red); }
 .status { padding: 2px 8px; border-radius: 4px; }
 .status.pending { background: #fff3cd; color: #7a5d00; }
