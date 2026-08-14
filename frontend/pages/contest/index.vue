@@ -51,6 +51,7 @@ function search() {
       <form class="search" @submit.prevent="search">
         <input v-model="keyword" placeholder="比赛名称或 ID" aria-label="搜索比赛">
         <button type="submit">搜索</button>
+        <NuxtLink to="/plugin/438gx0rt" class="official-plugin-link">官方插件</NuxtLink>
       </form>
     </section>
 
@@ -110,6 +111,12 @@ function search() {
   border: 1px solid var(--border); border-radius: 5px; background: var(--surface);
   color: var(--text); padding: 8px 14px; cursor: pointer;
 }
+.official-plugin-link {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  padding: 8px 14px; border: 1px solid #2586d7; border-radius: 5px;
+  background: #2586d7; color: #fff; white-space: nowrap;
+}
+.official-plugin-link:hover { background: #1673bd; border-color: #1673bd; color: #fff; }
 .contest-table-wrap { overflow-x: auto; border: 1px solid var(--border); background: var(--surface); }
 .contest-table { width: 100%; min-width: 760px; border-collapse: collapse; }
 th, td { padding: 13px 16px; border-bottom: 1px solid var(--border); text-align: left; }
@@ -126,5 +133,6 @@ th { color: var(--text-muted); font-size: 13px; font-weight: 600; }
   .contest-heading { align-items: stretch; flex-direction: column; padding: 18px 16px; }
   .search input { width: 100%; }
   .search { width: 100%; }
+  .search button { flex-shrink: 0; white-space: nowrap; }
 }
 </style>
