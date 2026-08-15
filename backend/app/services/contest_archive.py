@@ -34,6 +34,7 @@ log = get_logger(__name__)
 
 # 比赛结束后排行榜仍可能有少量结算延迟，统一等待五分钟再开始归档。
 _CONTEST_ARCHIVE_GRACE = timedelta(minutes=5)
+_CONTEST_DISPATCH_DEDUP_SEC = 15 * 60
 
 
 def _to_datetime(value: int | float | None) -> datetime:
@@ -185,6 +186,15 @@ async def dispatch_ready_contests() -> int:
 
         dispatched = 0
         for index, contest_id in enumerate(ended_ids):
+            # 失败比赛只允许每十五分钟重新投递一次，避免 403 等错误每分钟制造死信。
+            dispatch_key = f"contest:archive:dispatch:{contest_id}"
+            if not await redis.set(
+                dispatch_key,
+                "1",
+                ex=_CONTEST_DISPATCH_DEDUP_SEC,
+                nx=True,
+            ):
+                continue
             # 归档任务自身受 cn 域名门限制；这里只做短暂错峰，不创建长延迟任务。
             try:
                 if index == 0:
@@ -196,6 +206,7 @@ async def dispatch_ready_contests() -> int:
                     )
             except Exception as exc:
                 # 保留原状态，让下一分钟的到期检查继续尝试派发。
+                await redis.delete(dispatch_key)
                 log.error(
                     "contest.archive_dispatch_failed",
                     contest_id=contest_id,

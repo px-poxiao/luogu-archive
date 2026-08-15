@@ -117,6 +117,10 @@ def _task_target(task_type: str, url: str) -> str:
     if task_type == "judgement":
         return "latest"
 
+    if task_type == "contest_scoreboard":
+        page = query.get("page", [""])[0]
+        return f"contest={path_tail}, page={page}" if page else f"contest={path_tail}"
+
     return path_tail or url
 
 

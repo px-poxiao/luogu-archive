@@ -83,13 +83,32 @@ def _problem_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 async def fetch_detail(contest_id: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """抓取比赛基础信息与题目元数据。"""
+    """使用账号池抓取比赛基础信息与题目元数据。"""
 
-    result = await fetch_anon(
-        f"{CN_BASE}/contest/{contest_id}",
-        redis=get_redis(),
-        parse="html",
-    )
+    redis = get_redis()
+    node = get_default_node(NodeKind.AUTHED, cn=True)
+    async with lease_account(cn=True) as account:
+        if account is None:
+            raise CrawlerError("没有启用的爬取账号，无法抓取比赛详情")
+        try:
+            result = await fetch_authed(
+                f"{CN_BASE}/contest/{contest_id}",
+                node=node,
+                redis=redis,
+                cookies=account.as_cookie_dict(),
+                account_id=account.account_id,
+                parse="html",
+            )
+            await mark_account_ok(account.account_id)
+        except CrawlerAccountInvalid as exc:
+            # 明确失效的 Cookie 立即停用，后续任务自动改用其他账号。
+            await mark_account_failed(
+                account.account_id,
+                reason=f"Cookie 失效: {exc}",
+                disable=True,
+            )
+            raise
+
     data = _context_data(result.data)
     contest = data.get("contest")
     if not isinstance(contest, dict):
