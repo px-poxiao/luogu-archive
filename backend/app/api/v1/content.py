@@ -28,6 +28,7 @@ from app.models.luogu_content import (
     Paste,
     PasteVersion,
     Problem,
+    ProblemSolutionHistory,
 )
 from app.models.luogu_user import LuoguUser
 from app.services.feed_merge import merge_feed_rows
@@ -119,8 +120,20 @@ class ProblemItem(BaseModel):
     pid: str
     title: str
     difficulty: str | None
-    tags: list[int] = []
+    tags: list[int | str] = Field(default_factory=list)
     solution_open: bool
+
+
+class ProblemSolutionHistoryItem(BaseModel):
+    solution_open: bool
+    changed_at: datetime
+
+
+class ProblemDetail(ProblemItem):
+    last_solution_check_at: datetime | None
+    solution_history: list[ProblemSolutionHistoryItem] = Field(default_factory=list)
+    first_seen_at: datetime
+    updated_at: datetime
 
 
 class ProblemDifficultyBucket(BaseModel):
@@ -529,6 +542,47 @@ async def problem_list_full_by_difficulty(
         )
         for p in rows
     ]
+
+
+@router.get("/problem/{pid}", response_model=ProblemDetail)
+async def problem_detail(
+    pid: str,
+    db: AsyncSession = Depends(get_db),
+) -> ProblemDetail:
+    """返回单题难度、标签及题解开放状态和变更历史。"""
+
+    normalized = pid.strip().upper()
+    problem = await db.get(Problem, normalized)
+    if problem is None:
+        raise NotFoundError("题目未被本站收录")
+
+    history_q = (
+        select(ProblemSolutionHistory)
+        .where(ProblemSolutionHistory.pid == normalized)
+        .order_by(
+            desc(ProblemSolutionHistory.changed_at),
+            desc(ProblemSolutionHistory.id),
+        )
+    )
+    history = (await db.execute(history_q)).scalars().all()
+
+    return ProblemDetail(
+        pid=problem.pid,
+        title=problem.title,
+        difficulty=_problem_difficulty_name(problem.difficulty),
+        tags=problem.tags or [],
+        solution_open=problem.solution_open,
+        last_solution_check_at=problem.last_solution_check_at,
+        solution_history=[
+            ProblemSolutionHistoryItem(
+                solution_open=item.solution_open,
+                changed_at=item.changed_at,
+            )
+            for item in history
+        ],
+        first_seen_at=problem.first_seen_at,
+        updated_at=problem.updated_at,
+    )
 
 
 # ============================================================

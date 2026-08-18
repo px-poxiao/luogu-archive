@@ -1,17 +1,20 @@
-"""题目爬虫：列表页 + 题解开放状态。
+"""题目爬虫：官方题库包 + 题解开放状态。
 
-- 列表页 /problem/list?page=N
-  发现新题号 + 维护 title / difficulty / tags
+- 官方题库包 latest.ndjson.gz
+  全量维护 pid / title / difficulty / tags
 - 题解状态 /problem/<pid>
   匿名访问详情页，读 lentille 里的 problem.acceptSolution（true/false）
   ↑ 改造前用 /problem/solution/<pid> 需要 cookie；现在不需要，
   authed 节点完全释放给犇犇用。
 
-所有路径都自动走 .com.cn 主站节点（fetch_anon 按域名挑节点）。
+题库包走洛谷 CDN，不占用主站限流资源；题解状态走 .com.cn 主站节点。
 """
 from __future__ import annotations
 
+import json
 import time as _t
+import zlib
+from collections.abc import AsyncIterator
 
 from sqlalchemy import select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -20,7 +23,7 @@ from app.core.db import db_session
 from app.core.exceptions import CrawlerError
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
-from app.crawler.http import fetch_anon
+from app.crawler.http import fetch_anon, get_http_client
 from app.crawler.lentille import (
     current_data_from_injection,
     data_from_lentille,
@@ -36,6 +39,10 @@ from app.models._common import CrawlTaskStatus, utcnow
 from app.models.luogu_content import Problem, ProblemSolutionHistory
 
 log = get_logger(__name__)
+
+_PROBLEMSET_URL = "https://cdn.luogu.com.cn/problemset-open/latest.ndjson.gz"
+_PROBLEMSET_BATCH_SIZE = 500
+_PROBLEMSET_MIN_RECORDS = 1_000
 
 
 # ============================================================
@@ -83,184 +90,158 @@ def _diff_text(v) -> str | None:
 
 
 # ============================================================
-# 列表页：/problem/list?page=N
+# 官方题库包：latest.ndjson.gz
 # ============================================================
 
-async def crawl_list_page(page: int, *, trigger: str = "scheduled") -> None:
-    """爬题目列表一页，更新 problems 主表。"""
-    async with task_lock("problem_list", str(page)) as got:
+async def _iter_gzip_ndjson(chunks: AsyncIterator[bytes]) -> AsyncIterator[dict]:
+    """增量解压 gzip NDJSON，避免把完整题面包一次性放进内存。"""
+
+    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    pending = b""
+    async for chunk in chunks:
+        pending += decoder.decompress(chunk)
+        lines = pending.split(b"\n")
+        pending = lines.pop()
+        for line in lines:
+            if line.strip():
+                value = json.loads(line)
+                if isinstance(value, dict):
+                    yield value
+
+    pending += decoder.flush()
+    if not decoder.eof:
+        raise CrawlerError("官方题库包下载不完整")
+    if pending.strip():
+        value = json.loads(pending)
+        if isinstance(value, dict):
+            yield value
+
+
+def _problemset_row(item: dict, now) -> dict | None:
+    pid = str(item.get("pid") or "").strip().upper()
+    title = str(item.get("title") or "").strip()
+    if not pid or not title:
+        return None
+
+    tags_raw = item.get("tags")
+    tags = (
+        [tag for tag in tags_raw if isinstance(tag, (str, int))]
+        if isinstance(tags_raw, list)
+        else []
+    )
+    return {
+        "pid": pid[:32],
+        "title": title[:500],
+        "difficulty": _diff_text(item.get("difficulty")),
+        "tags": tags,
+        "first_seen_at": now,
+    }
+
+
+async def sync_problem_catalog(*, trigger: str = "scheduled") -> None:
+    """下载官方题库包，并全量更新其中每一道题的元数据。"""
+
+    async with task_lock("problem_catalog", "official", ttl_sec=30 * 60) as got:
         if not got:
-            log.info("crawl_problem_list.skip_locked", page=page)
+            log.info("problem_catalog.skip_locked")
             return
-        await _crawl_list_inner(page, trigger=trigger)
-
-
-def _extract_problem_items(kind: str, data: dict) -> list[dict]:
-    """从 lentille / injection 两种 SSR 结构中取题目列表。"""
-    if kind == "injection":
-        current = current_data_from_injection(data)
-        pr = current.get("problems")
-        if isinstance(pr, dict) and isinstance(pr.get("result"), list):
-            return pr["result"]
-        if isinstance(pr, list):
-            return pr
-        raise CrawlerError(f"injection.currentData 里无 problems: keys={list(current.keys())}")
-
-    inner = data_from_lentille(data)
-    for key in ("problems", "result"):
-        v = inner.get(key)
-        if isinstance(v, dict) and isinstance(v.get("result"), list):
-            return v["result"]
-        if isinstance(v, list):
-            return v
-    raise CrawlerError(f"lentille.data 里无 problems: keys={list(inner.keys())}")
-
-
-async def _crawl_list_inner(page: int, *, trigger: str) -> None:
-    redis = get_redis()
-    url_path = "/problem/list"
-    list_params = {"page": page, "orderBy": "pid", "order": "desc"}
-    # 列表页强制走 .com.cn（_resolve_url 已处理）；fetch_anon 自动选 cn 节点
     task_id = await record_task_start(
-        "problem_list",
-        f"{url_path}?page={page}&orderBy=pid&order=desc",
+        "problem_catalog",
+        _PROBLEMSET_URL,
         trigger=trigger_from(trigger),
-        node_id=None,  # 节点 ID 在 fetch_anon 内部确定，这里 placeholder
     )
     start = _t.monotonic()
+    http_status: int | None = None
     try:
-        # 洛谷题库默认顺序从 P1000 系老题开始，扫前 20 页会漏掉新题。
-        result = await fetch_anon(
-            url_path,
-            redis=redis,
-            params=list_params,
-            parse="html",
-        )
-        kind, page_data = extract_page_data(result.body_text)
-        items = _extract_problem_items(kind, page_data)
+        rows_by_pid: dict[str, dict] = {}
+        now = utcnow()
+        client = get_http_client()
+        async with client.stream(
+            "GET",
+            _PROBLEMSET_URL,
+            headers={
+                "Accept": "application/gzip",
+                "Accept-Encoding": "identity",
+            },
+            timeout=120,
+        ) as response:
+            http_status = response.status_code
+            response.raise_for_status()
+            async for item in _iter_gzip_ndjson(response.aiter_raw()):
+                row = _problemset_row(item, now)
+                if row is not None:
+                    rows_by_pid[row["pid"]] = row
 
-        rows = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            pid = item.get("pid")
-            if not pid:
-                continue
-            # lentille 字段：name / difficulty(int) / tags(int[]) / flag(int)
-            title = item.get("name") or item.get("title") or ""
-            tags_raw = item.get("tags") or []
-            tags = [int(t) for t in tags_raw if isinstance(t, (int, str)) and str(t).isdigit()]
-            rows.append(
-                {
-                    "pid": str(pid),
-                    "title": title[:500],
-                    "difficulty": _diff_text(item.get("difficulty")),
-                    "tags": tags,
-                    "first_seen_at": utcnow(),
-                }
-            )
+        rows = list(rows_by_pid.values())
+        if len(rows) < _PROBLEMSET_MIN_RECORDS:
+            raise CrawlerError(f"官方题库包记录异常，仅解析到 {len(rows)} 道题")
 
-        if rows:
-            sample = rows[0]
-            log.info(
-                "crawl_problem_list.sample",
-                page=page, count=len(rows),
-                pid=sample["pid"], title=sample["title"],
-                difficulty=sample["difficulty"], tags=sample["tags"],
-            )
-
-        # 写库：UPSERT title / difficulty / tags（solution_open 由 _crawl_problem_inner 单独维护）
-        new_pids: set[str] = set()
-        if rows:
-            async with db_session() as session:
-                pids_in_batch = [r["pid"] for r in rows]
-                existing_q = select(Problem.pid).where(Problem.pid.in_(pids_in_batch))
-                existing_set = {r[0] for r in (await session.execute(existing_q)).all()}
-                new_pids = set(pids_in_batch) - existing_set
-
-                stmt = mysql_insert(Problem).values(rows)
+        async with db_session() as session:
+            existing_set = set((await session.execute(select(Problem.pid))).scalars())
+            new_pids = set(rows_by_pid) - existing_set
+            for offset in range(0, len(rows), _PROBLEMSET_BATCH_SIZE):
+                batch = rows[offset:offset + _PROBLEMSET_BATCH_SIZE]
+                stmt = mysql_insert(Problem).values(batch)
                 stmt = stmt.on_duplicate_key_update(
                     title=stmt.inserted.title,
                     difficulty=stmt.inserted.difficulty,
                     tags=stmt.inserted.tags,
+                    updated_at=now,
                 )
                 await session.execute(stmt)
-                await session.commit()
+            await session.commit()
 
-        # cascade 派题解检测：
-        # - manual / 入口页发现等"高频用户触发"：批次内全部派
-        # - scheduled / cascaded_*：只派 new_pids（首次见的题），避免每天定时
-        #   扫一次就把 1000+ 已知题全部重派堵队列
-        # - 同 pid 从入队到执行完成全程去重，避免长队列超过固定 TTL 后重复放大
-        # - 错峰 11s/题（节点 0.1 req/s = 10s/req，留 1s 余量）
-        # - solution_open=False 且已检测过的老题不再派（已确认关闭，终态）
-        if rows:
-            from app.tasks.problem_queue import enqueue_problem_solution
+        from app.tasks.problem_queue import enqueue_problem_solution
 
-            async with db_session() as session:
-                pids_in_batch = [r["pid"] for r in rows]
-                # 已确认关闭的老题排除，避免关闭题长期占用 API 配额
-                closed_q = (
-                    select(Problem.pid)
-                    .where(Problem.pid.in_(pids_in_batch))
-                    .where(Problem.solution_open.is_(False))
-                    .where(Problem.last_solution_check_at.is_not(None))
+        dispatched = 0
+        skipped_dedup = 0
+        dispatch_failed = 0
+        for pid in sorted(new_pids):
+            try:
+                queued = await enqueue_problem_solution(
+                    pid,
+                    f"cascaded_from_catalog_{trigger}",
+                    delay_ms=dispatched * 11_000,
                 )
-                closed_set = {r[0] for r in (await session.execute(closed_q)).all()}
-
-            base_candidates = sorted(set(pids_in_batch) - closed_set)
-            # scheduled / cascade 触发：只派新题，老题留给 tiered_polling
-            is_low_priority_trigger = (
-                trigger == "scheduled" or trigger.startswith("cascaded")
-            )
-            if is_low_priority_trigger:
-                cascade_pids = [p for p in base_candidates if p in new_pids]
+            except Exception as exc:
+                dispatch_failed += 1
+                log.warning(
+                    "problem_catalog.cascade_solution_failed",
+                    pid=pid,
+                    error=str(exc),
+                )
+                continue
+            if queued.enqueued:
+                dispatched += 1
             else:
-                cascade_pids = base_candidates
-
-            dispatched = 0
-            skipped_dedup = 0
-            for pid in cascade_pids:
-                try:
-                    queued = await enqueue_problem_solution(
-                        pid,
-                        f"cascaded_from_list_{trigger}",
-                        delay_ms=dispatched * 11_000,
-                    )
-                    if queued.enqueued:
-                        dispatched += 1
-                    else:
-                        skipped_dedup += 1
-                except Exception as e:
-                    log.warning(
-                        "crawl_problem_list.cascade_solution_failed",
-                        pid=pid, error=str(e),
-                    )
-            log.info(
-                "crawl_problem_list.cascade_solution_dispatched",
-                page=page, new_count=len(new_pids),
-                cascade_count=dispatched, skipped_dedup=skipped_dedup,
-                total=len(pids_in_batch),
-                low_priority=is_low_priority_trigger,
-            )
+                skipped_dedup += 1
 
         dur = int((_t.monotonic() - start) * 1000)
         await record_task_done(
             task_id,
             status=CrawlTaskStatus.success,
-            http_status=result.status,
+            http_status=http_status,
             duration_ms=dur,
         )
-        log.info("crawl_problem_list.done", page=page, count=len(rows), kind=kind)
+        log.info(
+            "problem_catalog.done",
+            count=len(rows),
+            new_count=len(new_pids),
+            cascade_count=dispatched,
+            skipped_dedup=skipped_dedup,
+            dispatch_failed=dispatch_failed,
+            trigger=trigger,
+        )
     except Exception as e:
         dur = int((_t.monotonic() - start) * 1000)
         await record_task_done(
             task_id,
             status=CrawlTaskStatus.failed,
+            http_status=http_status,
             error_msg=str(e),
             duration_ms=dur,
         )
-        log.error("crawl_problem_list.failed", page=page, error=str(e))
+        log.error("problem_catalog.failed", error=str(e), trigger=trigger)
         raise
 
 

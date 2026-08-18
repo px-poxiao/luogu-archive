@@ -114,6 +114,9 @@ def _task_target(task_type: str, url: str) -> str:
         if page:
             return f"page={page}"
 
+    if task_type == "problem_catalog":
+        return "official"
+
     if task_type == "judgement":
         return "latest"
 

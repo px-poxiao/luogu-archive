@@ -37,7 +37,7 @@ class CrawlTask(Base):
 
     id: Mapped[int] = BigPKColumn()
     task_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    # "article" / "paste" / "feed" / "user" / "judgement" / "problem_list" / "problem_solution"
+    # "article" / "paste" / "feed" / "user" / "judgement" / "problem_catalog" / "problem_solution"
 
     url: Mapped[str] = mapped_column(String(1024), nullable=False)
     node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -179,7 +179,7 @@ async def _try_merge_or_enqueue(
         crawl_user_manual,
     )
     from app.tasks.problem_queue import (
-        enqueue_problem_list_page,
+        enqueue_problem_catalog,
         enqueue_problem_solution,
     )
 
@@ -213,24 +213,10 @@ async def _try_merge_or_enqueue(
             # ident 任意值都忽略
             msg = crawl_judgement_hi.send("manual")
         elif content_type == "problem":
-            # 列表页点保存：ident="list" → 扫前 N 页（发现新题 + 更新难度）
-            #               ident=数字 → 只扫这一页（admin 内部 / 调试用）
-            #               ident=P1001/B2001/CF1A... → 直接检查单题题解开放状态
+            # 题库页点刷新会解析官方题库包；具体 PID 仍检查题解开放状态。
             ident_norm = ident.strip()
             if ident_norm.lower() == "list":
-                # 错峰扫前 30 页（覆盖 1500 道）。每页 11 秒间隔避免 cn 节点限流（0.1 req/s）。
-                # 取第一页的消息 id 作为本次保存任务 id。
-                first = await enqueue_problem_list_page(1, "manual")
-                task_id = first.message_id
-                for page in range(2, 31):
-                    await enqueue_problem_list_page(
-                        page,
-                        "manual",
-                        delay_ms=(page - 1) * 11_000,
-                    )
-            elif ident_norm.isdigit():
-                page = int(ident_norm)
-                queued = await enqueue_problem_list_page(page, "manual")
+                queued = await enqueue_problem_catalog("manual")
                 task_id = queued.message_id
             else:
                 queued = await enqueue_problem_solution(ident_norm.upper(), "manual")

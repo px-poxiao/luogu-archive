@@ -407,19 +407,11 @@ async def job_problem_tier_weekly() -> None:
     )
 
 
-async def job_problem_list_scan() -> None:
-    """每天凌晨扫前 20 页题目列表，发现新题。
+async def job_problem_catalog_sync() -> None:
+    """每天解析一次官方题库包，全量刷新题目元数据并发现新题。"""
+    from app.tasks.problem_queue import enqueue_problem_catalog
 
-    新题进 problems 表后，list 页 cascade 会自动派一次 solution 检测（执行前全程去重）。
-    """
-    from app.tasks.problem_queue import enqueue_problem_list_page
-    for page in range(1, 21):
-        # 每页错峰 11s，让 cn 节点不被一口气怼 20 个 list 请求
-        await enqueue_problem_list_page(
-            page,
-            "scheduled",
-            delay_ms=(page - 1) * 11_000,
-        )
+    await enqueue_problem_catalog("scheduled")
 
 
 # ============================================================
@@ -457,8 +449,14 @@ def build_scheduler() -> AsyncIOScheduler:
     sched.add_job(job_problem_tier_daily, "cron", hour=2, minute=17, id="problem_tier_daily")
     # tier3 每天 02:33 派 1/7 配额，7 天滚完一轮
     sched.add_job(job_problem_tier_weekly, "cron", hour=2, minute=33, id="problem_tier_weekly")
-    # 列表页发现新题，凌晨 02:13
-    sched.add_job(job_problem_list_scan, "cron", hour=2, minute=13, id="problem_list_scan")
+    # 官方题库包同步，凌晨 02:13
+    sched.add_job(
+        job_problem_catalog_sync,
+        "cron",
+        hour=2,
+        minute=13,
+        id="problem_catalog_sync",
+    )
     return sched
 
 

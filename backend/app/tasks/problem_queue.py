@@ -51,16 +51,15 @@ async def _enqueue(actor_name: str, key: str, args: tuple, *, delay_ms: int = 0)
     return ProblemEnqueueResult(token, True)
 
 
-async def enqueue_problem_list_page(
-    page: int,
+async def enqueue_problem_catalog(
     trigger: str = "scheduled",
     *,
     delay_ms: int = 0,
 ) -> ProblemEnqueueResult:
     return await _enqueue(
-        "crawl_problem_list_page",
-        problem_queue_key("list", page),
-        (page, trigger),
+        "sync_problem_catalog",
+        problem_queue_key("catalog", "official"),
+        (trigger,),
         delay_ms=delay_ms,
     )
 
