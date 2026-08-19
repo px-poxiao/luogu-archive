@@ -20,7 +20,10 @@ from app import models  # noqa: F401  —— 不用它，但必须 import 让 Ba
 
 config = context.config
 # 动态注入连接串
-config.set_main_option("sqlalchemy.url", settings.sync_database_url)
+config.set_main_option(
+    "sqlalchemy.url",
+    settings.sync_database_url.replace("%", "%%"),
+)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
