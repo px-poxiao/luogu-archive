@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://127.0.0.1:6379/0"
 
     # ---------- 爬虫 ----------
-    CRAWLER_BASE_URL: str = CRAWLER_BASE_URL
+    CRAWLER_BASE_URL: str = "https://www.luogu.com.cn"
     CRAWLER_FALLBACK_BASE_URL: str = "https://luogu.com"
     CRAWLER_USER_AGENT: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
