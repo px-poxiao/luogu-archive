@@ -27,9 +27,6 @@ FRONTEND="$ROOT_DIR/frontend"
 BACKEND_ENV="$BACKEND/.env"
 FRONTEND_ENV="$FRONTEND/.env"
 
-# 当前项目采用的数据库基线迁移。
-BASE_MIGRATION="20260510_0001"
-
 echo "========================================"
 echo " luogu-archive 安装向导"
 echo "========================================"
@@ -130,19 +127,16 @@ echo ">>> 检查运行环境"
 
 PYBIN=""
 
-for c in python3.13 python3.12 python3.11 python3; do
+for c in python3.14 python3.13 python3.12 python3.11 python3; do
     if command -v "$c" >/dev/null 2>&1; then
-        ver=$(
-            "$c" -c 'import sys;print(sys.version_info[:2])' 2>/dev/null \
-            || echo "(0,0)"
-        )
-
-        case "$ver" in
-            *"(3, 11)"*|*"(3, 12)"*|*"(3, 13)"*)
-                PYBIN="$c"
-                break
-                ;;
-        esac
+        if "$c" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
+        then
+            PYBIN="$c"
+            break
+        fi
     fi
 done
 
@@ -477,10 +471,18 @@ CRAWLER_ANON_RATE_PER_SEC=0.33
 CRAWLER_AUTH_RATE_PER_SEC=0.17
 CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC=5
 CRAWLER_AUTH_QPH_PER_ACCOUNT=300
+CRAWLER_FEED_SCHEDULE_UTILIZATION=0.8
+CRAWLER_FEED_BACKLOG_WINDOWS=2
 CRAWLER_BREAKER_COOLDOWN_SEC=300
 CRAWLER_GLOBAL_BREAKER_NODE_THRESHOLD=3
 CRAWLER_TASK_LOCK_TTL_SEC=30
 CRAWLER_REQUEST_TIMEOUT_SEC=15
+
+# 资源队列 worker
+RESOURCE_WORKER_LEASE_SEC=120
+RESOURCE_WORKER_ACCOUNT_SYNC_SEC=30
+RESOURCE_WORKER_RECOVER_SEC=10
+RESOURCE_WORKER_IDLE_WAIT_SEC=1
 
 # 陶片合并窗口
 JUDGEMENT_GROUP_TIME_WINDOW_SEC=1800
@@ -496,24 +498,32 @@ JWT_ACCESS_TTL_SEC=900
 JWT_REFRESH_TTL_SEC=604800
 
 # 邮件
+MAIL_PROVIDER=smtp
+MAIL_FROM="$(dotenv_escape "${SMTP_FROM:-noreply@$SITE_DOMAIN}")"
+RESEND_API_KEY=""
 SMTP_HOST="$(dotenv_escape "$SMTP_HOST")"
 SMTP_PORT=${SMTP_PORT:-587}
 SMTP_USER="$(dotenv_escape "$SMTP_USER")"
 SMTP_PASSWORD="$(dotenv_escape "$SMTP_PASSWORD")"
-SMTP_FROM="$(dotenv_escape "${SMTP_FROM:-noreply@example.com}")"
+SMTP_FROM="$(dotenv_escape "${SMTP_FROM:-noreply@$SITE_DOMAIN}")"
 SMTP_USE_TLS=$SMTP_USE_TLS
 
 # 人机验证
 CAPTCHA_PROVIDER=$([ -n "$CAPTCHA_SITE_KEY" ] && echo turnstile || echo none)
 CAPTCHA_SITE_KEY="$(dotenv_escape "$CAPTCHA_SITE_KEY")"
 CAPTCHA_SECRET="$(dotenv_escape "$CAPTCHA_SECRET")"
+CAPTCHA_ALIYUN_ACCESS_KEY_ID=""
+CAPTCHA_ALIYUN_ACCESS_KEY_SECRET=""
+CAPTCHA_ALIYUN_SCENE_ID=""
+CAPTCHA_ALIYUN_REGION=cn
+CAPTCHA_ALIYUN_ENDPOINT=""
 CAPTCHA_TRIGGER_SAVE_PER_MIN=3
 CAPTCHA_TRIGGER_SAVE_PER_10MIN=10
 CAPTCHA_TRIGGER_PAGE_PER_HOUR=600
 
 # 保存按钮
 SAVE_IP_WINDOW_SEC=60
-SAVE_IP_WINDOW_MAX=5
+SAVE_IP_WINDOW_MAX=20
 SAVE_IP_HOUR_BREAKER_THRESHOLD=10
 SAVE_IP_HOUR_BREAKER_COOLDOWN_SEC=3600
 
@@ -521,6 +531,15 @@ SAVE_IP_HOUR_BREAKER_COOLDOWN_SEC=3600
 IMAGE_MIRROR_DIR="$ROOT_DIR/data/image_mirror"
 IMAGE_MIRROR_PUBLIC_PREFIX="/static/img"
 IMAGE_MIRROR_MAX_SIZE_MB=20
+
+# 题解修正 AI
+SOLUTION_FIX_AI_PROVIDER=openai
+SOLUTION_FIX_AI_API_KEY=""
+SOLUTION_FIX_AI_BASE_URL=""
+SOLUTION_FIX_AI_MODEL=""
+SOLUTION_FIX_AI_TIMEOUT_SEC=60
+SOLUTION_FIX_AI_MAX_INPUT_CHARS=60000
+SOLUTION_FIX_AI_RATE_LIMIT_PER_HOUR=5
 
 DATA_DIR="$ROOT_DIR/data"
 EOF
@@ -606,48 +625,29 @@ fi
 # ---------- 17. 数据库迁移 ----------
 
 echo ""
-echo ">>> 初始化数据库迁移状态"
-echo ""
-echo "当前策略："
-echo "  1. alembic upgrade $BASE_MIGRATION"
-echo "  2. alembic stamp head"
-echo ""
-echo "不会执行 alembic upgrade head。"
-echo ""
+echo ">>> 执行数据库迁移（alembic upgrade head)"
 
 cd "$BACKEND"
 
 . .venv/bin/activate
 
-echo ">>> 执行基线迁移：$BASE_MIGRATION"
-
-if ! alembic upgrade "$BASE_MIGRATION"; then
-    echo ""
-    echo "!! 基线数据库迁移失败。"
-    echo ""
-    echo "请确认："
-    echo "  1. MySQL 已启动"
-    echo "  2. 数据库 '$DB_NAME' 已创建"
-    echo "  3. 用户 '$DB_USER' 有完整权限"
-    echo "  4. backend/.env 中 DB_* 配置正确"
-    echo "  5. backend/alembic/env.py 使用 settings.sync_database_url"
-    echo ""
-    deactivate
-    exit 1
+if ! alembic upgrade head; then
+   echo ""
+   echo "!! 数据库迁移失败。"
+   echo ""
+   echo "请确认："
+   echo "  1. MySQL 已启动"
+   echo "  2. 数据库 '$DB_NAME' 已创建"
+   echo "  3. 用户 '$DB_USER' 有完整权限"
+   echo "  4. backend/.env 中 DB_* 配置正确"
+   echo "  5. backend/alembic/env.py 使用 settings.sync_database_url"
+   echo ""
+   deactivate
+   exit 1
 fi
 
 echo ""
-echo "✔ 基线迁移完成"
-
-echo ""
-echo ">>> 将 Alembic 直接标记到 head"
-
-if ! alembic stamp head; then
-    echo ""
-    echo "!! alembic stamp head 失败。"
-    deactivate
-    exit 1
-fi
+echo "✔ 数据库迁移完成"
 
 echo ""
 echo ">>> 当前 Alembic 版本："
@@ -659,9 +659,30 @@ deactivate
 # ---------- 18. 前端依赖 + 构建 ----------
 
 echo ""
-echo ">>> 安装前端依赖（pnpm install）"
+echo ">>> 安装前端依赖"
 
 cd "$FRONTEND"
+
+workspace_backup=""
+if [[ -f pnpm-workspace.yaml ]]; then
+    workspace_backup=$(mktemp)
+    cp pnpm-workspace.yaml "$workspace_backup"
+fi
+
+cleanup_pnpm_workspace() {
+    rm -f pnpm-workspace.yaml
+    if [[ -n "$workspace_backup" ]]; then
+        mv "$workspace_backup" pnpm-workspace.yaml
+    fi
+}
+trap cleanup_pnpm_workspace EXIT
+
+cat > pnpm-workspace.yaml <<'EOF'
+allowBuilds:
+  '@parcel/watcher': true
+  esbuild: true
+  vue-demi: true
+EOF
 
 install_frontend_dependencies() {
     if [[ -f pnpm-lock.yaml ]]; then
@@ -671,19 +692,6 @@ install_frontend_dependencies() {
     fi
 }
 
-set +e
-install_frontend_dependencies
-initial_install_status=$?
-set -e
-
-if [[ "$initial_install_status" -ne 0 ]]; then
-    echo ">>> 首次安装检测到构建脚本需要审批，将在审批后重试"
-fi
-
-echo ">>> 自动审批前端依赖构建脚本"
-pnpm approve-builds --all
-
-echo ">>> 重新安装前端依赖（应用构建脚本审批）"
 install_frontend_dependencies
 
 echo ""
@@ -750,7 +758,6 @@ echo ""
 echo "数据库："
 echo "  数据库：$DB_NAME"
 echo "  用户：$DB_USER"
-echo "  实际迁移到：$BASE_MIGRATION"
 echo "  Alembic 状态：head"
 echo ""
 echo "下一步："

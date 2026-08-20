@@ -11,7 +11,7 @@ from __future__ import annotations
 from functools import cached_property, lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.constants import CRAWLER_BASE_URL
@@ -46,11 +46,12 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.WEB_CORS_ORIGINS.split(",") if o.strip()]
 
     # ---------- 数据库 ----------
-    DB_HOST: str = "127.0.0.1"
-    DB_PORT: int = 3306
-    DB_USER: str = "luogu_archive"
-    DB_PASSWORD: str = "change_me_in_real_env"
-    DB_NAME: str = "luogu_archive"
+    # 必须在 .env 中显式配置，避免启动时才发现数据库参数缺失。
+    DB_HOST: str
+    DB_PORT: int
+    DB_USER: str
+    DB_PASSWORD: str
+    DB_NAME: str
     DB_POOL_SIZE: int = 20
     DB_MAX_OVERFLOW: int = 10
 
@@ -119,10 +120,12 @@ class Settings(BaseSettings):
     # ---------- 管理员 ----------
     ADMIN_2FA_ISSUER: str = "LuoguArchive"
     ADMIN_SESSION_MAX_AGE_SEC: int = 3600
-    ADMIN_TOTP_ENCRYPTION_KEY: str = ""
+    # 必须在 .env 中配置，否则 TOTP 解密/管理员认证会在启动时直接失败。
+    ADMIN_TOTP_ENCRYPTION_KEY: str
 
     # ---------- JWT ----------
-    JWT_SECRET: str = "change_me_to_random_256bit_hex"
+    # 必须在 .env 中配置，缺失时直接报错，避免在请求阶段才发现签名密钥无效。
+    JWT_SECRET: str
     JWT_ACCESS_TTL_SEC: int = 900
     JWT_REFRESH_TTL_SEC: int = 604800
 
