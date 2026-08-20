@@ -37,6 +37,25 @@ echo "本脚本将交互式收集配置并生成 .env。"
 echo "如果已有 .env 且不想重装，直接运行 ./start.sh 即可。"
 echo ""
 
+if [[ -f "$BACKEND_ENV" || -f "$FRONTEND_ENV" ]]; then
+    echo ">>> 检测到已有 .env ，请确认是否覆盖"
+    if [[ -f "$BACKEND_ENV" ]]; then
+        echo "  - $BACKEND_ENV"
+    fi
+    if [[ -f "$FRONTEND_ENV" ]]; then
+        echo "  - $FRONTEND_ENV"
+    fi
+    read -rp "覆盖现有配置？[y/N]: " OVERWRITE_EXISTING
+    case "${OVERWRITE_EXISTING:-N}" in
+        [Yy]|[Yy][Ee][Ss])
+            ;;
+        *)
+            echo "已跳过安装，保留现有 .env 配置。"
+            exit 0
+            ;;
+    esac
+fi
+
 # ---------- 0. 基础函数 ----------
 
 need() {
@@ -72,6 +91,17 @@ ask_secret() {
     echo
 
     printf -v "$var" '%s' "$val"
+}
+
+# 确保 .env 值能安全写回文件。
+# 需要转义反斜杠、双引号、美元符号和换行。
+dotenv_escape() {
+    local value="${1}"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//\$/\\$}"
+    value="${value//$'\n'/\\n}"
+    printf '%s' "$value"
 }
 
 # SQL 字符串转义。
@@ -250,31 +280,33 @@ DB_NAME_SQL="$(mysql_escape_identifier "$DB_NAME")"
 DB_USER_SQL="$(mysql_escape_string "$DB_USER")"
 DB_PASSWORD_SQL="$(mysql_escape_string "$DB_PASSWORD")"
 
+if [[ "$DB_HOST" == "127.0.0.1" || "$DB_HOST" == "localhost" ]]; then
+    DB_USER_HOSTS=("localhost" "127.0.0.1")
+else
+    DB_USER_HOSTS=("$DB_HOST" "%")
+fi
+
 mysql_admin <<SQL
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME_SQL\`
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;
+SQL
 
-CREATE USER IF NOT EXISTS '$DB_USER_SQL'@'localhost'
+for db_user_host in "${DB_USER_HOSTS[@]}"; do
+    mysql_admin <<SQL
+CREATE USER IF NOT EXISTS '$DB_USER_SQL'@'$db_user_host'
     IDENTIFIED BY '$DB_PASSWORD_SQL';
 
-ALTER USER '$DB_USER_SQL'@'localhost'
-    IDENTIFIED BY '$DB_PASSWORD_SQL';
-
-GRANT ALL PRIVILEGES
-    ON \`$DB_NAME_SQL\`.*
-    TO '$DB_USER_SQL'@'localhost';
-
-CREATE USER IF NOT EXISTS '$DB_USER_SQL'@'127.0.0.1'
-    IDENTIFIED BY '$DB_PASSWORD_SQL';
-
-ALTER USER '$DB_USER_SQL'@'127.0.0.1'
+ALTER USER '$DB_USER_SQL'@'$db_user_host'
     IDENTIFIED BY '$DB_PASSWORD_SQL';
 
 GRANT ALL PRIVILEGES
     ON \`$DB_NAME_SQL\`.*
-    TO '$DB_USER_SQL'@'127.0.0.1';
+    TO '$DB_USER_SQL'@'$db_user_host';
+SQL
+done
 
+mysql_admin <<SQL
 FLUSH PRIVILEGES;
 SQL
 
@@ -421,26 +453,26 @@ APP_TIMEZONE=Asia/Shanghai
 # Web 服务
 WEB_HOST=127.0.0.1
 WEB_PORT=$BACKEND_PORT
-WEB_PUBLIC_ORIGIN=https://$SITE_DOMAIN
-WEB_CORS_ORIGINS=https://$SITE_DOMAIN
+WEB_PUBLIC_ORIGIN="https://$SITE_DOMAIN"
+WEB_CORS_ORIGINS="https://$SITE_DOMAIN"
 
 # MySQL
 DB_HOST=$DB_HOST
 DB_PORT=$DB_PORT
 DB_USER=$DB_USER
-DB_PASSWORD=$DB_PASSWORD
+DB_PASSWORD="$(dotenv_escape "$DB_PASSWORD")"
 DB_NAME=$DB_NAME
 DB_POOL_SIZE=20
 DB_MAX_OVERFLOW=10
 
 # Redis
-REDIS_URL=$REDIS_URL
+REDIS_URL="$(dotenv_escape "$REDIS_URL")"
 
 # 爬虫
-CRAWLER_BASE_URL=$CRAWLER_BASE_URL
-CRAWLER_FALLBACK_BASE_URL=https://www.luogu.com.cn
-CRAWLER_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.130 Safari/537.36
-CRAWLER_CONTACT_EMAIL=$CRAWLER_CONTACT_EMAIL
+CRAWLER_BASE_URL="$(dotenv_escape "$CRAWLER_BASE_URL")"
+CRAWLER_FALLBACK_BASE_URL="https://www.luogu.com.cn"
+CRAWLER_USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.130 Safari/537.36"
+CRAWLER_CONTACT_EMAIL="$(dotenv_escape "$CRAWLER_CONTACT_EMAIL")"
 CRAWLER_ANON_RATE_PER_SEC=0.33
 CRAWLER_AUTH_RATE_PER_SEC=0.17
 CRAWLER_AUTH_ACCOUNT_INTERVAL_SEC=5
@@ -456,25 +488,25 @@ JUDGEMENT_GROUP_TIME_WINDOW_SEC=1800
 # 管理员
 ADMIN_2FA_ISSUER=LuoguArchive
 ADMIN_SESSION_MAX_AGE_SEC=3600
-ADMIN_TOTP_ENCRYPTION_KEY=$FERNET_KEY
+ADMIN_TOTP_ENCRYPTION_KEY="$(dotenv_escape "$FERNET_KEY")"
 
 # JWT
-JWT_SECRET=$JWT_SECRET
+JWT_SECRET="$(dotenv_escape "$JWT_SECRET")"
 JWT_ACCESS_TTL_SEC=900
 JWT_REFRESH_TTL_SEC=604800
 
 # 邮件
-SMTP_HOST=$SMTP_HOST
+SMTP_HOST="$(dotenv_escape "$SMTP_HOST")"
 SMTP_PORT=${SMTP_PORT:-587}
-SMTP_USER=$SMTP_USER
-SMTP_PASSWORD=$SMTP_PASSWORD
-SMTP_FROM=${SMTP_FROM:-noreply@example.com}
+SMTP_USER="$(dotenv_escape "$SMTP_USER")"
+SMTP_PASSWORD="$(dotenv_escape "$SMTP_PASSWORD")"
+SMTP_FROM="$(dotenv_escape "${SMTP_FROM:-noreply@example.com}")"
 SMTP_USE_TLS=$SMTP_USE_TLS
 
 # 人机验证
 CAPTCHA_PROVIDER=$([ -n "$CAPTCHA_SITE_KEY" ] && echo turnstile || echo none)
-CAPTCHA_SITE_KEY=$CAPTCHA_SITE_KEY
-CAPTCHA_SECRET=$CAPTCHA_SECRET
+CAPTCHA_SITE_KEY="$(dotenv_escape "$CAPTCHA_SITE_KEY")"
+CAPTCHA_SECRET="$(dotenv_escape "$CAPTCHA_SECRET")"
 CAPTCHA_TRIGGER_SAVE_PER_MIN=3
 CAPTCHA_TRIGGER_SAVE_PER_10MIN=10
 CAPTCHA_TRIGGER_PAGE_PER_HOUR=600
@@ -486,11 +518,11 @@ SAVE_IP_HOUR_BREAKER_THRESHOLD=10
 SAVE_IP_HOUR_BREAKER_COOLDOWN_SEC=3600
 
 # 图片镜像
-IMAGE_MIRROR_DIR=$ROOT_DIR/data/image_mirror
-IMAGE_MIRROR_PUBLIC_PREFIX=/static/img
+IMAGE_MIRROR_DIR="$ROOT_DIR/data/image_mirror"
+IMAGE_MIRROR_PUBLIC_PREFIX="/static/img"
 IMAGE_MIRROR_MAX_SIZE_MB=20
 
-DATA_DIR=$ROOT_DIR/data
+DATA_DIR="$ROOT_DIR/data"
 EOF
 
 mkdir -p "$ROOT_DIR/data/image_mirror"
@@ -504,12 +536,12 @@ echo "✔ backend/.env 已生成"
 echo ">>> 写入 $FRONTEND_ENV"
 
 cat > "$FRONTEND_ENV" <<EOF
-NUXT_API_INTERNAL_URL=http://127.0.0.1:$BACKEND_PORT
-NUXT_PUBLIC_API_BASE_URL=https://$SITE_DOMAIN
+NUXT_API_INTERNAL_URL="http://127.0.0.1:$BACKEND_PORT"
+NUXT_PUBLIC_API_BASE_URL="https://$SITE_DOMAIN"
 NUXT_PUBLIC_CAPTCHA_PROVIDER=$([ -n "$CAPTCHA_SITE_KEY" ] && echo turnstile || echo none)
-NUXT_PUBLIC_CAPTCHA_SITE_KEY=$CAPTCHA_SITE_KEY
-PORT=$FRONTEND_PORT
-HOST=127.0.0.1
+NUXT_PUBLIC_CAPTCHA_SITE_KEY="$(dotenv_escape "$CAPTCHA_SITE_KEY")"
+PORT="$FRONTEND_PORT"
+HOST="127.0.0.1"
 EOF
 
 echo "✔ frontend/.env 已生成"
