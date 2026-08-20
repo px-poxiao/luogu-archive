@@ -14,7 +14,6 @@ from typing import Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.constants import CRAWLER_BASE_URL
 
 
 class Settings(BaseSettings):
