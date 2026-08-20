@@ -3,6 +3,8 @@ const api = useApi()
 const { format } = useTime()
 const route = useRoute()
 const contestId = computed(() => Number(route.params.id))
+// 洛谷比赛接口中 method=2 表示 ICPC 赛制。
+const ICPC_CONTEST_METHOD = 2
 const page = ref(1)
 const keyword = ref('')
 const appliedKeyword = ref('')
@@ -48,6 +50,7 @@ interface ScoreboardResponse {
     problem_count: number
     participant_count: number
     rated: boolean
+    method: number | null
     rating_mode: 'loading' | 'prediction' | 'official' | 'unrated'
     status: string
   }
@@ -92,6 +95,19 @@ function formatDuration(milliseconds: number | undefined | null) {
 function formatScore(value: number | undefined) {
   if (value === undefined || value === null) return '-'
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
+}
+
+function problemScoreClass(value: number | undefined) {
+  if (value === undefined || value === null) return {}
+
+  if (data.value?.contest.method === ICPC_CONTEST_METHOD) {
+    return {
+      accepted: value >= 0,
+      rejected: value < 0,
+    }
+  }
+
+  return { accepted: value > 0 }
 }
 
 function toggleWarning(uid: number) {
@@ -204,7 +220,7 @@ function toggleWarning(uid: number) {
                 </td>
                 <td v-for="problem in data.problems" :key="problem.pid" class="problem-col score-cell">
                   <template v-if="row.problem_details[problem.pid]">
-                    <strong :class="{ accepted: (row.problem_details[problem.pid].score || 0) > 0 }">
+                    <strong :class="problemScoreClass(row.problem_details[problem.pid].score)">
                       {{ formatScore(row.problem_details[problem.pid].score) }}
                     </strong>
                     <small>{{ formatDuration(row.problem_details[problem.pid].runningTime) }}</small>
@@ -286,6 +302,7 @@ thead .sticky-rank, thead .sticky-user, thead .sticky-rating { z-index: 4; }
 .score-cell strong, .score-cell small { display: block; }
 .score-cell small { margin-top: 1px; color: var(--text-muted); font-size: 11px; font-weight: 400; }
 .score-cell .accepted { color: var(--lg-green); }
+.score-cell .rejected { color: var(--lg-red); }
 .penalized { opacity: .7; }
 .problem-tip { position: relative; display: inline-flex; justify-content: center; min-width: 30px; cursor: help; }
 .problem-popover, .warning-popover {

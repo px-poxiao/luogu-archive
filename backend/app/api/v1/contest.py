@@ -300,6 +300,7 @@ async def contest_scoreboard(
             "problem_count": contest.problem_count or len(problems),
             "participant_count": contest.participant_count,
             "rated": rated,
+            "method": contest.method,
             "rating_mode": (
                 "unrated"
                 if not rated
