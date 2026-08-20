@@ -33,6 +33,8 @@ def upgrade() -> None:
     from app import models  # noqa: F401
 
     bind = op.get_bind()
+    if hasattr(bind, "engine"):
+        bind = bind.engine
     Base.metadata.create_all(bind=bind)
 
 
@@ -41,4 +43,6 @@ def downgrade() -> None:
     from app import models  # noqa: F401
 
     bind = op.get_bind()
+    if hasattr(bind, "engine"):
+        bind = bind.engine
     Base.metadata.drop_all(bind=bind)

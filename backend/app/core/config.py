@@ -8,11 +8,13 @@
 """
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.constants import CRAWLER_BASE_URL
 
 
 class Settings(BaseSettings):
@@ -21,6 +23,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        case_sensitive=False,
         extra="ignore",
     )
 
@@ -35,7 +38,7 @@ class Settings(BaseSettings):
     WEB_HOST: str = "0.0.0.0"
     WEB_PORT: int = 8000
     WEB_PUBLIC_ORIGIN: str = "http://localhost:3000"
-    WEB_CORS_ORIGINS: str = "http://localhost:3000"  # 逗号分隔字符串
+    WEB_CORS_ORIGINS: str = "http://localhost:3000"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -43,29 +46,42 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.WEB_CORS_ORIGINS.split(",") if o.strip()]
 
     # ---------- 数据库 ----------
+    # 必须在 .env 中显式配置，避免启动时才发现数据库参数缺失。
     DB_HOST: str
-    DB_PORT: int = 3306
+    DB_PORT: int
     DB_USER: str
     DB_PASSWORD: str
     DB_NAME: str
     DB_POOL_SIZE: int = 20
     DB_MAX_OVERFLOW: int = 10
 
-    @property
+    @cached_property
     def async_database_url(self) -> str:
-        """SQLAlchemy 异步驱动使用的连接串。"""
-        return (
-            f"mysql+aiomysql://{self.DB_USER}:{self.DB_PASSWORD}"
-            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}?charset=utf8mb4"
-        )
+        from sqlalchemy.engine import URL
 
-    @property
+        return URL.create(
+            drivername="mysql+aiomysql",
+            username=self.DB_USER,
+            password=self.DB_PASSWORD,
+            host=self.DB_HOST,
+            port=self.DB_PORT,
+            database=self.DB_NAME,
+            query={"charset": "utf8mb4"},
+        ).render_as_string(hide_password=False)
+
+    @cached_property
     def sync_database_url(self) -> str:
-        """同步连接串，Alembic 迁移使用。"""
-        return (
-            f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}"
-            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}?charset=utf8mb4"
-        )
+        from sqlalchemy.engine import URL
+
+        return URL.create(
+            drivername="mysql+pymysql",
+            username=self.DB_USER,
+            password=self.DB_PASSWORD,
+            host=self.DB_HOST,
+            port=self.DB_PORT,
+            database=self.DB_NAME,
+            query={"charset": "utf8mb4"},
+        ).render_as_string(hide_password=False)
 
     # ---------- Redis ----------
     REDIS_URL: str = "redis://127.0.0.1:6379/0"
@@ -96,10 +112,6 @@ class Settings(BaseSettings):
     RESOURCE_WORKER_IDLE_WAIT_SEC: float = 1.0
 
     # ---------- 节点身份（多 worker 部署） ----------
-    # 当前 worker 的节点 ID。同一个进程的所有匿名爬取 / 认证爬取共享同一个 ID。
-    # 单机部署可不填，使用默认 "local-anon-01" / "local-authed-01"。
-    # 多机部署时每台 worker 必须填唯一值，例如 NODE_ID=worker-tencent-sh-01
-    # 这样限流 / 熔断 / 审计才能区分各机器。
     NODE_ID: str = ""
 
     # ---------- 陶片 ----------
@@ -108,22 +120,20 @@ class Settings(BaseSettings):
     # ---------- 管理员 ----------
     ADMIN_2FA_ISSUER: str = "LuoguArchive"
     ADMIN_SESSION_MAX_AGE_SEC: int = 3600
+    # 必须在 .env 中配置，否则 TOTP 解密/管理员认证会在启动时直接失败。
     ADMIN_TOTP_ENCRYPTION_KEY: str
 
     # ---------- JWT ----------
+    # 必须在 .env 中配置，缺失时直接报错，避免在请求阶段才发现签名密钥无效。
     JWT_SECRET: str
     JWT_ACCESS_TTL_SEC: int = 900
     JWT_REFRESH_TTL_SEC: int = 604800
 
     # ---------- 邮件 ----------
-    # 发送后端：resend（HTTP API，推荐）或 smtp（aiosmtplib）
     MAIL_PROVIDER: Literal["resend", "smtp"] = "smtp"
-    MAIL_FROM: str = "noreply@example.com"   # 发件人，需为已验证域名下的地址
-
-    # Resend HTTP API
+    MAIL_FROM: str = "noreply@example.com"
     RESEND_API_KEY: str = ""
 
-    # 传统 SMTP（MAIL_PROVIDER=smtp 时用）
     SMTP_HOST: str = "smtp.example.com"
     SMTP_PORT: int = 587
     SMTP_USER: str = "noreply@example.com"
@@ -156,7 +166,6 @@ class Settings(BaseSettings):
     IMAGE_MIRROR_MAX_SIZE_MB: int = 20
 
     # ---------- 题解修正 AI ----------
-    # 前端不暴露 provider 选择；这里只配置服务端使用的唯一模型。
     SOLUTION_FIX_AI_PROVIDER: Literal["openai", "anthropic"] = "openai"
     SOLUTION_FIX_AI_API_KEY: str = ""
     SOLUTION_FIX_AI_BASE_URL: str = ""
@@ -178,8 +187,7 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """单例。第一次调用时从 .env 读取，之后复用。"""
-    return Settings()  # type: ignore[call-arg]
+    return Settings()
 
 
-# 快捷别名，方便导入
 settings: Settings = get_settings()
