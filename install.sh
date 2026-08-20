@@ -663,11 +663,28 @@ echo ">>> 安装前端依赖（pnpm install）"
 
 cd "$FRONTEND"
 
-if [[ -f pnpm-lock.yaml ]]; then
-    pnpm install --frozen-lockfile 2>/dev/null || pnpm install
-else
-    pnpm install
+install_frontend_dependencies() {
+    if [[ -f pnpm-lock.yaml ]]; then
+        pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+    else
+        pnpm install
+    fi
+}
+
+set +e
+install_frontend_dependencies
+initial_install_status=$?
+set -e
+
+if [[ "$initial_install_status" -ne 0 ]]; then
+    echo ">>> 首次安装检测到构建脚本需要审批，将在审批后重试"
 fi
+
+echo ">>> 自动审批前端依赖构建脚本"
+pnpm approve-builds --all
+
+echo ">>> 重新安装前端依赖（应用构建脚本审批）"
+install_frontend_dependencies
 
 echo ""
 echo ">>> 构建前端（pnpm build）"
