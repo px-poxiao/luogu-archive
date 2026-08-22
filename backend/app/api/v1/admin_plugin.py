@@ -569,20 +569,27 @@ async def admin_list_reports(
     admin: Admin = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    q = select(PluginReport).order_by(desc(PluginReport.created_at)).limit(200)
+    # 公开插件详情使用文章编号作为路由参数，因此在举报列表中一并返回。
+    q = (
+        select(PluginReport, Plugin.article_id)
+        .join(Plugin, Plugin.id == PluginReport.plugin_id)
+        .order_by(desc(PluginReport.created_at))
+        .limit(200)
+    )
     if status != "all":
         q = q.where(PluginReport.status == status)
-    rows = (await db.execute(q)).scalars().all()
+    rows = (await db.execute(q)).all()
     return [{
         "id": row.id,
         "plugin_id": row.plugin_id,
+        "article_id": article_id,
         "reporter_user_id": row.reporter_user_id,
         "report_type": row.report_type,
         "description": row.description,
         "status": row.status,
         "admin_note": row.admin_note,
         "created_at": row.created_at.isoformat(),
-    } for row in rows]
+    } for row, article_id in rows]
 
 
 @router.post("/plugin-reports/{report_id}/handle")
