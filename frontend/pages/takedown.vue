@@ -1,12 +1,24 @@
 <script setup lang="ts">
 const api = useApi()
-const form = ref({ target_url: '', requester_name: '', requester_contact: '', reason: '' })
+const auth = useAuthStore()
+const form = ref({ target_url: '', requester_name: '', requester_email: '', reason: '' })
 const probe = ref<any>(null)
 const probing = ref(false)
 const state = ref<'idle' | 'submitting' | 'success' | 'failed'>('idle')
 const message = ref('')
 let timer: ReturnType<typeof setTimeout> | undefined
 let probeVersion = 0
+
+watch(
+  [() => auth.initialized, () => auth.isLoggedIn, () => auth.email],
+  () => {
+    // 登录态异步恢复后自动带入注册邮箱，但不覆盖用户已经修改的内容。
+    if (auth.initialized && auth.isLoggedIn && !form.value.requester_email) {
+      form.value.requester_email = auth.email
+    }
+  },
+  { immediate: true },
+)
 
 const typeNames: Record<string, string> = {
   user: '用户主页',
@@ -67,7 +79,8 @@ async function submit() {
     const result: any = await api('/takedown', {
       method: 'POST',
       body: { probe_token: probe.value.token, requester_name: form.value.requester_name,
-        requester_contact: form.value.requester_contact, reason: form.value.reason },
+        requester_email: form.value.requester_email || null,
+        reason: form.value.reason },
     })
     state.value = 'success'
     message.value = result.auto_approved ? '身份匹配，内容已停止公开展示。' : '申请已提交，等待管理员处理。'
@@ -108,12 +121,16 @@ async function submit() {
         <template v-else>
           <div class="target-grid">
             <label><span>你的称呼（选填）</span><input v-model="form.requester_name" maxlength="128"></label>
-            <label><span>联系方式（选填）</span><input v-model="form.requester_contact" maxlength="256"></label>
+            <label><span>联系邮箱（选填）</span><input
+              v-model.trim="form.requester_email" type="email" autocomplete="email" maxlength="254"></label>
           </div>
           <label><span>申请理由</span><textarea v-model="form.reason" rows="6" maxlength="5000"
             placeholder="请说明内容关系及停止公开展示的理由" /></label>
         </template>
       </template>
+      <p class="self-service-note">
+        自己的内容？<NuxtLink to="/login">登录</NuxtLink>或<NuxtLink to="/register">注册</NuxtLink>并在<NuxtLink to="/me">个人中心绑定洛谷账号</NuxtLink>后，可无条件自动删除。
+      </p>
       <button type="submit" :disabled="!probe?.can_submit || state === 'submitting'">
         {{ state === 'submitting' ? 'loading……' : '提交申请' }}
       </button>
@@ -123,11 +140,12 @@ async function submit() {
 </template>
 
 <style scoped>
-.wrap{max-width:860px;margin:0 auto}form{padding:24px 0}.target-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.wrap{max-width:860px;margin:0 auto}form{padding:24px 0}.target-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.target-grid>label:only-child{grid-column:1/-1}
 label{display:block;margin:14px 0}label span{display:block;font-weight:600;margin-bottom:7px}input,select,textarea{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font:inherit}
 .address-field{margin:8px 0 20px}.address-field input{min-height:58px;padding:14px 16px;font-size:17px}.address-field small{display:block;margin-top:7px;color:var(--text-muted)}
 .address-field .recognized{display:block;margin-top:10px;color:var(--text);font-weight:600}
 .probe,.owner-note{display:flex;align-items:center;gap:14px;margin:18px 0;padding:14px 16px;border:1px solid var(--border);border-radius:6px}.probe.allowed,.owner-note{border-color:var(--lg-green);background:color-mix(in srgb,var(--lg-green) 9%,var(--surface))}.probe.blocked{border-color:var(--lg-red);background:color-mix(in srgb,var(--lg-red) 8%,var(--surface))}.neutral{color:var(--text-muted)}
+.self-service-note{margin:18px 0 10px;color:var(--text-muted);font-size:14px}
 button{padding:10px 24px;border:0;border-radius:6px;background:var(--link);color:#fff;font:inherit;cursor:pointer}button:disabled{cursor:not-allowed;opacity:.5}.err{color:var(--lg-red)}.success{padding:36px;border:1px solid var(--lg-green);text-align:center}.success h2{color:var(--lg-green)}
 @media(max-width:700px){.target-grid{grid-template-columns:1fr;gap:0}.probe{align-items:flex-start;flex-direction:column;gap:4px}}
 </style>

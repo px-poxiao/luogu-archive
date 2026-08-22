@@ -66,7 +66,7 @@ async function restore(id: number) {
           <td><a v-if="r.target_url" :href="r.target_url" target="_blank" rel="noopener noreferrer">{{ r.target_type }}/{{ r.target_id }}</a><code v-else>{{ r.target_type }}/{{ r.target_id }}</code></td>
           <td>
             {{ r.requester_name || '-' }}<br>
-            <small class="muted">{{ r.requester_contact || '' }}</small>
+            <small class="muted">{{ r.requester_email || '' }}</small>
           </td>
           <td class="reason">{{ r.reason }}</td>
           <td>

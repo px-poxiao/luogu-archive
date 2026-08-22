@@ -376,7 +376,7 @@ async def list_takedowns(
             "target_url": r.target_url,
             "target_author_uid": r.target_author_uid,
             "requester_name": r.requester_name,
-            "requester_contact": r.requester_contact,
+            "requester_email": r.requester_email,
             "reason": r.reason,
             "status": r.status.value,
             "created_at": r.created_at.isoformat(),

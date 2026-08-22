@@ -5,7 +5,7 @@ import secrets
 from datetime import timedelta, timezone
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -31,7 +31,7 @@ class ProbeReq(BaseModel):
 class SubmitReq(BaseModel):
     probe_token: str = Field(..., min_length=16, max_length=64)
     requester_name: str | None = Field(None, max_length=128)
-    requester_contact: str | None = Field(None, max_length=256)
+    requester_email: EmailStr | None = None
     reason: str | None = Field(None, max_length=5000)
 
 
@@ -116,8 +116,14 @@ async def submit_takedown(body: SubmitReq, request: Request,
     ))
     if duplicate is not None:
         raise ConflictError("该内容已有待处理申请")
+    # 登录用户未另填邮箱时使用注册邮箱，填写后则以表单中的联系邮箱为准。
+    requester_email = (
+        str(body.requester_email).lower()
+        if body.requester_email
+        else (user.email if user else None)
+    )
     row = TakedownRequest(requester_user_id=user.id if user else None,
-        requester_name=body.requester_name, requester_contact=body.requester_contact,
+        requester_name=body.requester_name, requester_email=requester_email,
         target_type=probe.target_type, target_id=probe.target_id, target_url=probe.target_url,
         target_author_uid=probe.author_uid, reason=reason,
         status=TakedownStatus.approved if is_owner else TakedownStatus.pending,

@@ -101,7 +101,10 @@ class TakedownRequest(Base, TimestampMixin):
     id: Mapped[int] = BigPKColumn()
     requester_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     requester_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    requester_contact: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # 数据库沿用历史列名 requester_contact，应用层只允许保存联系邮箱。
+    requester_email: Mapped[str | None] = mapped_column(
+        "requester_contact", String(256), nullable=True
+    )
     # 支持的目标类型：article/paste/feed/user/judgement/image
     target_type: Mapped[str] = mapped_column(String(32), nullable=False)
     target_id: Mapped[str] = mapped_column(String(64), nullable=False)
