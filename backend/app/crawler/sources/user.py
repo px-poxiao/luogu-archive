@@ -12,12 +12,11 @@ r"""用户主页爬虫。
 """
 from __future__ import annotations
 
-import json
 import re
 import time as _t
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import db_session
@@ -52,6 +51,7 @@ from app.models.luogu_user import (
     UserProfileChange,
     UserPrize,
 )
+from app.services.content_suppression import find_active_suppression
 
 log = get_logger(__name__)
 
@@ -170,6 +170,10 @@ async def crawl_one(
     enqueue_content: bool = True,
 ) -> None:
     """爬取一个用户的主页。"""
+    async with db_session() as session:
+        if await find_active_suppression(session, "user", str(uid)):
+            log.info("crawl_user.skip_suppressed", uid=uid)
+            return
     async with task_lock("user", str(uid)) as got:
         if not got:
             log.info("crawl_user.skip_locked", uid=uid)
@@ -218,9 +222,12 @@ async def _crawl_one_inner(
         if not isinstance(user_obj, dict):
             raise CrawlerError(f"用户页缺少 data.user: uid={uid}")
 
+        suppressed = False
         async with db_session() as session:
-            await _upsert_user(session, uid, user_obj, data)
-            await session.commit()
+            suppressed = bool(await find_active_suppression(session, "user", str(uid)))
+            if not suppressed:
+                await _upsert_user(session, uid, user_obj, data)
+                await session.commit()
 
         dur = int((_t.monotonic() - start) * 1000)
         await record_task_done(
@@ -229,6 +236,11 @@ async def _crawl_one_inner(
             http_status=result.status,
             duration_ms=dur,
         )
+
+        # 网络请求期间刚批准的删除申请也必须阻止写库和后续级联派发。
+        if suppressed:
+            log.info("crawl_user.skip_suppressed_after_fetch", uid=uid)
+            return
 
         # 级联派发策略：
         # - 犇犇：所有触发都派一次（passive 加 10min NX dedup 防止刷新洪水），
@@ -375,7 +387,6 @@ async def _upsert_user(
 
     # ---------- prizes ----------
     prizes = data.get("prizes") or []
-    await _record_prize_changes(session, uid, prizes, now)
     await _sync_prizes(session, uid, prizes)
 
     # ---------- elo ----------
@@ -507,71 +518,6 @@ def _normalize_prize_item(item: dict) -> dict | None:
     }
 
 
-def _prize_key(row: dict) -> tuple:
-    return (row["year"], row["contest"], row["event"], row["prize"])
-
-
-def _dump_change_json(value: dict) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
-
-
-async def _record_prize_changes(
-    session: AsyncSession,
-    uid: int,
-    prizes: list,
-    now: datetime,
-) -> None:
-    normalized = []
-    for item in prizes:
-        row = _normalize_prize_item(item)
-        if row is not None:
-            normalized.append(row)
-    if not normalized:
-        return
-
-    q = select(UserPrize).where(UserPrize.uid == uid)
-    existing_rows = (await session.execute(q)).scalars().all()
-    existing_by_key = {
-        (p.year, p.contest or "", p.event or "", p.prize): p
-        for p in existing_rows
-    }
-
-    for row in normalized:
-        key = _prize_key(row)
-        old = existing_by_key.get(key)
-        if old is None:
-            session.add(
-                UserProfileChange(
-                    uid=uid,
-                    field_name="prize",
-                    old_value=None,
-                    new_value=_dump_change_json(row),
-                    changed_at=now,
-                )
-            )
-            continue
-
-        old_row = {
-            "year": old.year,
-            "contest": old.contest or "",
-            "event": old.event or "",
-            "prize": old.prize,
-            "score": old.score,
-            "rank": old.rank,
-        }
-        if old_row == row:
-            continue
-        session.add(
-            UserProfileChange(
-                uid=uid,
-                field_name="prize",
-                old_value=_dump_change_json(old_row),
-                new_value=_dump_change_json(row),
-                changed_at=now,
-            )
-        )
-
-
 async def _snap_numeric(
     session: AsyncSession,
     uid: int,
@@ -632,45 +578,35 @@ async def _check_and_record_name_violation(
 
 
 async def _sync_prizes(session: AsyncSession, uid: int, prizes: list) -> None:
-    """OI 奖项同步（只增不减，UNIQUE 拦重复）。
+    """用本次主页返回的奖项完整替换数据库快照。
 
-    注意 MySQL 在 UNIQUE 索引里 NULL 互不相等，所以 event=NULL 的行会反复
-    入库。这里把 None 规一化成 ''，再用 INSERT IGNORE，让 UNIQUE 真生效。
+    奖项只表达用户主页的当前状态，不再保存历史。即使本次返回空集合，
+    也必须删除该用户之前保存的奖项，避免已经撤下的奖项继续展示。
     """
-    from sqlalchemy.dialects.mysql import insert as mysql_insert
-
-    if not prizes:
-        return
-    rows = []
+    latest_by_key: dict[tuple[int, str, str, str], dict] = {}
     for item in prizes:
-        p = item.get("prize") if isinstance(item, dict) else None
-        if not isinstance(p, dict):
+        row = _normalize_prize_item(item)
+        if row is None:
             continue
-        score_raw = p.get("score")
-        rank_raw = p.get("rank")
-        rows.append(
-            {
-                "uid": uid,
-                "year": int(p.get("year") or 0),
-                "contest": p.get("contest") or "",
-                "event": p.get("event") or "",
-                "prize": p.get("prize") or "",
-                # null 时保留 None；公开了才记录
-                "score": float(score_raw) if score_raw is not None else None,
-                "rank": int(rank_raw) if rank_raw is not None else None,
-            }
+        key = (row["year"], row["contest"], row["event"], row["prize"])
+        latest_by_key[key] = row
+
+    # 清理旧实现留下的奖项变更记录；其他用户资料历史继续保留。
+    await session.execute(
+        delete(UserProfileChange).where(
+            UserProfileChange.uid == uid,
+            UserProfileChange.field_name == "prize",
         )
-    if not rows:
-        return
-    # 用 INSERT ... ON DUPLICATE KEY UPDATE 而不是 IGNORE：
-    # 已有 (uid,year,contest,event,prize) 行时，把 score/rank 更新过去
-    # —— 用户从"未公开"切到"公开成绩"时数据能回填。
-    stmt = mysql_insert(UserPrize).values(rows)
-    stmt = stmt.on_duplicate_key_update(
-        score=stmt.inserted.score,
-        rank=stmt.inserted.rank,
     )
-    await session.execute(stmt)
+
+    # 先删后写与用户主表更新处于同一事务；后续失败时会整体回滚。
+    await session.execute(delete(UserPrize).where(UserPrize.uid == uid))
+    session.add_all(
+        [
+            UserPrize(uid=uid, **row)
+            for row in latest_by_key.values()
+        ]
+    )
 
 
 async def _sync_elo(session: AsyncSession, uid: int, elo_list: list) -> None:

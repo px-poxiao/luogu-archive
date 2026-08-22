@@ -32,6 +32,7 @@ from app.core.logging import get_logger
 from app.core.ratelimit import SlidingWindowLimiter, ratelimit_key
 from app.core.redis_client import get_redis
 from app.models.task import SaveRequest
+from app.services.content_suppression import ensure_content_visible
 
 router = APIRouter(tags=["save"])
 log = get_logger(__name__)
@@ -250,6 +251,13 @@ async def _try_get_pending(content_type: str, ident: str) -> str | None:
 async def save(req: SaveReq, request: Request) -> SaveResp:
     ip = get_client_ip(request)
     ident = _normalize_article_ident(req.id) if req.content_type == "article" else req.id
+
+    # 已隐藏目标不能通过保存按钮重新进入爬取队列；feed 保存参数实际是作者 UID。
+    if req.content_type in {"article", "paste", "user", "feed"}:
+        check_type = "user" if req.content_type == "feed" else req.content_type
+        check_id = ident.split(":", 1)[0] if req.content_type == "feed" else ident
+        async with db_session() as session:
+            await ensure_content_visible(session, check_type, check_id)
 
     # 1. 同一目标已在队列中时直接合并返回，不消耗限流额度。
     old_task_id = await _try_get_pending(req.content_type, ident)

@@ -29,6 +29,12 @@ async function handle(id: number, action: 'approve' | 'reject') {
   })
   await load()
 }
+
+async function restore(id: number) {
+  if (!confirm('确认恢复该内容的公开展示？')) return
+  await api(`/admin/takedowns/${id}/restore`, { method: 'POST' })
+  await load()
+}
 </script>
 
 <template>
@@ -57,7 +63,7 @@ async function handle(id: number, action: 'approve' | 'reject') {
       <tbody>
         <tr v-for="r in rows" :key="r.id">
           <td>{{ r.id }}</td>
-          <td><code>{{ r.target_type }}/{{ r.target_id }}</code></td>
+          <td><a v-if="r.target_url" :href="r.target_url" target="_blank" rel="noopener noreferrer">{{ r.target_type }}/{{ r.target_id }}</a><code v-else>{{ r.target_type }}/{{ r.target_id }}</code></td>
           <td>
             {{ r.requester_name || '-' }}<br>
             <small class="muted">{{ r.requester_contact || '' }}</small>
@@ -70,6 +76,7 @@ async function handle(id: number, action: 'approve' | 'reject') {
           <td>
             <button v-if="r.status === 'pending'" @click="handle(r.id, 'approve')" class="ok">批准</button>
             <button v-if="r.status === 'pending'" @click="handle(r.id, 'reject')" class="no">拒绝</button>
+            <button v-if="r.status === 'approved' && r.execution_status === 'success'" @click="restore(r.id)">恢复</button>
           </td>
         </tr>
       </tbody>

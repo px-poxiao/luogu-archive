@@ -54,8 +54,10 @@ from app.models.plugin import (
     PluginVersion,
 )
 from app.models.task import (
+    ContentSuppression,
     CrawlTask,
     SaveRequest,
+    TakedownProbe,
     TakedownRequest,
 )
 
@@ -66,6 +68,7 @@ __all__ = [
     "ArticleVersion",
     "Base",
     "CrawlTask",
+    "ContentSuppression",
     "CrawlerAccount",
     "Contest",
     "ContestParticipant",
@@ -91,6 +94,7 @@ __all__ = [
     "SiteUser",
     "SiteUserFollow",
     "TakedownRequest",
+    "TakedownProbe",
     "UserDailyActivity",
     "UserEloHistory",
     "UserGuHistory",

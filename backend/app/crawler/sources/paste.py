@@ -31,11 +31,19 @@ from app.crawler.sources.base import (
 )
 from app.models._common import CrawlTaskStatus, utcnow
 from app.models.luogu_content import Paste, PasteVersion
+from app.services.content_suppression import ensure_content_visible, find_active_suppression
 
 log = get_logger(__name__)
 
 
 async def crawl_one(paste_id: str, *, trigger: str = "manual") -> None:
+    async with db_session() as session:
+        existing = await session.get(Paste, paste_id)
+        if await find_active_suppression(
+            session, "paste", paste_id, existing.author_uid if existing else None
+        ):
+            log.info("crawl_paste.skip_suppressed", paste_id=paste_id)
+            return
     async with task_lock("paste", paste_id) as got:
         if not got:
             log.info("crawl_paste.skip_locked", paste_id=paste_id)
@@ -106,6 +114,7 @@ async def _crawl_inner(paste_id: str, *, trigger: str) -> None:
         fields = _extract_paste_fields(kind, page_data)
 
         async with db_session() as session:
+            await ensure_content_visible(session, "paste", paste_id, fields.get("author_uid"))
             await _upsert_paste(session, paste_id, fields, node_id=node.node_id)
             await session.commit()
 

@@ -30,6 +30,7 @@ from app.models.luogu_content import (
     Problem,
     ProblemSolutionHistory,
 )
+from app.services.content_suppression import ensure_content_visible, visible_content_clause
 from app.models.luogu_user import LuoguUser
 from app.services.feed_merge import merge_feed_rows
 
@@ -194,7 +195,10 @@ async def get_article(
     article_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> ArticleDetail:
+    await ensure_content_visible(db, "article", article_id)
     art = await db.get(Article, article_id)
+    if art is not None:
+        await ensure_content_visible(db, "article", article_id, art.author_uid)
     if art is None:
         # 未爬过 → 立即派发一次高优先级爬取，并返回 404
         from app.tasks.actors.crawl import crawl_article
@@ -231,7 +235,10 @@ async def get_article_history(
     article_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> ArticleHistoryResp:
+    await ensure_content_visible(db, "article", article_id)
     art = await db.get(Article, article_id)
+    if art is not None:
+        await ensure_content_visible(db, "article", article_id, art.author_uid)
     if art is None:
         raise NotFoundError("文章未被本站收录")
 
@@ -267,7 +274,10 @@ async def get_paste(
     paste_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> PasteDetail:
+    await ensure_content_visible(db, "paste", paste_id)
     p = await db.get(Paste, paste_id)
+    if p is not None:
+        await ensure_content_visible(db, "paste", paste_id, p.author_uid)
     if p is None:
         from app.tasks.actors.crawl import crawl_paste
         crawl_paste.send(paste_id, "passive")
@@ -299,7 +309,10 @@ async def get_paste_history(
     paste_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> PasteHistoryResp:
+    await ensure_content_visible(db, "paste", paste_id)
     paste = await db.get(Paste, paste_id)
+    if paste is not None:
+        await ensure_content_visible(db, "paste", paste_id, paste.author_uid)
     if paste is None:
         raise NotFoundError("剪贴板未被本站收录")
 
@@ -335,7 +348,9 @@ async def global_feed(
     before: datetime | None = Query(None, description="分页锚点：拿早于此时间的"),
     db: AsyncSession = Depends(get_db),
 ) -> list[FeedItem]:
-    q = select(Feed).order_by(desc(Feed.time)).limit(limit)
+    q = select(Feed).where(
+        visible_content_clause("feed", Feed.id, Feed.author_uid)
+    ).order_by(desc(Feed.time)).limit(limit)
     if before is not None:
         q = q.where(Feed.time < before)
     rows = (await db.execute(q)).scalars().all()

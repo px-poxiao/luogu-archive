@@ -48,6 +48,7 @@ from app.tasks.broker import (
     actor,
 )
 from app.tasks.problem_queue import release_problem_job
+from app.services.takedown_probe import run_takedown_probe
 
 log = get_logger(__name__)
 
@@ -91,6 +92,25 @@ def _manual_user_resources(
 
     profile_done = bool(args[1]) if len(args) > 1 else False
     return AUTH_COM if profile_done else ANON_COM
+
+
+def _takedown_probe_resources(args: tuple, _kwargs: dict) -> TaskResources:
+    """犇犇探测需要账号，其余探测只使用匿名国际站资源。"""
+    return AUTH_COM if len(args) > 1 and args[1] == "feed" else ANON_COM
+
+
+@actor(queue_name=QUEUE_CRAWL_HI, resources=_takedown_probe_resources, max_retries=0)
+def probe_takedown_target(token: str, target_type: str) -> None:
+    """删除申请探测走现有高优先级队列，不占用 API 进程。"""
+    log.info("actor.probe_takedown_target", token=token, target_type=target_type)
+    _run_or_defer(
+        "probe_takedown_target",
+        (token, target_type),
+        _run_domain_task(
+            lambda: run_takedown_probe(token),
+            kind=NodeKind.AUTHED if target_type == "feed" else NodeKind.ANON,
+        ),
+    )
 
 
 def _scheduled_feed_key(uid: int) -> str:

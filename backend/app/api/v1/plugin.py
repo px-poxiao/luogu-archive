@@ -19,6 +19,7 @@ from app.core.ratelimit import SlidingWindowLimiter, ratelimit_key
 from app.core.redis_client import get_redis
 from app.models._common import utcnow
 from app.models.luogu_content import Article, ArticleVersion
+from app.services.content_suppression import ensure_content_visible, visible_content_clause
 from app.models.luogu_user import LuoguUser
 from app.models.plugin import (
     Plugin,
@@ -45,6 +46,16 @@ from app.services.plugin_marketplace import (
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
 DOWNLOAD_CHUNK_BYTES = 64 * 1024
+
+
+async def _ensure_plugin_article_visible(
+    db: AsyncSession, article_id: str,
+) -> None:
+    """插件依附于文章，文章或作者主页隐藏后插件也不能绕过展示。"""
+    article = await db.get(Article, article_id)
+    await ensure_content_visible(
+        db, "article", article_id, article.author_uid if article else None
+    )
 
 
 class PublishApplicationReq(BaseModel):
@@ -202,7 +213,7 @@ async def list_plugins(
         .join(PluginVersion, PluginVersion.id == Plugin.current_version_id)
         .join(Article, Article.article_id == Plugin.article_id)
         .outerjoin(LuoguUser, LuoguUser.uid == Article.author_uid)
-        .where(Plugin.is_listed.is_(True))
+        .where(Plugin.is_listed.is_(True), visible_content_clause("article", Article.article_id, Article.author_uid))
     )
     if tag_id is not None:
         q = q.join(PluginTagLink, PluginTagLink.plugin_id == Plugin.id).where(PluginTagLink.tag_id == tag_id)
@@ -311,6 +322,7 @@ async def plugin_detail(
     user: SiteUser | None = Depends(get_optional_site_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await _ensure_plugin_article_visible(db, article_id)
     plugin = (
         await db.execute(select(Plugin).where(Plugin.article_id == article_id))
     ).scalar_one_or_none()
@@ -381,6 +393,7 @@ async def get_plugin_version(
     user: SiteUser | None = Depends(get_optional_site_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await _ensure_plugin_article_visible(db, article_id)
     plugin = (await db.execute(select(Plugin).where(Plugin.article_id == article_id))).scalar_one_or_none()
     if plugin is None:
         raise NotFoundError("插件不存在")
@@ -399,6 +412,7 @@ async def download_plugin_version(
     user: SiteUser | None = Depends(get_optional_site_user),
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
+    await _ensure_plugin_article_visible(db, article_id)
     plugin = (await db.execute(select(Plugin).where(Plugin.article_id == article_id))).scalar_one_or_none()
     if plugin is None or (not plugin.is_listed and (user is None or user.id != plugin.owner_user_id)):
         raise NotFoundError("插件不存在或已下架")

@@ -36,11 +36,19 @@ from app.crawler.sources.base import (
 )
 from app.models._common import CrawlTaskStatus, utcnow
 from app.models.luogu_content import Article, ArticleVersion
+from app.services.content_suppression import ensure_content_visible, find_active_suppression
 
 log = get_logger(__name__)
 
 
 async def crawl_one(article_id: str, *, trigger: str = "manual") -> None:
+    async with db_session() as session:
+        existing = await session.get(Article, article_id)
+        if await find_active_suppression(
+            session, "article", article_id, existing.author_uid if existing else None
+        ):
+            log.info("crawl_article.skip_suppressed", article_id=article_id)
+            return
     async with task_lock("article", article_id) as got:
         if not got:
             log.info("crawl_article.skip_locked", article_id=article_id)
@@ -101,6 +109,7 @@ async def _crawl_inner(article_id: str, *, trigger: str) -> None:
         fields = _extract_article_fields(data)
 
         async with db_session() as session:
+            await ensure_content_visible(session, "article", article_id, fields.get("author_uid"))
             await _upsert_article(session, article_id, fields, node_id=node.node_id)
             await _upsert_author_brief(session, fields.get("author_raw"))
             await session.commit()

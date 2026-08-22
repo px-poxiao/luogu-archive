@@ -54,7 +54,8 @@ from app.models.admin import Admin, AdminAuditLog, CrawlerAccount, SiteAnnouncem
 from app.models.contest import Contest, ContestArchiveStatus
 from app.models.luogu_content import Article, Feed, Paste
 from app.models.luogu_user import UserNameVersion, UserNameViolation
-from app.models.task import CrawlTask, TakedownRequest
+from app.models.task import ContentSuppression, CrawlTask, TakedownRequest
+from app.services.content_suppression import apply_takedown
 from app.tasks.broker import QUEUE_ORDER, get_broker
 
 router = APIRouter(prefix="/admin", tags=["admin-panel"])
@@ -372,12 +373,17 @@ async def list_takedowns(
             "id": r.id,
             "target_type": r.target_type,
             "target_id": r.target_id,
+            "target_url": r.target_url,
+            "target_author_uid": r.target_author_uid,
             "requester_name": r.requester_name,
             "requester_contact": r.requester_contact,
             "reason": r.reason,
             "status": r.status.value,
             "created_at": r.created_at.isoformat(),
             "handled_at": r.handled_at.isoformat() if r.handled_at else None,
+            "auto_approved": r.auto_approved,
+            "execution_status": r.execution_status,
+            "execution_error": r.execution_error,
         }
         for r in rows
     ]
@@ -404,12 +410,38 @@ async def approve_takedown(
     t.admin_id = admin.id
     t.admin_note = body.admin_note
     t.handled_at = utcnow()
+    await apply_takedown(db, t, admin_id=admin.id)
     await _audit(
         db, admin, request, "takedown_approve",
         target_type="takedown", target_id=str(tid),
     )
     await db.commit()
-    return {"message": "已批准，请手动执行对应的删除操作"}
+    return {"message": "已批准并停止公开展示"}
+
+
+@router.post("/takedowns/{tid}/restore")
+async def restore_takedown(
+    tid: int,
+    request: Request,
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    t = await db.get(TakedownRequest, tid)
+    if t is None:
+        raise NotFoundError("工单不存在")
+    q = select(ContentSuppression).where(
+        ContentSuppression.takedown_request_id == tid,
+        ContentSuppression.restored_at.is_(None),
+    )
+    suppression = (await db.execute(q)).scalars().first()
+    if suppression is None:
+        raise ConflictError("该申请没有正在生效的隐藏记录")
+    suppression.restored_at = utcnow()
+    t.execution_status = "restored"
+    await _audit(db, admin, request, "takedown_restore",
+        target_type=t.target_type, target_id=t.target_id)
+    await db.commit()
+    return {"message": "已恢复公开展示"}
 
 
 @router.post("/takedowns/{tid}/reject")

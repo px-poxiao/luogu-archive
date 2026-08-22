@@ -19,6 +19,7 @@ from app.core.db import get_db
 from app.core.redis_client import get_redis
 from app.models.luogu_content import Feed
 from app.models.luogu_user import LuoguUser
+from app.services.content_suppression import ensure_content_visible, visible_content_clause
 from app.services.feed_merge import FeedDisplay, merge_feed_rows
 
 router = APIRouter(prefix="/image/feed", tags=["image-card"])
@@ -230,7 +231,8 @@ async def _load_user(db: AsyncSession, uid: int) -> LuoguUser | None:
 async def _load_feeds_since(db: AsyncSession, uid: int, since: datetime) -> list[Feed]:
     q = (
         select(Feed)
-        .where(Feed.author_uid == uid, Feed.time >= since)
+        .where(Feed.author_uid == uid, Feed.time >= since,
+            visible_content_clause("feed", Feed.id, Feed.author_uid))
         .order_by(desc(Feed.time))
     )
     return list((await db.execute(q)).scalars().all())
@@ -457,6 +459,7 @@ def _random_svg(
 
 @router.get("/activity/{uid}.svg")
 async def feed_activity_card(uid: int, db: AsyncSession = Depends(get_db)) -> Response:
+    await ensure_content_visible(db, "user", str(uid))
     cache_key = f"image:feed_activity:{uid}:v3"
     cached = await _cache_get(cache_key)
     if cached:
@@ -475,11 +478,13 @@ async def feed_activity_card(uid: int, db: AsyncSession = Depends(get_db)) -> Re
 @router.get("/random/{uid}.svg")
 async def feed_random_card(uid: int, db: AsyncSession = Depends(get_db)) -> Response:
     # 随机语录每次访问都重新抽取；这里不能走 Redis / 浏览器缓存。
+    await ensure_content_visible(db, "user", str(uid))
     now = _now_shanghai()
     user = await _load_user(db, uid)
     q = (
         select(Feed)
-        .where(Feed.author_uid == uid)
+        .where(Feed.author_uid == uid,
+            visible_content_clause("feed", Feed.id, Feed.author_uid))
         .order_by(desc(Feed.time))
         .limit(50)
     )

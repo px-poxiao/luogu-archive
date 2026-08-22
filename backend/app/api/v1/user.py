@@ -24,6 +24,7 @@ from app.models.luogu_user import (
     UserNameVersion,
     UserPrize,
 )
+from app.services.content_suppression import ensure_content_visible, visible_content_clause
 from app.services.feed_merge import merge_feed_rows
 
 router = APIRouter(prefix="/user", tags=["user"])
@@ -108,6 +109,7 @@ async def get_user(
     uid: int,
     db: AsyncSession = Depends(get_db),
 ) -> UserProfile:
+    await ensure_content_visible(db, "user", str(uid))
     user = await db.get(LuoguUser, uid)
     if user is None:
         # 未收录 → 高优先级拉一次
@@ -208,10 +210,14 @@ async def user_activity(
     每路（feed/article/paste/judgement）各取 limit 条，合并排序后再裁 limit。
     所以总返回 ≤ limit 条；前端判断"返回 0 条"即认为没有更早的了。
     """
+    await ensure_content_visible(db, "user", str(uid))
     items: list[ActivityItem] = []
 
     if include_feed:
-        fq = select(Feed).where(Feed.author_uid == uid)
+        fq = select(Feed).where(
+            Feed.author_uid == uid,
+            visible_content_clause("feed", Feed.id, Feed.author_uid),
+        )
         if before is not None:
             fq = fq.where(Feed.time < before)
         fq = fq.order_by(desc(Feed.time)).limit(limit)
@@ -238,7 +244,7 @@ async def user_activity(
     aq = (
         select(Article, ArticleVersion.crawled_at.label("changed_at"))
         .join(ArticleVersion, ArticleVersion.id == Article.current_version_id)
-        .where(Article.author_uid == uid)
+        .where(Article.author_uid == uid, visible_content_clause("article", Article.article_id, Article.author_uid))
     )
     if before is not None:
         aq = aq.where(ArticleVersion.crawled_at < before)
@@ -256,7 +262,7 @@ async def user_activity(
     pq = (
         select(Paste, PasteVersion.crawled_at.label("changed_at"))
         .join(PasteVersion, PasteVersion.id == Paste.current_version_id)
-        .where(Paste.author_uid == uid)
+        .where(Paste.author_uid == uid, visible_content_clause("paste", Paste.paste_id, Paste.author_uid))
     )
     if before is not None:
         pq = pq.where(PasteVersion.crawled_at < before)
