@@ -1,9 +1,6 @@
 """管理员插件审核、标签、举报和通知邮箱接口。"""
 from __future__ import annotations
 
-import hashlib
-import secrets
-from datetime import timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -14,10 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_client_ip
 from app.auth.deps import get_current_admin
-from app.core.config import settings
 from app.core.db import get_db
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
-from app.core.mail import send_email, send_plugin_result_email
+from app.core.mail import send_plugin_result_email
 from app.models._common import utcnow
 from app.models.admin import Admin, AdminAuditLog
 from app.models.luogu_content import Article, ArticleVersion
@@ -616,62 +612,21 @@ async def admin_handle_report(
 
 @router.get("/notification-email")
 async def notification_email_status(admin: Admin = Depends(get_current_admin)) -> dict:
-    return {
-        "email": admin.notification_email,
-        "verified": admin.notification_email_verified,
-    }
+    return {"email": admin.notification_email}
 
 
 @router.post("/notification-email")
-async def bind_notification_email(
+async def save_notification_email(
     body: NotificationEmailReq,
     request: Request,
     admin: Admin = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    token = secrets.token_urlsafe(32)
     admin.notification_email = str(body.email).lower()
-    admin.notification_email_verified = False
-    admin.notification_email_token_hash = hashlib.sha256(token.encode()).hexdigest()
-    admin.notification_email_expires = utcnow() + timedelta(hours=24)
-    await _audit(db, admin, request, "admin_notification_email_bind", target_type="admin", target_id=str(admin.id))
-    await db.commit()
-
-    verify_url = f"{settings.WEB_PUBLIC_ORIGIN.rstrip('/')}/admin/notification-email/verify?token={token}"
-    ok = await send_email(
-        admin.notification_email,
-        "[洛谷档案馆] 验证管理员通知邮箱",
-        f"请在 24 小时内打开以下链接完成验证：\n{verify_url}",
-    )
-    return {"message": "验证邮件已发送" if ok else "邮箱已保存，但验证邮件发送失败，请检查邮件配置"}
-
-
-@router.get("/notification-email/verify")
-async def verify_notification_email(
-    request: Request,
-    token: str = Query(..., min_length=20, max_length=200),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    admin = (
-        await db.execute(select(Admin).where(Admin.notification_email_token_hash == token_hash))
-    ).scalar_one_or_none()
-    expires = admin.notification_email_expires if admin else None
-    # MySQL 可能返回不带时区的 datetime，比较前统一按 UTC 解释。
-    if expires is not None and expires.tzinfo is None:
-        expires = expires.replace(tzinfo=timezone.utc)
-    if admin is None or expires is None or expires < utcnow():
-        raise ValidationError("验证链接无效或已过期")
+    # 旧验证字段继续保留以兼容现有数据库，但保存后邮箱立即生效。
     admin.notification_email_verified = True
     admin.notification_email_token_hash = None
     admin.notification_email_expires = None
-    await _audit(
-        db,
-        admin,
-        request,
-        "admin_notification_email_verify",
-        target_type="admin",
-        target_id=str(admin.id),
-    )
+    await _audit(db, admin, request, "admin_notification_email_save", target_type="admin", target_id=str(admin.id))
     await db.commit()
-    return {"message": "管理员通知邮箱验证成功"}
+    return {"message": "通知邮箱已保存"}

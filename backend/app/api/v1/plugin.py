@@ -40,7 +40,7 @@ from app.services.plugin_marketplace import (
     plugin_tag_names,
     snapshot_preview_dict,
     validate_tag_ids,
-    verified_admin_emails,
+    admin_notification_emails,
 )
 
 
@@ -556,7 +556,7 @@ async def _reason_application(
         reason=reason.strip(),
     )
     db.add(row)
-    emails = await verified_admin_emails(db)
+    emails = await admin_notification_emails(db)
     await db.commit()
     await db.refresh(row)
     return row, plugin.name, emails
@@ -641,7 +641,7 @@ async def report_plugin(
         status="pending",
     )
     db.add(row)
-    emails = await verified_admin_emails(db)
+    emails = await admin_notification_emails(db)
     await db.commit()
     await db.refresh(row)
     await send_plugin_admin_notice(

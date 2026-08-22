@@ -225,9 +225,9 @@ def version_from_snapshot(
     )
 
 
-async def verified_admin_emails(db: AsyncSession) -> list[str]:
+async def admin_notification_emails(db: AsyncSession) -> list[str]:
+    """返回所有启用管理员保存的通知邮箱，不再要求邮件验证。"""
     q = select(Admin.notification_email).where(
-        Admin.notification_email_verified.is_(True),
         Admin.notification_email.is_not(None),
         Admin.is_disabled.is_(False),
     )
