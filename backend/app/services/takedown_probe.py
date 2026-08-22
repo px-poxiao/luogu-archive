@@ -27,15 +27,15 @@ async def run_takedown_probe(token: str) -> None:
                 await article_crawler.crawl_one(row.target_id, trigger="manual")
                 item = await db.get(Article, row.target_id)
                 row.accessible = item is not None and not item.is_deleted_on_source
-                row.author_uid = item.author_uid if item else None
+                row.author_uid = item.author_uid if item and item.author_uid else row.author_uid
             elif row.target_type == "paste":
                 await paste_crawler.crawl_one(row.target_id, trigger="manual")
                 item = await db.get(Paste, row.target_id)
                 row.accessible = item is not None and not item.is_deleted_on_source
-                row.author_uid = item.author_uid if item else None
+                row.author_uid = item.author_uid if item and item.author_uid else row.author_uid
             else:
                 item = await db.get(Feed, int(row.target_id))
-                row.author_uid = item.author_uid if item else None
+                row.author_uid = item.author_uid if item and item.author_uid else row.author_uid
                 if item is None or item.author_uid is None:
                     row.accessible = False
                 else:
@@ -47,6 +47,7 @@ async def run_takedown_probe(token: str) -> None:
                     row.accessible = int(row.target_id) in fetched
             row.detail = None
         except Exception as exc:  # 403、404、超时等均不能阻断申请。
+            # 保留创建探测任务时从档案读取的作者 UID，供本人申请自动批准。
             row.accessible, row.detail = False, type(exc).__name__
         row.status, row.completed_at = "completed", utcnow()
         await db.commit()

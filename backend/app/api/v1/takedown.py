@@ -57,7 +57,8 @@ async def probe_takedown(body: ProbeReq, request: Request,
         raise ConflictError("该内容已经停止公开展示")
     row = TakedownProbe(token=secrets.token_urlsafe(32), requester_user_id=user.id if user else None,
         target_type=target_type, target_id=target_id, target_url=target_url,
-        status="pending", expires_at=utcnow() + timedelta(minutes=10))
+        # 原站内容已删除时抓取会失败，因此必须先保留档案中的作者 UID。
+        author_uid=owner_uid, status="pending", expires_at=utcnow() + timedelta(minutes=10))
     if target_type == "user":
         row.status = "completed"
         row.author_uid = int(target_id)
