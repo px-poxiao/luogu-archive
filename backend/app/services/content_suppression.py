@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-from sqlalchemy import String, and_, cast, exists, or_, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError, ValidationError
@@ -72,13 +72,13 @@ def visible_content_clause(target_type: str, id_column, owner_column=None):
     """供公开列表查询使用，排除直接隐藏和作者主页级联隐藏的内容。"""
     direct = and_(
         ContentSuppression.target_type == target_type,
-        ContentSuppression.target_id == cast(id_column, String),
+        ContentSuppression.target_id == id_column,
     )
     conditions = [direct]
     if owner_column is not None:
         conditions.append(and_(
             ContentSuppression.target_type == "user",
-            ContentSuppression.target_id == cast(owner_column, String),
+            ContentSuppression.target_id == owner_column,
         ))
     hidden = select(ContentSuppression.id).where(
         ContentSuppression.restored_at.is_(None), or_(*conditions)
