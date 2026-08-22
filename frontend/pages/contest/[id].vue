@@ -83,9 +83,12 @@ function search() {
   else appliedKeyword.value = next
 }
 
-function formatDuration(milliseconds: number | undefined | null) {
-  if (!milliseconds) return '-'
-  const seconds = milliseconds / 1000
+function formatDuration(duration: number | undefined | null) {
+  if (duration === undefined || duration === null) return '-'
+  // 洛谷 ICPC 榜单的总罚时和单题罚时均以秒为单位，其他赛制使用毫秒。
+  const seconds = data.value?.contest.method === ICPC_CONTEST_METHOD
+    ? duration
+    : duration / 1000
   if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 2 : 1)}s`
   const minutes = seconds / 60
   if (minutes < 60) return `${minutes.toFixed(2)}min`
