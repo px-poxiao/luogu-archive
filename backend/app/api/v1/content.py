@@ -376,6 +376,31 @@ async def global_feed(
     return items
 
 
+@router.get("/feed/{feed_id}", response_model=FeedItem)
+async def get_feed(
+    feed_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> FeedItem:
+    """返回分享地址对应的单条犇犇，不附带其他列表内容。"""
+    await ensure_content_visible(db, "feed", str(feed_id))
+    row = await db.get(Feed, feed_id)
+    if row is None:
+        raise NotFoundError("犇犇未被本站收录")
+    await ensure_content_visible(db, "feed", str(feed_id), row.author_uid)
+    display = (await merge_feed_rows(db, [row]))[feed_id]
+    return FeedItem(
+        id=row.id,
+        type=row.type,
+        time=row.time,
+        content_md=display.content_md,
+        merged_suffix_md=display.merged_suffix_md,
+        merged_from_id=display.merged_from_id,
+        merged_link_md=list(display.merged_link_md),
+        merged_image_md=list(display.merged_image_md),
+        user=await _user_brief(db, row.author_uid),
+    )
+
+
 # ============================================================
 # 陶片放逐（带同项合并）
 # ============================================================

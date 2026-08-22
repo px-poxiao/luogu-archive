@@ -424,7 +424,7 @@ function formatScore(s: number): string {
                   v-html="feedHtml(a.feed_content || '', a.feed_merged_suffix_md, a.feed_merged_link_md || [], a.feed_merged_image_md || [])"
                 />
                 <div class="feed-foot">
-                  <span class="feed-id">#{{ a.feed_id }}</span>
+                  <NuxtLink :to="`/feed/${a.feed_id}`" class="feed-id">#{{ a.feed_id }}</NuxtLink>
                   <FeedReplyButton
                     :content="a.feed_content || ''"
                     :sender-name="profile.name_hidden ? `UID ${profile.uid}` : profile.name"

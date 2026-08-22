@@ -145,7 +145,7 @@ useCopyCode(listRef)
           </header>
           <div class="lg-content content" v-html="feedHtml(f.content_md, f.merged_suffix_md, f.merged_link_md || [], f.merged_image_md || [])" />
           <footer class="feed-foot">
-            <span class="feed-id">#{{ f.id }}</span>
+            <NuxtLink :to="`/feed/${f.id}`" class="feed-id">#{{ f.id }}</NuxtLink>
             <FeedReplyButton :content="f.content_md" :sender-name="f.user?.name" />
           </footer>
         </div>
