@@ -19,13 +19,12 @@ from app.models._common import TakedownStatus, utcnow
 from app.models.luogu_content import Article, Feed, Paste
 from app.models.site_user import SiteUser
 from app.models.task import TakedownProbe, TakedownRequest
-from app.services.content_suppression import apply_takedown, find_active_suppression, parse_target_url
+from app.services.content_suppression import apply_takedown, detect_target_url, find_active_suppression
 
 router = APIRouter(tags=["takedown"])
 
 
 class ProbeReq(BaseModel):
-    target_type: str = Field(..., max_length=32)
     target_url: str = Field(..., min_length=1, max_length=1024)
 
 
@@ -43,23 +42,23 @@ async def probe_takedown(body: ProbeReq, request: Request,
         ratelimit_key("takedown_probe_ip", get_client_ip(request)), window_sec=3600, limit=20)
     if not ok:
         raise RateLimitError("地址检查过于频繁，请稍后再试", retry_after_sec=1800)
-    target_url, target_id = parse_target_url(body.target_type, body.target_url)
+    target_type, target_url, target_id = detect_target_url(body.target_url)
     archived = None
-    if body.target_type == "article":
+    if target_type == "article":
         archived = await db.get(Article, target_id)
-    elif body.target_type == "paste":
+    elif target_type == "paste":
         archived = await db.get(Paste, target_id)
-    elif body.target_type == "feed":
+    elif target_type == "feed":
         archived = await db.get(Feed, int(target_id))
-    owner_uid = int(target_id) if body.target_type == "user" else (
+    owner_uid = int(target_id) if target_type == "user" else (
         archived.author_uid if archived is not None else None
     )
-    if await find_active_suppression(db, body.target_type, target_id, owner_uid):
+    if await find_active_suppression(db, target_type, target_id, owner_uid):
         raise ConflictError("该内容已经停止公开展示")
     row = TakedownProbe(token=secrets.token_urlsafe(32), requester_user_id=user.id if user else None,
-        target_type=body.target_type, target_id=target_id, target_url=target_url,
+        target_type=target_type, target_id=target_id, target_url=target_url,
         status="pending", expires_at=utcnow() + timedelta(minutes=10))
-    if body.target_type == "user":
+    if target_type == "user":
         row.status = "completed"
         row.author_uid = int(target_id)
         row.completed_at = utcnow()
@@ -67,11 +66,14 @@ async def probe_takedown(body: ProbeReq, request: Request,
     await db.commit()
     if row.status == "completed":
         is_owner = bool(user and user.luogu_uid and user.luogu_uid == row.author_uid)
-        return {"token": row.token, "status": row.status, "accessible": None,
+        return {"token": row.token, "status": row.status, "target_type": row.target_type,
+            "target_id": row.target_id, "accessible": None,
             "can_submit": True, "is_owner": is_owner, "expires_at": row.expires_at.isoformat()}
     from app.tasks.actors.crawl import probe_takedown_target
     probe_takedown_target.send(row.token, row.target_type)
-    return {"token": row.token, "status": "pending", "expires_at": row.expires_at.isoformat()}
+    return {"token": row.token, "status": "pending", "target_type": row.target_type,
+        "target_id": row.target_id,
+        "expires_at": row.expires_at.isoformat()}
 
 
 @router.get("/takedown/probe/{token}")
@@ -81,7 +83,9 @@ async def takedown_probe_status(token: str,
     if row is None:
         raise ValidationError("探测任务不存在或已失效")
     is_owner = bool(user and user.luogu_uid and user.luogu_uid == row.author_uid)
-    return {"token": row.token, "status": row.status, "accessible": row.accessible,
+    return {"token": row.token, "status": row.status, "target_type": row.target_type,
+        "target_id": row.target_id,
+        "accessible": row.accessible,
         "can_submit": row.status == "completed" and row.accessible is not True,
         "is_owner": is_owner, "expires_at": row.expires_at.isoformat()}
 

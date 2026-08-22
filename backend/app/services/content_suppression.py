@@ -45,6 +45,19 @@ def parse_target_url(target_type: str, raw_url: str) -> tuple[str, str]:
     return f"https://www.luogu.com.cn/{target_type}/{target_id}", target_id
 
 
+def detect_target_url(raw_url: str) -> tuple[str, str, str]:
+    """从完整地址中自动识别内容类型，并返回类型、规范地址和目标编号。"""
+    parsed = urlparse(raw_url.strip())
+    if parsed.scheme not in {"http", "https"} or (parsed.hostname or "").lower() not in ALLOWED_HOSTS:
+        raise ValidationError("请输入洛谷或本站的完整内容地址")
+    for target_type, pattern in PATHS.items():
+        matched = pattern.match(parsed.path)
+        if matched is not None:
+            target_id = matched.group(1)
+            return target_type, f"https://www.luogu.com.cn/{target_type}/{target_id}", target_id
+    raise ValidationError("暂不支持该地址，仅支持用户主页、文章、剪贴板和犇犇")
+
+
 async def find_active_suppression(
     db: AsyncSession, target_type: str, target_id: str, owner_uid: int | None = None,
 ) -> ContentSuppression | None:

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const api = useApi()
-const form = ref({ target_type: 'article', target_url: '', requester_name: '', requester_contact: '', reason: '' })
+const form = ref({ target_url: '', requester_name: '', requester_contact: '', reason: '' })
 const probe = ref<any>(null)
 const probing = ref(false)
 const state = ref<'idle' | 'submitting' | 'success' | 'failed'>('idle')
@@ -8,11 +8,11 @@ const message = ref('')
 let timer: ReturnType<typeof setTimeout> | undefined
 let probeVersion = 0
 
-const placeholders: Record<string, string> = {
-  article: 'https://www.luogu.com.cn/article/文章编号',
-  paste: 'https://www.luogu.com.cn/paste/剪贴板编号',
-  feed: 'https://www.luogu.com.cn/feed/犇犇编号',
-  user: 'https://www.luogu.com.cn/user/用户UID',
+const typeNames: Record<string, string> = {
+  user: '用户主页',
+  article: '文章',
+  paste: '剪贴板',
+  feed: '犇犇',
 }
 
 async function runProbe() {
@@ -25,10 +25,11 @@ async function runProbe() {
   try {
     const queued: any = await api('/takedown/probe', {
       method: 'POST',
-      body: { target_type: form.value.target_type, target_url: url },
+      body: { target_url: url },
     })
+    // 地址识别由后端立即完成，耗时的可访问性探测仍在高优先级队列中继续。
+    probe.value = queued
     if (queued.status === 'completed') {
-      probe.value = queued
       return
     }
     for (let attempt = 0; attempt < 300 && version === probeVersion; attempt += 1) {
@@ -48,7 +49,7 @@ async function runProbe() {
   }
 }
 
-watch(() => [form.value.target_type, form.value.target_url], () => {
+watch(() => form.value.target_url, () => {
   probeVersion += 1
   clearTimeout(timer)
   probe.value = null
@@ -82,17 +83,18 @@ async function submit() {
     <PageHero title="内容删除申请" subtitle="对已无法在原站访问的存档内容申请停止公开展示。" />
     <div v-if="state === 'success'" class="success"><h2>申请处理完成</h2><p>{{ message }}</p></div>
     <form v-else @submit.prevent="submit">
-      <div class="target-grid">
-        <label><span>内容类型</span><select v-model="form.target_type">
-          <option value="article">文章</option><option value="paste">剪贴板</option>
-          <option value="feed">犇犇</option><option value="user">用户主页</option>
-        </select></label>
-        <label><span>对应地址</span><input v-model.trim="form.target_url" type="url"
-          :placeholder="placeholders[form.target_type]" maxlength="1024"></label>
-      </div>
+      <label class="address-field">
+        <span>内容地址</span>
+        <input v-model.trim="form.target_url" type="url"
+          placeholder="粘贴用户主页、文章、剪贴板或犇犇的完整地址" maxlength="1024">
+        <small>系统会自动识别内容类型</small>
+        <span v-if="probe?.target_type && probe?.target_id" class="recognized">
+          识别到：{{ typeNames[probe.target_type] || probe.target_type }}：{{ probe.target_id }}
+        </span>
+      </label>
 
       <div v-if="probing" class="probe neutral">loading……</div>
-      <div v-else-if="probe && form.target_type !== 'user'"
+      <div v-else-if="probe && probe.target_type !== 'user'"
         class="probe" :class="probe.accessible ? 'blocked' : 'allowed'">
         <strong>{{ probe.accessible ? '可访问' : '不可访问' }}</strong>
         <span>{{ probe.accessible ? '原内容仍可访问，暂不能提交申请。' : '可以提交删除申请。' }}</span>
@@ -121,8 +123,10 @@ async function submit() {
 </template>
 
 <style scoped>
-.wrap{max-width:860px;margin:0 auto}form{padding:24px 0}.target-grid{display:grid;grid-template-columns:220px 1fr;gap:18px}
+.wrap{max-width:860px;margin:0 auto}form{padding:24px 0}.target-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
 label{display:block;margin:14px 0}label span{display:block;font-weight:600;margin-bottom:7px}input,select,textarea{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font:inherit}
+.address-field{margin:8px 0 20px}.address-field input{min-height:58px;padding:14px 16px;font-size:17px}.address-field small{display:block;margin-top:7px;color:var(--text-muted)}
+.address-field .recognized{display:block;margin-top:10px;color:var(--text);font-weight:600}
 .probe,.owner-note{display:flex;align-items:center;gap:14px;margin:18px 0;padding:14px 16px;border:1px solid var(--border);border-radius:6px}.probe.allowed,.owner-note{border-color:var(--lg-green);background:color-mix(in srgb,var(--lg-green) 9%,var(--surface))}.probe.blocked{border-color:var(--lg-red);background:color-mix(in srgb,var(--lg-red) 8%,var(--surface))}.neutral{color:var(--text-muted)}
 button{padding:10px 24px;border:0;border-radius:6px;background:var(--link);color:#fff;font:inherit;cursor:pointer}button:disabled{cursor:not-allowed;opacity:.5}.err{color:var(--lg-red)}.success{padding:36px;border:1px solid var(--lg-green);text-align:center}.success h2{color:var(--lg-green)}
 @media(max-width:700px){.target-grid{grid-template-columns:1fr;gap:0}.probe{align-items:flex-start;flex-direction:column;gap:4px}}
