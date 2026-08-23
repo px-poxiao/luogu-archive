@@ -21,6 +21,22 @@ interface ScoreDetail {
   runningTime?: number
 }
 
+interface ScoreboardUser {
+  uid: number
+  name: string
+  color: string
+  avatar: string | null
+  badge: string | null
+  ccf_level: number
+  xcpc_level: number
+  is_admin: boolean
+}
+
+interface ScoreboardSquad {
+  name: string
+  members: ScoreboardUser[]
+}
+
 interface ScoreboardRow {
   uid: number
   name: string
@@ -30,6 +46,7 @@ interface ScoreboardRow {
   ccf_level: number
   xcpc_level: number
   is_admin: boolean
+  squad: ScoreboardSquad | null
   rank: number
   score: number
   running_time: number
@@ -176,7 +193,19 @@ function toggleWarning(uid: number) {
               <tr v-for="row in data.items" :key="row.uid" :class="{ penalized: row.penalized }">
                 <td class="rank-col sticky-rank">{{ row.penalized ? '-' : `#${row.rank}` }}</td>
                 <td class="user-col sticky-user">
+                  <div v-if="row.squad" class="squad-entry">
+                    <strong class="squad-name">{{ row.squad.name }}</strong>
+                    <div class="squad-members">
+                      <LuoguUserName
+                        v-for="member in row.squad.members"
+                        :key="member.uid"
+                        :user="member"
+                        show-badge
+                      />
+                    </div>
+                  </div>
                   <LuoguUserName
+                    v-else
                     :user="{
                       uid: row.uid,
                       name: row.name,
@@ -287,14 +316,21 @@ th { height: 54px; color: var(--text-muted); font-size: 13px; font-weight: 500; 
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: var(--hover); }
 .rank-col { width: 76px; min-width: 76px; color: var(--text-muted); }
-.user-col { width: 220px; min-width: 220px; text-align: left; }
+.user-col { width: 300px; min-width: 300px; text-align: left; }
+.squad-entry { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.squad-name {
+  max-width: 100%; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis;
+}
+.squad-members {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 3px 6px; max-width: 100%;
+}
 .rating-col { width: 150px; min-width: 150px; }
 .total-col { width: 105px; min-width: 105px; }
 .problem-col { width: 116px; min-width: 116px; }
 .sticky-rank, .sticky-user, .sticky-rating { position: sticky; z-index: 2; background: var(--surface); }
 .sticky-rank { left: 0; }
 .sticky-user { left: 76px; }
-.sticky-rating { left: 296px; box-shadow: 7px 0 10px -10px rgba(0, 0, 0, .7); }
+.sticky-rating { left: 376px; box-shadow: 7px 0 10px -10px rgba(0, 0, 0, .7); }
 thead .sticky-rank, thead .sticky-user, thead .sticky-rating { z-index: 4; }
 .rating-value { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
 .rating-number { color: var(--text); }
@@ -324,9 +360,16 @@ thead .sticky-rank, thead .sticky-user, thead .sticky-rating { z-index: 4; }
 .warning-popover span { display: block; }
 .warning-popover span + span { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--border); }
 .warning-wrap:hover .warning-popover, .warning-wrap.active .warning-popover { display: block; }
-/* 浮层必须盖过后续粘性行；表格末尾两行改为向上展开，避免底边裁切。 */
-tbody tr:hover .sticky-rating,
+/* 表格后面的行会晚于前面的行绘制，因此只提高单元格层级仍会被下一行遮住。
+   提示出现时把整行提升为独立层级，再提高该行的粘性单元格。 */
+tbody tr:has(.warning-wrap:hover),
+tbody tr:has(.warning-wrap.active) {
+  position: relative;
+  z-index: 20;
+}
+tbody tr:has(.warning-wrap:hover) .sticky-rating,
 tbody tr:has(.warning-wrap.active) .sticky-rating { z-index: 30; }
+/* 表格末尾两行向上展开，避免提示框被面板底边裁切。 */
 tbody tr:nth-last-child(-n + 2) .warning-popover {
   top: auto;
   bottom: calc(100% + 9px);
@@ -351,10 +394,10 @@ tbody tr:nth-last-child(-n + 2) .warning-popover {
   .search input { width: 100%; }
   .search button { flex-shrink: 0; white-space: nowrap; }
   .rank-col { width: 42px; min-width: 42px; padding-left: 3px; padding-right: 3px; }
-  .user-col { width: 104px; min-width: 104px; padding-left: 6px; padding-right: 6px; overflow: hidden; text-overflow: ellipsis; }
+  .user-col { width: 180px; min-width: 180px; padding-left: 6px; padding-right: 6px; overflow: hidden; text-overflow: ellipsis; }
   .rating-col { width: 100px; min-width: 100px; padding-left: 4px; padding-right: 4px; }
   .sticky-user { left: 42px; }
-  .sticky-rating { left: 146px; }
+  .sticky-rating { left: 222px; }
   .rating-value { gap: 4px; }
   .warning-wrap { margin-left: 2px; }
   .warning-popover { position: fixed; top: auto; left: 50%; right: auto; bottom: 24px; transform: translateX(-50%); width: min(280px, calc(100vw - 40px)); }

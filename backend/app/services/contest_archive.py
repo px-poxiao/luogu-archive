@@ -56,6 +56,72 @@ def _safe_color(value: Any) -> LuoguColor:
         return LuoguColor.Gray
 
 
+def _scoreboard_user_snapshot(user: dict[str, Any]) -> dict[str, Any] | None:
+    """提取榜单展示需要的用户字段，过滤无效成员与无关主页数据。"""
+
+    uid = user.get("uid")
+    if not isinstance(uid, int):
+        return None
+    return {
+        "uid": uid,
+        "name": str(user.get("name") or uid),
+        "color": _safe_color(user.get("color")).value,
+        "avatar": user.get("avatar"),
+        "badge": user.get("badge"),
+        "ccf_level": int(user.get("ccfLevel") or 0),
+        "xcpc_level": int(user.get("xcpcLevel") or 0),
+        "is_admin": bool(user.get("isAdmin")),
+    }
+
+
+def normalize_scoreboard_squad(
+    row: dict[str, Any],
+    fallback_user: dict[str, Any],
+) -> dict[str, Any] | None:
+    """把洛谷 squad 统一为“队名 + 含队长的成员列表”。"""
+
+    raw_squad = row.get("squad")
+    if not isinstance(raw_squad, dict):
+        return None
+
+    leader = raw_squad.get("leader")
+    if not isinstance(leader, dict):
+        leader = fallback_user
+    raw_members = raw_squad.get("members")
+    candidates = [leader, *(raw_members if isinstance(raw_members, list) else [])]
+
+    members: list[dict[str, Any]] = []
+    seen_uids: set[int] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        member = _scoreboard_user_snapshot(candidate)
+        if member is None or member["uid"] in seen_uids:
+            continue
+        seen_uids.add(member["uid"])
+        members.append(member)
+    if not members:
+        return None
+
+    raw_name = raw_squad.get("name")
+    name = str(raw_name).strip() if raw_name is not None else ""
+    if not name:
+        name = f'{members[0]["name"]} 的小队'
+    return {"name": name, "members": members}
+
+
+def squad_search_text(squad: dict[str, Any] | None) -> str | None:
+    """生成队伍搜索文本，使队名、成员名和成员 UID 都可直接搜索。"""
+
+    if not squad:
+        return None
+    parts = [str(squad.get("name") or "")]
+    for member in squad.get("members") or []:
+        if isinstance(member, dict):
+            parts.extend((str(member.get("name") or ""), str(member.get("uid") or "")))
+    return " ".join(part for part in parts if part)[:1024]
+
+
 def _rank_values(rows: list[dict[str, Any]]) -> dict[int, float]:
     """按洛谷 OI 榜规则计算并列平均名次，处罚行不合并。"""
 
@@ -469,6 +535,8 @@ async def archive_scoreboard_page(
             participant.problem_details = (
                 row.get("details") if isinstance(row.get("details"), dict) else {}
             )
+            participant.squad = normalize_scoreboard_squad(row, user)
+            participant.squad_search_text = squad_search_text(participant.squad)
             participant.profile_status = "pending"
             participant.profile_source = None
             participant.profile_refreshed_at = None

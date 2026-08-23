@@ -209,10 +209,16 @@ async def contest_scoreboard(
                 or_(
                     ContestParticipant.uid == int(keyword),
                     ContestParticipant.name.contains(keyword),
+                    ContestParticipant.squad_search_text.contains(keyword),
                 )
             )
         else:
-            filters.append(ContestParticipant.name.contains(keyword))
+            filters.append(
+                or_(
+                    ContestParticipant.name.contains(keyword),
+                    ContestParticipant.squad_search_text.contains(keyword),
+                )
+            )
     total = int(
         await db.scalar(select(func.count(ContestParticipant.id)).where(*filters)) or 0
     )
@@ -227,6 +233,21 @@ async def contest_scoreboard(
             .limit(page_size)
         )
     ).all()
+    # 队伍成员可能不是该榜单行的主用户，一次性查询当前资料，避免 N+1。
+    squad_member_uids = {
+        int(member["uid"])
+        for row, _user in participants
+        for member in ((row.squad or {}).get("members") or [])
+        if isinstance(member, dict) and isinstance(member.get("uid"), int)
+    }
+    squad_users = (
+        (
+            await db.execute(select(LuoguUser).where(LuoguUser.uid.in_(squad_member_uids)))
+        ).scalars().all()
+        if squad_member_uids
+        else []
+    )
+    squad_users_by_uid = {int(user.uid): user for user in squad_users}
     problems = (
         await db.execute(
             select(ContestProblem)
@@ -266,6 +287,30 @@ async def contest_scoreboard(
         warnings = row.warning_reasons or []
         if official and not row.is_penalized:
             warnings = []
+        squad = None
+        if row.squad:
+            squad_members = []
+            for snapshot in row.squad.get("members") or []:
+                if not isinstance(snapshot, dict) or not isinstance(snapshot.get("uid"), int):
+                    continue
+                current = squad_users_by_uid.get(int(snapshot["uid"]))
+                squad_members.append(
+                    {
+                        "uid": int(snapshot["uid"]),
+                        "name": current.name if current else str(snapshot.get("name") or snapshot["uid"]),
+                        "color": current.color.value if current else str(snapshot.get("color") or "Gray"),
+                        "avatar": current.avatar if current else snapshot.get("avatar"),
+                        "badge": current.badge if current else snapshot.get("badge"),
+                        "ccf_level": current.ccf_level if current else int(snapshot.get("ccf_level") or 0),
+                        "xcpc_level": current.xcpc_level if current else int(snapshot.get("xcpc_level") or 0),
+                        "is_admin": current.is_admin if current else bool(snapshot.get("is_admin")),
+                    }
+                )
+            if squad_members:
+                squad = {
+                    "name": str(row.squad.get("name") or f'{squad_members[0]["name"]} 的小队'),
+                    "members": squad_members,
+                }
         items.append(
             {
                 "uid": row.uid,
@@ -276,6 +321,7 @@ async def contest_scoreboard(
                 "ccf_level": user.ccf_level if user else 0,
                 "xcpc_level": user.xcpc_level if user else 0,
                 "is_admin": user.is_admin if user else False,
+                "squad": squad,
                 "rank": row.rank_order,
                 "score": row.score,
                 "running_time": row.running_time,
