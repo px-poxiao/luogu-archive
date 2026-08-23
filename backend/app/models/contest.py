@@ -102,7 +102,7 @@ class ContestProblem(Base):
 
 
 class ContestParticipant(Base):
-    """一场比赛中实际出现在排行榜上的用户。"""
+    """一场比赛中实际出现在排行榜上的个人或队伍。"""
 
     __tablename__ = "contest_participants"
     __table_args__ = (
@@ -131,6 +131,10 @@ class ContestParticipant(Base):
     running_time: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     is_penalized: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     problem_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 洛谷组队榜单把队长放在 user、其余成员放在 squad 中。保留完整展示快照，
+    # 避免公开接口为了画一行队伍再次请求洛谷。
+    squad: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    squad_search_text: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     profile_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     profile_source: Mapped[str | None] = mapped_column(String(16), nullable=True)

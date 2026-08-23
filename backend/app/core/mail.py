@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import email.message
+import html as html_lib
 
 import aiosmtplib
 import httpx
@@ -136,7 +137,13 @@ async def send_plugin_result_email(
     text = f"插件：{plugin_name}\n申请类型：{action}\n审核结果：{result}\n"
     if reason:
         text += f"原因：{reason}\n"
-    return await send_email(to, subject, text)
+    html = _plugin_result_html(
+        plugin_name=plugin_name,
+        action=action,
+        approved=approved,
+        reason=reason,
+    )
+    return await send_email(to, subject, text, html)
 
 
 async def send_plugin_admin_notice(
@@ -149,8 +156,13 @@ async def send_plugin_admin_notice(
     """逐个通知管理员；单封邮件失败只记日志，不影响业务事务。"""
     subject = f"[洛谷档案馆] 新的插件{event_name}：{plugin_name}"
     body = f"插件：{plugin_name}\n事件：{event_name}\n{detail}\n请登录管理后台处理。"
+    html = _plugin_admin_notice_html(
+        event_name=event_name,
+        plugin_name=plugin_name,
+        detail=detail,
+    )
     for recipient in recipients:
-        ok = await send_email(recipient, subject, body)
+        ok = await send_email(recipient, subject, body, html)
         if not ok:
             log.error(
                 "email.plugin_admin_notice_failed",
@@ -158,6 +170,135 @@ async def send_plugin_admin_notice(
                 event=event_name,
                 plugin=plugin_name,
             )
+
+
+def _plugin_result_html(
+    *,
+    plugin_name: str,
+    action: str,
+    approved: bool,
+    reason: str | None,
+) -> str:
+    """生成插件申请审核结果邮件，所有用户内容必须先转义。"""
+    brand = "#0969da"
+    status_color = "#1a7f37" if approved else "#cf222e"
+    status_bg = "#dafbe1" if approved else "#ffebe9"
+    result = "审核通过" if approved else "审核未通过"
+    reason_html = ""
+    if reason:
+        reason_html = f"""
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f6f8fa;border-left:4px solid {status_color};border-radius:6px;">
+                <tr><td style="padding:14px 16px;">
+                  <p style="margin:0 0 5px;font-size:13px;font-weight:700;color:#57606a;">审核说明</p>
+                  <p style="margin:0;font-size:14px;line-height:1.7;color:#1f2328;word-break:break-word;">{_email_text(reason)}</p>
+                </td></tr>
+              </table>
+            </td>
+          </tr>"""
+
+    manage_url = f"{settings.WEB_PUBLIC_ORIGIN.rstrip('/')}/plugin/manage"
+    content = f"""
+          <tr>
+            <td style="padding:36px 32px 20px;">
+              <div style="display:inline-block;margin-bottom:18px;padding:5px 11px;border-radius:999px;background-color:{status_bg};color:{status_color};font-size:13px;font-weight:700;">{result}</div>
+              <h1 style="margin:0 0 20px;font-size:21px;color:#1f2328;font-weight:700;">插件申请审核结果</h1>
+              {_email_info_table((("插件", plugin_name), ("申请类型", action), ("审核结果", result)))}
+            </td>
+          </tr>
+          {reason_html}
+          {_email_button_row(manage_url, "查看我的插件", brand)}"""
+    return _email_shell(content)
+
+
+def _plugin_admin_notice_html(
+    *,
+    event_name: str,
+    plugin_name: str,
+    detail: str,
+) -> str:
+    """生成管理员插件通知邮件，并按事件跳转到对应处理页面。"""
+    brand = "#0969da"
+    admin_path = "/admin/plugin-reports" if event_name == "举报" else "/admin/plugin-applications"
+    admin_url = f"{settings.WEB_PUBLIC_ORIGIN.rstrip('/')}{admin_path}"
+    content = f"""
+          <tr>
+            <td style="padding:36px 32px 20px;">
+              <div style="display:inline-block;margin-bottom:18px;padding:5px 11px;border-radius:999px;background-color:#ddf4ff;color:#0969da;font-size:13px;font-weight:700;">待处理</div>
+              <h1 style="margin:0 0 20px;font-size:21px;color:#1f2328;font-weight:700;">新的插件{html_lib.escape(event_name)}</h1>
+              {_email_info_table((("插件", plugin_name), ("事件", event_name)))}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f6f8fa;border-left:4px solid {brand};border-radius:6px;">
+                <tr><td style="padding:14px 16px;">
+                  <p style="margin:0 0 5px;font-size:13px;font-weight:700;color:#57606a;">提交内容</p>
+                  <p style="margin:0;font-size:14px;line-height:1.7;color:#1f2328;word-break:break-word;">{_email_text(detail)}</p>
+                </td></tr>
+              </table>
+            </td>
+          </tr>
+          {_email_button_row(admin_url, "前往管理后台", brand)}"""
+    return _email_shell(content)
+
+
+def _email_text(value: str) -> str:
+    """转义邮件中的动态文本，并保留用户输入的自然换行。"""
+    return html_lib.escape(value).replace("\n", "<br>")
+
+
+def _email_info_table(rows: tuple[tuple[str, str], ...]) -> str:
+    """生成兼容传统邮件客户端的键值信息表。"""
+    cells = "".join(
+        f"""<tr>
+          <td style="width:88px;padding:8px 12px 8px 0;border-bottom:1px solid #eaecef;color:#8b949e;font-size:14px;vertical-align:top;">{html_lib.escape(label)}</td>
+          <td style="padding:8px 0;border-bottom:1px solid #eaecef;color:#1f2328;font-size:14px;font-weight:600;word-break:break-word;">{_email_text(value)}</td>
+        </tr>"""
+        for label, value in rows
+    )
+    return f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{cells}</table>'
+
+
+def _email_button_row(url: str, label: str, color: str) -> str:
+    """生成使用 table 布局的邮件操作按钮。"""
+    safe_url = html_lib.escape(url, quote=True)
+    return f"""
+          <tr>
+            <td style="padding:4px 32px 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;">
+                <tr><td align="center" style="border-radius:8px;background-color:{color};">
+                  <a href="{safe_url}" target="_blank" style="display:inline-block;padding:12px 32px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:8px;">{html_lib.escape(label)}</a>
+                </td></tr>
+              </table>
+            </td>
+          </tr>"""
+
+
+def _email_shell(content: str) -> str:
+    """复用注册邮件的品牌外框，保持 QQ 邮箱和 Outlook 兼容。"""
+    return f"""\
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background-color:#f2f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f2f4f7;padding:32px 12px;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background-color:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 4px 18px rgba(0,0,0,0.06);">
+        <tr><td style="background-color:#0969da;padding:24px 32px;text-align:center;"><span style="color:#ffffff;font-size:20px;font-weight:700;letter-spacing:0.5px;">洛谷档案馆</span></td></tr>
+        {content}
+        <tr><td style="padding:0 32px;"><div style="border-top:1px solid #eaecef;"></div></td></tr>
+        <tr><td style="padding:20px 32px 28px;"><p style="margin:0;font-size:12px;line-height:1.6;color:#8b949e;">本站为第三方存档，与洛谷官方无关。</p></td></tr>
+      </table>
+      <p style="max-width:520px;margin:16px auto 0;font-size:11px;color:#b0b7c0;text-align:center;">© 2026 洛谷档案馆 · 此邮件由系统自动发送，请勿直接回复</p>
+    </td></tr>
+  </table>
+</body>
+</html>"""
 
 
 def _verification_html(verify_url: str) -> str:

@@ -89,7 +89,10 @@ function typeLabel(type: string): string {
     user: '用户',
     problem: '题目',
     problem_list: '题目列表',
+    problem_catalog: '题库同步',
     problem_solution: '题解状态',
+    contest: '比赛',
+    contest_scoreboard: '比赛榜单',
   }
   return map[type] || type
 }

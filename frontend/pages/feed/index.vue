@@ -15,7 +15,7 @@ interface FeedItem {
   user: { uid: number; name: string; color: string; badge: string | null; avatar: string | null } | null
 }
 
-// 首屏不等待后端：先显示页面，再拉第一页犇犇。
+// `/feed` 列表页与 `/feed/{id}` 详情页是同级路由；首屏先显示，再拉第一页犇犇。
 const { data: firstPage, pending: firstPending } = useLazyAsyncData('feed-first', () =>
   api<FeedItem[]>('/feed', { query: { limit: PAGE_SIZE } }),
   { server: false },
@@ -145,7 +145,7 @@ useCopyCode(listRef)
           </header>
           <div class="lg-content content" v-html="feedHtml(f.content_md, f.merged_suffix_md, f.merged_link_md || [], f.merged_image_md || [])" />
           <footer class="feed-foot">
-            <span class="feed-id">#{{ f.id }}</span>
+            <NuxtLink :to="`/feed/${f.id}`" class="feed-id">#{{ f.id }}</NuxtLink>
             <FeedReplyButton :content="f.content_md" :sender-name="f.user?.name" />
           </footer>
         </div>

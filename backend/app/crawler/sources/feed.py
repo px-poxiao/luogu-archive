@@ -11,6 +11,7 @@ from __future__ import annotations
 import time as _t
 from datetime import datetime, timezone
 
+from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,21 +39,27 @@ from app.crawler.sources.base import (
 from app.models._common import CrawlTaskStatus, LuoguColor, utcnow
 from app.models.luogu_content import Feed
 from app.models.luogu_user import LuoguUser
+from app.models.task import ContentSuppression
+from app.services.content_suppression import find_active_suppression
 
 log = get_logger(__name__)
 
 
-async def crawl_user_page(uid: int, *, page: int = 1, trigger: str = "scheduled") -> None:
+async def crawl_user_page(uid: int, *, page: int = 1, trigger: str = "scheduled") -> set[int]:
     """爬某用户犇犇的一页。"""
+    async with db_session() as session:
+        if await find_active_suppression(session, "user", str(uid)):
+            log.info("crawl_feed.skip_suppressed", uid=uid, page=page)
+            return set()
     lock_id = f"{uid}:{page}"
     async with task_lock("feed", lock_id, ttl_sec=60) as got:
         if not got:
             log.info("crawl_feed.skip_locked", uid=uid, page=page)
-            return
-        await _crawl_inner(uid, page, trigger=trigger)
+            return set()
+        return await _crawl_inner(uid, page, trigger=trigger)
 
 
-async def _crawl_inner(uid: int, page: int, *, trigger: str) -> None:
+async def _crawl_inner(uid: int, page: int, *, trigger: str) -> set[int]:
     node = get_default_node(NodeKind.AUTHED)
     redis = get_redis()
     url_path = f"/api/feed/list?user={uid}&page={page}"
@@ -136,6 +143,11 @@ async def _crawl_inner(uid: int, page: int, *, trigger: str) -> None:
             )
             await mark_account_ok(acc.account_id)
             log.info("crawl_feed.done", uid=uid, page=page, inserted=inserted, total=len(results))
+            return {
+                int(row["id"])
+                for row in results
+                if isinstance(row, dict) and row.get("id") is not None
+            }
 
         except CrawlerAccountInvalid as e:
             # cookie 失效 → 立即禁用账号
@@ -203,6 +215,26 @@ async def _insert_feeds(session: AsyncSession, rows: list) -> int:
                 "crawled_at": utcnow(),
             }
         )
+    if not data:
+        return 0
+    feed_ids = [str(row["id"]) for row in data]
+    owner_ids = [str(row["author_uid"]) for row in data]
+    hidden_q = select(
+        ContentSuppression.target_type, ContentSuppression.target_id
+    ).where(
+        ContentSuppression.restored_at.is_(None),
+        or_(
+            and_(ContentSuppression.target_type == "feed", ContentSuppression.target_id.in_(feed_ids)),
+            and_(ContentSuppression.target_type == "user", ContentSuppression.target_id.in_(owner_ids)),
+        ),
+    )
+    hidden = {
+        (target_type, target_id)
+        for target_type, target_id in (await session.execute(hidden_q)).all()
+    }
+    data = [row for row in data if
+        ("feed", str(row["id"])) not in hidden
+        and ("user", str(row["author_uid"])) not in hidden]
     if not data:
         return 0
     stmt = mysql_insert(Feed).values(data).prefix_with("IGNORE")

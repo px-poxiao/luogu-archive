@@ -28,7 +28,9 @@ from app.models.luogu_content import (
     Paste,
     PasteVersion,
     Problem,
+    ProblemSolutionHistory,
 )
+from app.services.content_suppression import ensure_content_visible, visible_content_clause
 from app.models.luogu_user import LuoguUser
 from app.services.feed_merge import merge_feed_rows
 
@@ -119,8 +121,20 @@ class ProblemItem(BaseModel):
     pid: str
     title: str
     difficulty: str | None
-    tags: list[int] = []
+    tags: list[int | str] = Field(default_factory=list)
     solution_open: bool
+
+
+class ProblemSolutionHistoryItem(BaseModel):
+    solution_open: bool
+    changed_at: datetime
+
+
+class ProblemDetail(ProblemItem):
+    last_solution_check_at: datetime | None
+    solution_history: list[ProblemSolutionHistoryItem] = Field(default_factory=list)
+    first_seen_at: datetime
+    updated_at: datetime
 
 
 class ProblemDifficultyBucket(BaseModel):
@@ -181,7 +195,10 @@ async def get_article(
     article_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> ArticleDetail:
+    await ensure_content_visible(db, "article", article_id)
     art = await db.get(Article, article_id)
+    if art is not None:
+        await ensure_content_visible(db, "article", article_id, art.author_uid)
     if art is None:
         # 未爬过 → 立即派发一次高优先级爬取，并返回 404
         from app.tasks.actors.crawl import crawl_article
@@ -218,7 +235,10 @@ async def get_article_history(
     article_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> ArticleHistoryResp:
+    await ensure_content_visible(db, "article", article_id)
     art = await db.get(Article, article_id)
+    if art is not None:
+        await ensure_content_visible(db, "article", article_id, art.author_uid)
     if art is None:
         raise NotFoundError("文章未被本站收录")
 
@@ -254,7 +274,10 @@ async def get_paste(
     paste_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> PasteDetail:
+    await ensure_content_visible(db, "paste", paste_id)
     p = await db.get(Paste, paste_id)
+    if p is not None:
+        await ensure_content_visible(db, "paste", paste_id, p.author_uid)
     if p is None:
         from app.tasks.actors.crawl import crawl_paste
         crawl_paste.send(paste_id, "passive")
@@ -286,7 +309,10 @@ async def get_paste_history(
     paste_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> PasteHistoryResp:
+    await ensure_content_visible(db, "paste", paste_id)
     paste = await db.get(Paste, paste_id)
+    if paste is not None:
+        await ensure_content_visible(db, "paste", paste_id, paste.author_uid)
     if paste is None:
         raise NotFoundError("剪贴板未被本站收录")
 
@@ -322,7 +348,9 @@ async def global_feed(
     before: datetime | None = Query(None, description="分页锚点：拿早于此时间的"),
     db: AsyncSession = Depends(get_db),
 ) -> list[FeedItem]:
-    q = select(Feed).order_by(desc(Feed.time)).limit(limit)
+    q = select(Feed).where(
+        visible_content_clause("feed", Feed.id, Feed.author_uid)
+    ).order_by(desc(Feed.time)).limit(limit)
     if before is not None:
         q = q.where(Feed.time < before)
     rows = (await db.execute(q)).scalars().all()
@@ -346,6 +374,31 @@ async def global_feed(
             )
         )
     return items
+
+
+@router.get("/feed/{feed_id}", response_model=FeedItem)
+async def get_feed(
+    feed_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> FeedItem:
+    """返回分享地址对应的单条犇犇，不附带其他列表内容。"""
+    await ensure_content_visible(db, "feed", str(feed_id))
+    row = await db.get(Feed, feed_id)
+    if row is None:
+        raise NotFoundError("犇犇未被本站收录")
+    await ensure_content_visible(db, "feed", str(feed_id), row.author_uid)
+    display = (await merge_feed_rows(db, [row]))[feed_id]
+    return FeedItem(
+        id=row.id,
+        type=row.type,
+        time=row.time,
+        content_md=display.content_md,
+        merged_suffix_md=display.merged_suffix_md,
+        merged_from_id=display.merged_from_id,
+        merged_link_md=list(display.merged_link_md),
+        merged_image_md=list(display.merged_image_md),
+        user=await _user_brief(db, row.author_uid),
+    )
 
 
 # ============================================================
@@ -529,6 +582,47 @@ async def problem_list_full_by_difficulty(
         )
         for p in rows
     ]
+
+
+@router.get("/problem/{pid}", response_model=ProblemDetail)
+async def problem_detail(
+    pid: str,
+    db: AsyncSession = Depends(get_db),
+) -> ProblemDetail:
+    """返回单题难度、标签及题解开放状态和变更历史。"""
+
+    normalized = pid.strip().upper()
+    problem = await db.get(Problem, normalized)
+    if problem is None:
+        raise NotFoundError("题目未被本站收录")
+
+    history_q = (
+        select(ProblemSolutionHistory)
+        .where(ProblemSolutionHistory.pid == normalized)
+        .order_by(
+            desc(ProblemSolutionHistory.changed_at),
+            desc(ProblemSolutionHistory.id),
+        )
+    )
+    history = (await db.execute(history_q)).scalars().all()
+
+    return ProblemDetail(
+        pid=problem.pid,
+        title=problem.title,
+        difficulty=_problem_difficulty_name(problem.difficulty),
+        tags=problem.tags or [],
+        solution_open=problem.solution_open,
+        last_solution_check_at=problem.last_solution_check_at,
+        solution_history=[
+            ProblemSolutionHistoryItem(
+                solution_open=item.solution_open,
+                changed_at=item.changed_at,
+            )
+            for item in history
+        ],
+        first_seen_at=problem.first_seen_at,
+        updated_at=problem.updated_at,
+    )
 
 
 # ============================================================

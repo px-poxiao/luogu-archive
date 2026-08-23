@@ -5,6 +5,8 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
+    Boolean,
     DateTime,
     Enum,
     Index,
@@ -37,7 +39,7 @@ class CrawlTask(Base):
 
     id: Mapped[int] = BigPKColumn()
     task_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    # "article" / "paste" / "feed" / "user" / "judgement" / "problem_list" / "problem_solution"
+    # "article" / "paste" / "feed" / "user" / "judgement" / "problem_catalog" / "problem_solution"
 
     url: Mapped[str] = mapped_column(String(1024), nullable=False)
     node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -97,11 +99,17 @@ class TakedownRequest(Base, TimestampMixin):
     )
 
     id: Mapped[int] = BigPKColumn()
+    requester_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     requester_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    requester_contact: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # 数据库沿用历史列名 requester_contact，应用层只允许保存联系邮箱。
+    requester_email: Mapped[str | None] = mapped_column(
+        "requester_contact", String(256), nullable=True
+    )
     # 支持的目标类型：article/paste/feed/user/judgement/image
     target_type: Mapped[str] = mapped_column(String(32), nullable=False)
     target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    target_author_uid: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
 
     # 可选：证明文件、截图等
@@ -117,3 +125,46 @@ class TakedownRequest(Base, TimestampMixin):
     handled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    auto_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    execution_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    execution_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TakedownProbe(Base, TimestampMixin):
+    """删除申请前的可访问性探测，令牌十分钟内有效。"""
+
+    __tablename__ = "takedown_probes"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    requester_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    accessible: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    author_uid: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ContentSuppression(Base, TimestampMixin):
+    """软隐藏记录；原始内容及历史版本继续留在数据库中。"""
+
+    __tablename__ = "content_suppressions"
+    __table_args__ = (
+        Index("ux_cs_target", "target_type", "target_id", unique=True),
+        Index("ix_cs_owner", "owner_uid", "restored_at"),
+    )
+
+    id: Mapped[int] = BigPKColumn()
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    owner_uid: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    takedown_request_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    public_message: Mapped[str] = mapped_column(String(256), nullable=False)
+    block_crawl: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    hidden_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_by_admin_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

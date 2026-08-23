@@ -3,7 +3,7 @@
 队列约定：
 - crawler.hi：用户正在等待的任务。
 - crawler.mid：发现、过期刷新和级联等普通后台任务。
-- crawler.low：题目列表与题解状态任务。
+- crawler.low：题库同步与题解状态任务。
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from app.crawler.sources.feed import crawl_user_page as _crawl_feed_user_page
 from app.crawler.sources.judgement import crawl_all as _crawl_judgement_all
 from app.crawler.sources.paste import crawl_one as _crawl_paste_one
 from app.crawler.sources.problem import (
-    crawl_list_page as _crawl_problem_list_page,
+    sync_problem_catalog as _sync_problem_catalog,
 )
 from app.crawler.sources.problem import (
     crawl_solution_state as _crawl_problem_solution_state,
@@ -40,6 +40,7 @@ from app.tasks.broker import (
     ANON_CN,
     ANON_COM,
     AUTH_COM,
+    NO_RESOURCES,
     QUEUE_CRAWL_HI,
     QUEUE_CRAWL_LOW,
     QUEUE_CRAWL_MID,
@@ -47,6 +48,7 @@ from app.tasks.broker import (
     actor,
 )
 from app.tasks.problem_queue import release_problem_job
+from app.services.takedown_probe import run_takedown_probe
 
 log = get_logger(__name__)
 
@@ -90,6 +92,25 @@ def _manual_user_resources(
 
     profile_done = bool(args[1]) if len(args) > 1 else False
     return AUTH_COM if profile_done else ANON_COM
+
+
+def _takedown_probe_resources(args: tuple, _kwargs: dict) -> TaskResources:
+    """犇犇探测需要账号，其余探测只使用匿名国际站资源。"""
+    return AUTH_COM if len(args) > 1 and args[1] == "feed" else ANON_COM
+
+
+@actor(queue_name=QUEUE_CRAWL_HI, resources=_takedown_probe_resources, max_retries=0)
+def probe_takedown_target(token: str, target_type: str) -> None:
+    """删除申请探测走现有高优先级队列，不占用 API 进程。"""
+    log.info("actor.probe_takedown_target", token=token, target_type=target_type)
+    _run_or_defer(
+        "probe_takedown_target",
+        (token, target_type),
+        _run_domain_task(
+            lambda: run_takedown_probe(token),
+            kind=NodeKind.AUTHED if target_type == "feed" else NodeKind.ANON,
+        ),
+    )
 
 
 def _scheduled_feed_key(uid: int) -> str:
@@ -265,43 +286,41 @@ def crawl_judgement_hi(trigger: str = "manual") -> None:
     )
 
 
-@actor(queue_name=QUEUE_CRAWL_LOW, resources=ANON_CN, **_RETRY)
+@actor(queue_name=QUEUE_CRAWL_LOW, resources=NO_RESOURCES, **_RETRY)
+def sync_problem_catalog(
+    trigger: str = "scheduled",
+    dedup_token: str | None = None,
+) -> None:
+    """从洛谷 CDN 的官方题库包全量同步题目元数据。"""
+    log.info("actor.sync_problem_catalog", trigger=trigger)
+    try:
+        completed = _run_or_defer(
+            "sync_problem_catalog",
+            (trigger, dedup_token),
+            _sync_problem_catalog(trigger=trigger),
+        )
+    except BaseException:
+        run_async(release_problem_job("catalog", "official", dedup_token))
+        raise
+    if completed:
+        run_async(release_problem_job("catalog", "official", dedup_token))
+
+
+@actor(queue_name=QUEUE_CRAWL_LOW, resources=NO_RESOURCES, max_retries=0)
 def crawl_problem_list_page(
     page: int,
     trigger: str = "scheduled",
     dedup_token: str | None = None,
 ) -> None:
-    log.info("actor.crawl_problem_list_page", page=page, trigger=trigger)
-    try:
-        completed = _run_or_defer(
-            "crawl_problem_list_page",
-            (page, trigger, dedup_token),
-            _run_domain_task(
-                lambda: _crawl_problem_list_page(page, trigger=trigger),
-                cn=True,
-                defer_when_busy=False,
-            ),
-        )
-    except (CrawlerNotFound, CrawlerAccountInvalid):
-        run_async(release_problem_job("list", page, dedup_token))
-        raise
-    if completed:
-        run_async(release_problem_job("list", page, dedup_token))
+    """消费升级前残留的旧分页消息，不再访问题目列表。"""
+    log.info("actor.crawl_problem_list_page_ignored", page=page, trigger=trigger)
+    run_async(release_problem_job("list", page, dedup_token))
 
 
-@actor(queue_name=QUEUE_CRAWL_LOW, resources=ANON_CN, **_RETRY)
+@actor(queue_name=QUEUE_CRAWL_LOW, resources=NO_RESOURCES, max_retries=0)
 def crawl_problem_list_page_hi(page: int, trigger: str = "manual") -> None:
-    """兼容旧消息；题目列表任务现在统一使用低优先级。"""
-    log.info("actor.crawl_problem_list_page_hi", page=page, trigger=trigger)
-    _run_or_defer(
-        "crawl_problem_list_page_hi",
-        (page, trigger),
-        _run_domain_task(
-            lambda: _crawl_problem_list_page(page, trigger=trigger),
-            cn=True,
-            defer_when_busy=False,
-        ),
-    )
+    """消费升级前残留的旧高优先级分页消息，不再访问题目列表。"""
+    log.info("actor.crawl_problem_list_page_hi_ignored", page=page, trigger=trigger)
 
 
 @actor(queue_name=QUEUE_CRAWL_LOW, resources=ANON_CN, **_RETRY)

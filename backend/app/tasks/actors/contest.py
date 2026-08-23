@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import UTC, timedelta
+from time import perf_counter
 from typing import Any, TypeVar
 
 from app.core.db import db_session
@@ -11,7 +12,7 @@ from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.crawler.http import crawler_task_cooldown
 from app.crawler.nodes import NodeKind, get_default_node
-from app.models._common import utcnow
+from app.models._common import CrawlTaskStatus, utcnow
 from app.models.contest import Contest
 from app.models.luogu_user import LuoguUser
 from app.tasks.asyncio_runner import run_async
@@ -24,9 +25,50 @@ from app.tasks.broker import (
     TaskResources,
     actor,
 )
+from app.tasks.runtime import current_async_reservation
 
 log = get_logger(__name__)
 T = TypeVar("T")
+
+
+async def _record_crawl(
+    task_type: str,
+    url: str,
+    trigger: str,
+    factory: Callable[[], Awaitable[T]],
+) -> T:
+    """把比赛流水线中的真实网络请求写入站点预览。"""
+
+    from app.crawler.sources.base import (
+        record_task_done,
+        record_task_start,
+        trigger_from,
+    )
+
+    reservation = current_async_reservation()
+    started = perf_counter()
+    task_id = await record_task_start(
+        task_type,
+        url,
+        trigger=trigger_from(trigger),
+        account_id=reservation.account_id if reservation else None,
+    )
+    try:
+        result = await factory()
+    except Exception as exc:
+        await record_task_done(
+            task_id,
+            status=CrawlTaskStatus.failed,
+            error_msg=str(exc),
+            duration_ms=int((perf_counter() - started) * 1000),
+        )
+        raise
+    await record_task_done(
+        task_id,
+        status=CrawlTaskStatus.success,
+        duration_ms=int((perf_counter() - started) * 1000),
+    )
+    return result
 
 
 async def _run_cn_task(factory: Callable[[], Awaitable[T]]) -> T:
@@ -73,7 +115,12 @@ async def _archive(contest_id: int, trigger: str, force: bool) -> None:
             return
         try:
             await _run_cn_task(
-                lambda: archive_one(contest_id, trigger=trigger, force=force)
+                lambda: _record_crawl(
+                    "contest",
+                    f"https://www.luogu.com.cn/contest/{contest_id}",
+                    trigger,
+                    lambda: archive_one(contest_id, trigger=trigger, force=force),
+                )
             )
         except CrawlerCooldownDeferred:
             # 理论上资源队列已经预留域名门；保留透传用于兼容旧调用链和熔断竞态。
@@ -91,7 +138,7 @@ async def _archive(contest_id: int, trigger: str, force: bool) -> None:
 
 @actor(
     queue_name=QUEUE_CRAWL_MID,
-    resources=ANON_CN,
+    resources=AUTH_CN,
     max_retries=2,
     min_backoff=10_000,
 )
@@ -119,11 +166,19 @@ async def _archive_scoreboard_page(
             return
         try:
             await _run_cn_task(
-                lambda: archive_scoreboard_page(
-                    contest_id,
-                    page,
-                    trigger=trigger,
-                    run_id=run_id,
+                lambda: _record_crawl(
+                    "contest_scoreboard",
+                    (
+                        "https://www.luogu.com.cn/fe/api/contest/scoreboard/"
+                        f"{contest_id}?page={page}"
+                    ),
+                    trigger,
+                    lambda: archive_scoreboard_page(
+                        contest_id,
+                        page,
+                        trigger=trigger,
+                        run_id=run_id,
+                    ),
                 )
             )
         except CrawlerCooldownDeferred:

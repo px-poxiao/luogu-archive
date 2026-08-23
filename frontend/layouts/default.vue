@@ -296,6 +296,9 @@ const navItems = [
               <a href="https://github.com/px-poxiao/luogu-archive" target="_blank" rel="noopener noreferrer">
                 GitHub
               </a>
+              <a href="https://qm.qq.com/q/b4D2ZhhtN6" target="_blank" rel="noopener noreferrer">
+                QQ群（936024195）
+              </a>
               <NuxtLink to="/takedown">侵权投诉 / 内容删除</NuxtLink>
             </div>
           </div>

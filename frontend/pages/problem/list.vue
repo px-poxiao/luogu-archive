@@ -7,7 +7,7 @@ interface ProblemItem {
   pid: string
   title: string
   difficulty: string | null
-  tags: number[]
+  tags: Array<number | string>
   solution_open: boolean
 }
 
@@ -27,7 +27,7 @@ const { data, pending: listPending } = useLazyAsyncData('problem-list', () =>
   { server: false },
 )
 const { data: lastCrawled } = useLazyAsyncData('problem-list-last-crawled', () =>
-  api<{ last_crawled_at: string | null }>('/last-crawled?type=problem_list'),
+  api<{ last_crawled_at: string | null }>('/last-crawled?type=problem_catalog'),
   { server: false },
 )
 

@@ -11,6 +11,7 @@ from app.core.config import settings
 
 ACTOR_KINDS = {
     "crawl_problem_list_page": "list",
+    "sync_problem_catalog": "catalog",
     "crawl_problem_solution": "solution",
 }
 DEDUP_TTL_SEC = 30 * 24 * 60 * 60
@@ -55,9 +56,16 @@ def _parse_task(task_key: str, payload: dict[str, str]) -> QueuedProblemTask | N
     if not isinstance(actor_args, list) or not actor_args:
         return None
 
-    target = str(actor_args[0]).upper() if kind == "solution" else str(actor_args[0])
+    target = "official" if kind == "catalog" else str(actor_args[0])
+    if kind == "solution":
+        target = target.upper()
     task_id = payload.get("task_id") or task_key.removeprefix("rq:task:")
-    token = str(actor_args[2]) if len(actor_args) > 2 and actor_args[2] else task_id
+    token_index = 1 if kind == "catalog" else 2
+    token = (
+        str(actor_args[token_index])
+        if len(actor_args) > token_index and actor_args[token_index]
+        else task_id
+    )
     return QueuedProblemTask(
         task_key=task_key,
         task_id=task_id,
