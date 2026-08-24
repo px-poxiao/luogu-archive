@@ -6,7 +6,7 @@ import time as _t
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import db_session
@@ -15,7 +15,6 @@ from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.crawler.cookies import lease_account
 from app.crawler.http import fetch_authed
-from app.crawler.lentille import data_from_lentille
 from app.crawler.nodes import NodeKind, get_default_node
 from app.crawler.sources.article import _upsert_author_brief
 from app.crawler.sources.base import (
@@ -57,6 +56,24 @@ def _author_uid(author: Any) -> int | None:
         return None
 
 
+def _non_negative_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _discussion_data(context: dict[str, Any]) -> dict[str, Any]:
+    """从 lentille 完整响应或已解包响应中取得讨论原始数据。"""
+    nested = context.get("data")
+    if isinstance(nested, dict) and isinstance(nested.get("post"), dict):
+        return nested
+    if isinstance(context.get("post"), dict) and isinstance(context.get("replies"), dict):
+        return context
+    raise CrawlerError(f"讨论响应字段缺失，可见 keys: {list(context.keys())}")
+
+
 def _discussion_fields(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     post = data.get("post")
     replies = data.get("replies")
@@ -65,12 +82,15 @@ def _discussion_fields(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
     if post.get("valid") is False:
         raise CrawlerNotFound("讨论已被源站删除或隐藏")
     rows = replies.get("result")
+    if isinstance(rows, dict):
+        rows = list(rows.values())
     if not isinstance(rows, list):
         raise CrawlerError("讨论回复列表格式异常")
 
-    # recentReply / pinnedReply 可能不在当前 result 中，按回复 ID 去重后一起归档。
+    # recentReply 按接口定义只有 ID、作者和时间，没有正文，不能用于归档。
+    # pinnedReply 是完整回复，可能不在当前 result 中，按回复 ID 补充。
     candidates = [row for row in rows if isinstance(row, dict)]
-    for key in ("recentReply", "pinnedReply"):
+    for key in ("pinnedReply",):
         extra = post.get(key)
         if isinstance(extra, dict):
             candidates.append(extra)
@@ -151,7 +171,7 @@ async def _crawl_page_inner(
             )
         if result.data is None:
             raise CrawlerError("讨论页无 lentille-context")
-        data = data_from_lentille(result.data)
+        data = _discussion_data(result.data)
         post, replies, rows = _discussion_fields(data)
         rows = [
             row
@@ -159,11 +179,18 @@ async def _crawl_page_inner(
             if str(row.get("content") or "").strip()
         ]
 
-        try:
-            reply_count = max(0, int(replies.get("count") or post.get("replyCount") or 0))
-            per_page = max(1, int(replies.get("perPage") or len(replies.get("result") or []) or 1))
-        except (TypeError, ValueError) as exc:
-            raise CrawlerError("讨论分页信息格式异常") from exc
+        count_candidates = [
+            value
+            for value in (
+                _non_negative_int(replies.get("count")),
+                _non_negative_int(post.get("replyCount")),
+            )
+            if value is not None
+        ]
+        reply_count = max(count_candidates, default=0)
+        raw_result = replies.get("result")
+        result_count = len(raw_result) if isinstance(raw_result, (list, dict)) else 0
+        per_page = max(_non_negative_int(replies.get("perPage")) or 0, result_count, 1)
         total_pages = max(1, math.ceil(reply_count / per_page))
         page_out_of_range = page > total_pages
 
@@ -185,6 +212,25 @@ async def _crawl_page_inner(
                 await _upsert_author_brief(session, row.get("author"))
             await _upsert_author_brief(session, post.get("author"))
 
+            stored_reply_count = int(
+                await session.scalar(
+                    select(func.count(DiscussionReply.reply_id))
+                    .join(
+                        DiscussionReplyVersion,
+                        DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+                    )
+                    .where(
+                        DiscussionReply.discussion_id == discussion_id,
+                        DiscussionReplyVersion.content_md != "",
+                        func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
+                    )
+                )
+                or 0
+            )
+            reply_count = max(reply_count, stored_reply_count)
+            total_pages = max(1, math.ceil(reply_count / per_page))
+            page_out_of_range = page > total_pages
+
             now = utcnow()
             discussion.observed_reply_count = reply_count
             discussion.last_per_page = per_page
@@ -194,7 +240,7 @@ async def _crawl_page_inner(
             discussion.last_crawl_status = "ok"
             if page == total_pages:
                 discussion.last_crawled_page = total_pages
-                discussion.archived_reply_count = reply_count
+                discussion.archived_reply_count = stored_reply_count
             elif not page_out_of_range:
                 discussion.last_crawled_page = max(discussion.last_crawled_page, page)
             await session.commit()
