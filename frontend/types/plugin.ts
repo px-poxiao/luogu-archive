@@ -44,6 +44,8 @@ export interface PluginVersion {
   supports_mobile: boolean
   last_verified_on: string
   published_at: string
+  download_count?: number
+  copy_count?: number
 }
 
 export interface PluginDetail {
