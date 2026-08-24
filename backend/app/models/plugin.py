@@ -75,6 +75,13 @@ class PluginVersion(Base):
     code_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     download_filename: Mapped[str] = mapped_column(String(128), nullable=False)
 
+    # 为每个版本单独计算下载量
+    download_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable = False,
+        default = 0,
+    )
+
     user_request_level: Mapped[int] = mapped_column(Integer, nullable=False)
     user_request_analysis: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
     admin_request_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
