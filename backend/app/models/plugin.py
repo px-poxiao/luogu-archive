@@ -53,6 +53,8 @@ class Plugin(Base, TimestampMixin):
     approved_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
+    # 插件总体使用计数（可选：将各版本的下载/复制合并到此字段）
+    total_usage: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class PluginVersion(Base):
@@ -72,6 +74,7 @@ class PluginVersion(Base):
     code: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
     code_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     download_filename: Mapped[str] = mapped_column(String(128), nullable=False)
+
 
     user_request_level: Mapped[int] = mapped_column(Integer, nullable=False)
     user_request_analysis: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
@@ -94,6 +97,9 @@ class PluginVersion(Base):
     published_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
+    # 计数器：下载与复制次数（每个版本独立累积），默认 0
+    download_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    copy_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class PluginTag(Base, TimestampMixin):

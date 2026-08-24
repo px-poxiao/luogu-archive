@@ -54,3 +54,7 @@ backend/tests/.local/
 
 # 测试文件
 test/
+
+# 开发临时文件
+.devcontainer
+.venv

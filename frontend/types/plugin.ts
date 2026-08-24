@@ -17,8 +17,8 @@ export interface PluginSnapshot {
   supports_desktop: boolean
   supports_mobile: boolean
   last_verified_on: string
-  admin_request_level?: number | null
-  admin_request_analysis?: string | null
+  admin_request_level: number | null
+  admin_request_analysis: string | null
   code_bytes?: number
   code_truncated?: boolean
 }
@@ -41,6 +41,8 @@ export interface PluginVersion {
   supports_mobile: boolean
   last_verified_on: string
   published_at: string
+  download_count?: number
+  copy_count?: number
 }
 
 export interface PluginDetail {
