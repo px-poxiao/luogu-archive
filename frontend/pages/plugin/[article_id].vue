@@ -165,6 +165,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
       <button
         v-if="detail.current"
         type="button"
+        class="archive-action-button"
         @click="showPending = !showPending; selectedVersion = detail.current"
       >{{ showPending ? '切到已审核代码' : '查看待审核代码' }}</button>
     </div>
@@ -209,11 +210,12 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
         <div class="code-actions">
           <button
             type="button"
+            class="archive-action-button"
             :disabled="copyDisabled"
             :title="copyDisabled ? '完整代码超过 100 KiB，仅支持下载' : '复制代码'"
             @click="openInstall('copy')"
           >复制代码</button>
-          <button type="button" title="下载代码" @click="openInstall('download')">下载文件</button>
+          <button type="button" class="archive-action-button" title="下载代码" @click="openInstall('download')">下载文件</button>
         </div>
       </div>
       <div v-if="codePreview.truncated" class="code-truncation" role="status">
@@ -258,7 +260,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
       <span>文章编号 {{ articleId }}</span>
       <div>
         <NuxtLink v-if="detail.is_owner" :to="`/plugin/submit?article_id=${articleId}`" class="archive-action-button">提交更新</NuxtLink>
-        <button type="button" @click="reportOpen = !reportOpen">举报插件</button>
+        <button type="button" class="archive-action-button" @click="reportOpen = !reportOpen">举报插件</button>
       </div>
     </footer>
 
@@ -273,7 +275,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
         <option value="other">其他</option>
       </select>
       <textarea v-model.trim="reportDescription" minlength="10" maxlength="5000" rows="5" placeholder="请至少填写 10 个字的具体说明" required />
-      <button type="submit">提交举报</button>
+      <button type="submit" class="archive-action-button">提交举报</button>
     </form>
 
     <p v-if="toast" class="toast">{{ toast }}</p>

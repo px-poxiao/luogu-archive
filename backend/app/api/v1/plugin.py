@@ -113,7 +113,6 @@ def _version_dict(row: PluginVersion, *, include_code: bool = True) -> dict:
     result = {
         "id": row.id,
         "version": row.version,
-
         "code_sha256": row.code_sha256,
         "download_filename": row.download_filename,
         "user_request_level": row.user_request_level,
@@ -263,7 +262,6 @@ async def list_plugins(
             } if author else None),
             "version": version.version,
             "final_request_level": version.final_request_level,
-
             "runtime_mode": version.runtime_mode,
             "supports_desktop": version.supports_desktop,
             "supports_mobile": version.supports_mobile,
