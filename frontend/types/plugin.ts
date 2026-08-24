@@ -17,16 +17,13 @@ export interface PluginSnapshot {
   supports_desktop: boolean
   supports_mobile: boolean
   last_verified_on: string
-  admin_request_level?: number | null
-  admin_request_analysis?: string | null
+  admin_request_level: number | null
+  admin_request_analysis: string | null
   code_bytes?: number
   code_truncated?: boolean
 }
 
 export interface PluginVersion {
-
-  download_count: number
-
   id: number
   version: string
   code: string

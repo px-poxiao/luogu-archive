@@ -257,7 +257,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
     <footer class="detail-footer">
       <span>文章编号 {{ articleId }}</span>
       <div>
-        <NuxtLink v-if="detail.is_owner" :to="`/plugin/submit?article_id=${articleId}`">提交更新</NuxtLink>
+        <NuxtLink v-if="detail.is_owner" :to="`/plugin/submit?article_id=${articleId}`" class="archive-action-button">提交更新</NuxtLink>
         <button type="button" @click="reportOpen = !reportOpen">举报插件</button>
       </div>
     </footer>

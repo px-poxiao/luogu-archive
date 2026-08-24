@@ -114,8 +114,6 @@ def _version_dict(row: PluginVersion, *, include_code: bool = True) -> dict:
         "id": row.id,
         "version": row.version,
 
-        "download_count": row.download_count,
-
         "code_sha256": row.code_sha256,
         "download_filename": row.download_filename,
         "user_request_level": row.user_request_level,
@@ -265,8 +263,6 @@ async def list_plugins(
             } if author else None),
             "version": version.version,
             "final_request_level": version.final_request_level,
-
-            "download_count": version.download_count,
 
             "runtime_mode": version.runtime_mode,
             "supports_desktop": version.supports_desktop,
@@ -431,27 +427,7 @@ async def download_plugin_version(
     if version is None or version.plugin_id != plugin.id:
         raise NotFoundError("代码版本不存在")
 
-    # 原子递增计数：避免读-改-写导致并发丢失。
-    try:
-        await db.execute(text("UPDATE plugin_versions SET download_count = download_count + 1 WHERE id = :id"), {"id": version.id})
-        await db.execute(text("UPDATE plugins SET total_usage = total_usage + 1 WHERE id = :pid"), {"pid": plugin.id})
-        await db.commit()
-    except Exception:
-        # 计数失败不应阻断下载流程，忽略错误（但不掩盖）
-        try:
-            await db.rollback()
-        except Exception:
-            pass
-
     return _code_download_response(version.code, version.download_filename)
-
-    # 叠加下载次数（人次）
-    version.download_count += 1
-    await db.commit()
-    return _code_download_response(
-        version.code,
-        version.download_filename
-    )
 
 @router.post("/{article_id}/increment_download/{version_id}")
 async def increment_download(
