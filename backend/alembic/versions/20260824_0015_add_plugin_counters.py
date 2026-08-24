@@ -1,7 +1,7 @@
 """为插件版本与插件主表添加下载/复制计数列。
 
-Revision ID: 20260824_0014
-Revises: 20260812_0011
+Revision ID: 20260824_0015
+Revises: 20260824_0014
 Create Date: 2026-08-24
 """
 from __future__ import annotations
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "20260824_0014"
-down_revision: str | Sequence[str] | None = "20260822_0013"
+revision: str = "20260824_0015"
+down_revision: str | Sequence[str] | None = "20260824_0014"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
