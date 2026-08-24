@@ -17,7 +17,7 @@ type BrowserWindow = Window & { umami?: UmamiTracker }
 function sanitizeAnalyticsPath(value: string): string {
   const pathname = value.split(/[?#]/, 1)[0] || '/'
   const segments = pathname.split('/').filter(Boolean)
-  const sensitiveRoots = new Set(['user', 'contest', 'paste', 'article'])
+  const sensitiveRoots = new Set(['user', 'contest', 'paste', 'article', 'discuss'])
 
   if (segments.length >= 2 && sensitiveRoots.has(segments[0])) {
     return `/${segments[0]}/:id`
@@ -114,6 +114,11 @@ const navItems = [
     to: '/feed',
     label: '伪全网犇',
     icon: 'M4 5h16v10H7l-3 3V5z',
+  },
+  {
+    to: '/discuss',
+    label: '讨论',
+    icon: 'M4 5h16v11H8l-4 4V5zM8 9h8M8 13h5',
   },
   {
     to: '/judgement',

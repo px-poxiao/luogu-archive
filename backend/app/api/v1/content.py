@@ -9,7 +9,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -23,6 +23,10 @@ from app.crawler.revalidate import (
 from app.models.luogu_content import (
     Article,
     ArticleVersion,
+    Discussion,
+    DiscussionReply,
+    DiscussionReplyVersion,
+    DiscussionVersion,
     Feed,
     Judgement,
     Paste,
@@ -91,6 +95,61 @@ class ArticleHistoryResp(BaseModel):
 class PasteHistoryResp(BaseModel):
     paste_id: str
     versions: list[ContentVersionItem]
+
+
+class DiscussionReplyItem(BaseModel):
+    reply_id: int
+    content_md: str
+    author: _UserBrief | None
+    source_time: datetime | None
+    crawled_at: datetime
+
+
+class DiscussionDetail(BaseModel):
+    discussion_id: int
+    title: str
+    content_md: str
+    author: _UserBrief | None
+    forum_name: str | None
+    source_time: datetime | None
+    crawled_at: datetime
+    source_reply_count: int
+    stored_reply_count: int
+    page: int
+    per_page: int
+    replies: list[DiscussionReplyItem]
+
+
+class DiscussionListItem(BaseModel):
+    discussion_id: int
+    title: str
+    author: _UserBrief | None
+    forum_name: str | None
+    source_time: datetime | None
+    crawled_at: datetime
+    stored_reply_count: int
+    latest_reply_author: _UserBrief | None
+    latest_reply_time: datetime | None
+
+
+class DiscussionForumItem(BaseModel):
+    name: str
+    slug: str
+    count: int
+
+
+class DiscussionListResponse(BaseModel):
+    items: list[DiscussionListItem]
+    forums: list[DiscussionForumItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class DiscussionRefreshResponse(BaseModel):
+    queued: bool
+    message: str
+    retry_after: int = 0
 
 
 class FeedItem(BaseModel):
@@ -184,6 +243,30 @@ async def _user_brief(session: AsyncSession, uid: int | None) -> _UserBrief | No
         xcpc_level=u.xcpc_level or 0,
         is_admin=u.is_admin,
     )
+
+
+async def _user_brief_map(
+    session: AsyncSession,
+    uids: set[int],
+) -> dict[int, _UserBrief]:
+    if not uids:
+        return {}
+    users = (
+        await session.execute(select(LuoguUser).where(LuoguUser.uid.in_(uids)))
+    ).scalars().all()
+    return {
+        user.uid: _UserBrief(
+            uid=user.uid,
+            name=user.name,
+            color=user.color.value,
+            badge=user.badge,
+            avatar=user.avatar,
+            ccf_level=user.ccf_level or 0,
+            xcpc_level=user.xcpc_level or 0,
+            is_admin=user.is_admin,
+        )
+        for user in users
+    }
 
 
 # ============================================================
@@ -334,6 +417,322 @@ async def get_paste_history(
                 is_current=v.id == paste.current_version_id,
             )
             for v in versions
+        ],
+    )
+
+
+# ============================================================
+# 讨论区
+# ============================================================
+
+@router.get("/discuss", response_model=DiscussionListResponse)
+async def list_discussions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100),
+    q: str = Query("", max_length=128),
+    forum: str = Query("", max_length=64),
+    db: AsyncSession = Depends(get_db),
+) -> DiscussionListResponse:
+    keyword = q.strip()
+    filters = [Discussion.current_version_id.is_not(None)]
+    if forum:
+        filters.append(Discussion.forum_slug == forum.strip())
+    if keyword:
+        search_filters = [
+            DiscussionVersion.title.like(f"%{keyword}%"),
+            Discussion.forum_name.like(f"%{keyword}%"),
+        ]
+        if keyword.isdigit():
+            search_filters.append(Discussion.discussion_id == int(keyword))
+        filters.append(or_(*search_filters))
+
+    count_stmt = (
+        select(func.count(Discussion.discussion_id))
+        .select_from(Discussion)
+        .join(
+            DiscussionVersion,
+            DiscussionVersion.id == Discussion.current_version_id,
+        )
+        .where(*filters)
+    )
+    total = int(await db.scalar(count_stmt) or 0)
+
+    forum_rows = (
+        await db.execute(
+            select(
+                Discussion.forum_name,
+                Discussion.forum_slug,
+                func.count(Discussion.discussion_id),
+            )
+            .where(
+                Discussion.current_version_id.is_not(None),
+                Discussion.forum_name.is_not(None),
+                Discussion.forum_slug.is_not(None),
+            )
+            .group_by(Discussion.forum_name, Discussion.forum_slug)
+            .order_by(desc(func.count(Discussion.discussion_id)))
+        )
+    ).all()
+
+    reply_counts = (
+        select(
+            DiscussionReply.discussion_id.label("discussion_id"),
+            func.count(DiscussionReply.reply_id).label("reply_count"),
+        )
+        .join(
+            DiscussionReplyVersion,
+            DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+        )
+        .where(
+            DiscussionReplyVersion.content_md != "",
+            func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
+        )
+        .group_by(DiscussionReply.discussion_id)
+        .subquery()
+    )
+    stmt = (
+        select(
+            Discussion,
+            DiscussionVersion,
+            func.coalesce(reply_counts.c.reply_count, 0),
+        )
+        .join(
+            DiscussionVersion,
+            DiscussionVersion.id == Discussion.current_version_id,
+        )
+        .outerjoin(
+            reply_counts,
+            reply_counts.c.discussion_id == Discussion.discussion_id,
+        )
+        .where(*filters)
+        .order_by(
+            desc(Discussion.last_crawled_at),
+            desc(Discussion.discussion_id),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = (await db.execute(stmt)).all()
+    discussion_ids = [discussion.discussion_id for discussion, _version, _count in rows]
+    latest_replies: dict[int, DiscussionReply] = {}
+    if discussion_ids:
+        latest_reply_ids = (
+            select(
+                DiscussionReply.discussion_id.label("discussion_id"),
+                func.max(DiscussionReply.reply_id).label("reply_id"),
+            )
+            .join(
+                DiscussionReplyVersion,
+                DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+            )
+            .where(
+                DiscussionReply.discussion_id.in_(discussion_ids),
+                DiscussionReplyVersion.content_md != "",
+                func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
+            )
+            .group_by(DiscussionReply.discussion_id)
+            .subquery()
+        )
+        reply_rows = (
+            await db.execute(
+                select(DiscussionReply)
+                .join(
+                    latest_reply_ids,
+                    latest_reply_ids.c.reply_id == DiscussionReply.reply_id,
+                )
+            )
+        ).scalars().all()
+        for reply in reply_rows:
+            latest_replies[reply.discussion_id] = reply
+
+    users = await _user_brief_map(
+        db,
+        {
+            uid
+            for discussion, _version, _count in rows
+            for uid in (
+                discussion.author_uid,
+                latest_replies.get(discussion.discussion_id).author_uid
+                if latest_replies.get(discussion.discussion_id)
+                else None,
+            )
+            if uid
+        },
+    )
+
+    return DiscussionListResponse(
+        items=[
+            DiscussionListItem(
+                discussion_id=discussion.discussion_id,
+                title=version.title,
+                author=users.get(discussion.author_uid) if discussion.author_uid else None,
+                forum_name=discussion.forum_name,
+                source_time=discussion.source_time,
+                crawled_at=version.crawled_at,
+                stored_reply_count=int(reply_count),
+                latest_reply_author=(
+                    users.get(latest_replies[discussion.discussion_id].author_uid)
+                    if discussion.discussion_id in latest_replies
+                    and latest_replies[discussion.discussion_id].author_uid
+                    else None
+                ),
+                latest_reply_time=(
+                    latest_replies[discussion.discussion_id].source_time
+                    if discussion.discussion_id in latest_replies
+                    else None
+                ),
+            )
+            for discussion, version, reply_count in rows
+        ],
+        forums=[
+            DiscussionForumItem(name=name, slug=slug, count=int(count))
+            for name, slug, count in forum_rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.post("/discuss/refresh", response_model=DiscussionRefreshResponse)
+async def refresh_discussions() -> DiscussionRefreshResponse:
+    """提交一次讨论区首页发现任务；全站共享短冷却以避免重复抓取。"""
+    from app.core.redis_client import get_redis
+    from app.tasks.actors.crawl import discover_from_discuss_hi
+
+    redis = get_redis()
+    cooldown_key = "manual:discussion_discovery"
+    queued = await redis.set(cooldown_key, "1", ex=60, nx=True)
+    if not queued:
+        retry_after = max(1, int(await redis.ttl(cooldown_key)))
+        return DiscussionRefreshResponse(
+            queued=False,
+            message="更新任务刚刚提交过，请稍后再试",
+            retry_after=retry_after,
+        )
+
+    discover_from_discuss_hi.send("manual")
+    return DiscussionRefreshResponse(
+        queued=True,
+        message="更新任务已提交",
+    )
+
+
+@router.get("/discuss/{discussion_id}", response_model=DiscussionDetail)
+async def get_discussion(
+    discussion_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> DiscussionDetail:
+    discussion = await db.get(Discussion, discussion_id)
+    if discussion is None:
+        from app.tasks.actors.crawl import crawl_discussion
+
+        crawl_discussion.send(discussion_id, 1, "passive", True)
+        raise NotFoundError("讨论未被本站收录，已触发爬取，请稍后刷新")
+
+    version = (
+        await db.get(DiscussionVersion, discussion.current_version_id)
+        if discussion.current_version_id
+        else None
+    )
+    if version is None:
+        raise NotFoundError("讨论主帖版本缺失")
+
+    stored_count = int(
+        await db.scalar(
+            select(func.count(DiscussionReply.reply_id))
+            .join(
+                DiscussionReplyVersion,
+                DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+            )
+            .where(
+                DiscussionReply.discussion_id == discussion_id,
+                DiscussionReplyVersion.content_md != "",
+                func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
+            )
+        )
+        or 0
+    )
+    blank_count = int(
+        await db.scalar(
+            select(func.count(DiscussionReply.reply_id))
+            .join(
+                DiscussionReplyVersion,
+                DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+            )
+            .where(
+                DiscussionReply.discussion_id == discussion_id,
+                or_(
+                    DiscussionReplyVersion.content_md == "",
+                    func.length(func.trim(DiscussionReplyVersion.content_md)) == 0,
+                ),
+            )
+        )
+        or 0
+    )
+    if blank_count:
+        try:
+            from app.core.redis_client import get_redis
+            from app.tasks.actors.crawl import crawl_discussion
+
+            redis = get_redis()
+            repair_key = f"repair:discussion_empty_reply:{discussion_id}"
+            if await redis.set(repair_key, "1", ex=300, nx=True):
+                crawl_discussion.send(discussion_id, 0, "passive", True)
+        except Exception:
+            # 修复任务不可用不应阻断已有内容的读取。
+            pass
+    rows = (
+        await db.execute(
+            select(DiscussionReply, DiscussionReplyVersion)
+            .join(
+                DiscussionReplyVersion,
+                DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+            )
+            .where(
+                DiscussionReply.discussion_id == discussion_id,
+                DiscussionReplyVersion.content_md != "",
+                func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
+            )
+            .order_by(DiscussionReply.source_time.asc(), DiscussionReply.reply_id.asc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+        )
+    ).all()
+    # 兼容旧版爬虫已经写入的空正文，避免空回复卡片漏到前端。
+    rows = [
+        (reply, reply_version)
+        for reply, reply_version in rows
+        if str(reply_version.content_md or "").strip()
+    ]
+    uids = {reply.author_uid for reply, _version in rows if reply.author_uid is not None}
+    if discussion.author_uid is not None:
+        uids.add(discussion.author_uid)
+    users = await _user_brief_map(db, uids)
+
+    return DiscussionDetail(
+        discussion_id=discussion_id,
+        title=version.title,
+        content_md=version.content_md,
+        author=users.get(discussion.author_uid) if discussion.author_uid else None,
+        forum_name=discussion.forum_name,
+        source_time=discussion.source_time,
+        crawled_at=version.crawled_at,
+        source_reply_count=discussion.observed_reply_count,
+        stored_reply_count=stored_count,
+        page=page,
+        per_page=per_page,
+        replies=[
+            DiscussionReplyItem(
+                reply_id=reply.reply_id,
+                content_md=reply_version.content_md,
+                author=users.get(reply.author_uid) if reply.author_uid else None,
+                source_time=reply.source_time,
+                crawled_at=reply_version.crawled_at,
+            )
+            for reply, reply_version in rows
         ],
     )
 

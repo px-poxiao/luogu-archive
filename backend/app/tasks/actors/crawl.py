@@ -25,6 +25,7 @@ from app.crawler.sources.discovery import (
 from app.crawler.sources.discovery import (
     from_discuss as _discover_from_discuss,
 )
+from app.crawler.sources.discussion import crawl_page as _crawl_discussion_page
 from app.crawler.sources.feed import crawl_user_page as _crawl_feed_user_page
 from app.crawler.sources.judgement import crawl_all as _crawl_judgement_all
 from app.crawler.sources.paste import crawl_one as _crawl_paste_one
@@ -39,6 +40,7 @@ from app.tasks.asyncio_runner import run_async
 from app.tasks.broker import (
     ANON_CN,
     ANON_COM,
+    AUTH_CN,
     AUTH_COM,
     NO_RESOURCES,
     QUEUE_CRAWL_HI,
@@ -182,6 +184,48 @@ def crawl_paste_bg(paste_id: str, trigger: str = "passive") -> None:
         "crawl_paste_bg",
         (paste_id, trigger),
         _run_domain_task(lambda: _crawl_paste_one(paste_id, trigger=trigger)),
+    )
+
+
+@actor(queue_name=QUEUE_CRAWL_HI, resources=AUTH_CN, **_RETRY)
+def crawl_discussion(
+    discussion_id: int,
+    page: int = 0,
+    trigger: str = "manual",
+    enqueue_remaining: bool = True,
+) -> None:
+    """用户触发的讨论保存；每个 actor 仅请求一页。"""
+    log.info("actor.crawl_discussion", discussion_id=discussion_id, page=page, trigger=trigger)
+    _run_or_defer(
+        "crawl_discussion",
+        (discussion_id, page, trigger, enqueue_remaining),
+        _crawl_discussion_page(
+            discussion_id,
+            page=page,
+            trigger=trigger,
+            enqueue_remaining=enqueue_remaining,
+        ),
+    )
+
+
+@actor(queue_name=QUEUE_CRAWL_MID, resources=AUTH_CN, **_RETRY)
+def crawl_discussion_bg(
+    discussion_id: int,
+    page: int = 0,
+    trigger: str = "discovery",
+    enqueue_remaining: bool = True,
+) -> None:
+    """首页发现触发的讨论增量归档；每个 actor 仅请求一页。"""
+    log.info("actor.crawl_discussion_bg", discussion_id=discussion_id, page=page, trigger=trigger)
+    _run_or_defer(
+        "crawl_discussion_bg",
+        (discussion_id, page, trigger, enqueue_remaining),
+        _crawl_discussion_page(
+            discussion_id,
+            page=page,
+            trigger=trigger,
+            enqueue_remaining=enqueue_remaining,
+        ),
     )
 
 
@@ -363,13 +407,24 @@ def crawl_problem_solution_hi(pid: str, trigger: str = "manual") -> None:
     )
 
 
-@actor(queue_name=QUEUE_CRAWL_MID, resources=ANON_COM, **_RETRY)
+@actor(queue_name=QUEUE_CRAWL_MID, resources=ANON_CN, **_RETRY)
 def discover_from_discuss(trigger: str = "scheduled") -> None:
     log.info("actor.discover_from_discuss", trigger=trigger)
     _run_or_defer(
         "discover_from_discuss",
         (trigger,),
-        _run_domain_task(lambda: _discover_from_discuss(trigger=trigger)),
+        _run_domain_task(lambda: _discover_from_discuss(trigger=trigger), cn=True),
+    )
+
+
+@actor(queue_name=QUEUE_CRAWL_HI, resources=ANON_CN, **_RETRY)
+def discover_from_discuss_hi(trigger: str = "manual") -> None:
+    """用户主动更新讨论区目录，只把首页发现请求放入高优先级。"""
+    log.info("actor.discover_from_discuss_hi", trigger=trigger)
+    _run_or_defer(
+        "discover_from_discuss_hi",
+        (trigger,),
+        _run_domain_task(lambda: _discover_from_discuss(trigger=trigger), cn=True),
     )
 
 

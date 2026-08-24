@@ -34,7 +34,7 @@ log = get_logger(__name__)
 # ============================================================
 
 async def job_discover_discuss() -> None:
-    """每 5 分钟扫 /discuss。"""
+    """每 2.5 分钟扫一次无需登录的 /discuss。"""
     from app.tasks.actors.crawl import discover_from_discuss
     discover_from_discuss.send("scheduled")
 
@@ -421,7 +421,7 @@ async def job_problem_catalog_sync() -> None:
 def build_scheduler() -> AsyncIOScheduler:
     sched = AsyncIOScheduler(timezone="UTC")
     # 稍微错开分钟数，避免所有任务同时触发
-    sched.add_job(job_discover_discuss, "interval", minutes=5, id="discover_discuss")
+    sched.add_job(job_discover_discuss, "interval", seconds=150, id="discover_discuss")
     sched.add_job(job_discover_article, "interval", minutes=10, id="discover_article")
     sched.add_job(job_crawl_judgement, "interval", hours=1, id="crawl_judgement")
     sched.add_job(job_discover_contests, "interval", hours=1, id="discover_contests")

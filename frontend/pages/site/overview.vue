@@ -84,6 +84,7 @@ function typeLabel(type: string): string {
   const map: Record<string, string> = {
     article: '文章',
     paste: '剪贴板',
+    discussion: '讨论',
     feed: '犇犇',
     judgement: '陶片',
     user: '用户',
