@@ -193,17 +193,19 @@ def crawl_discussion(
     page: int = 0,
     trigger: str = "manual",
     enqueue_remaining: bool = True,
+    chain_token: str | None = None,
 ) -> None:
     """用户触发的讨论保存；每个 actor 仅请求一页。"""
     log.info("actor.crawl_discussion", discussion_id=discussion_id, page=page, trigger=trigger)
     _run_or_defer(
         "crawl_discussion",
-        (discussion_id, page, trigger, enqueue_remaining),
+        (discussion_id, page, trigger, enqueue_remaining, chain_token),
         _crawl_discussion_page(
             discussion_id,
             page=page,
             trigger=trigger,
             enqueue_remaining=enqueue_remaining,
+            chain_token=chain_token,
         ),
     )
 
@@ -214,17 +216,19 @@ def crawl_discussion_bg(
     page: int = 0,
     trigger: str = "discovery",
     enqueue_remaining: bool = True,
+    chain_token: str | None = None,
 ) -> None:
     """首页发现触发的讨论增量归档；每个 actor 仅请求一页。"""
     log.info("actor.crawl_discussion_bg", discussion_id=discussion_id, page=page, trigger=trigger)
     _run_or_defer(
         "crawl_discussion_bg",
-        (discussion_id, page, trigger, enqueue_remaining),
+        (discussion_id, page, trigger, enqueue_remaining, chain_token),
         _crawl_discussion_page(
             discussion_id,
             page=page,
             trigger=trigger,
             enqueue_remaining=enqueue_remaining,
+            chain_token=chain_token,
         ),
     )
 

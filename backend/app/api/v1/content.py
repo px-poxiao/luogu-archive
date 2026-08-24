@@ -627,9 +627,15 @@ async def get_discussion(
 ) -> DiscussionDetail:
     discussion = await db.get(Discussion, discussion_id)
     if discussion is None:
-        from app.tasks.actors.crawl import crawl_discussion
+        from app.crawler.sources.discussion import enqueue_discussion_crawl
 
-        crawl_discussion.send(discussion_id, 1, "passive", True)
+        await enqueue_discussion_crawl(
+            discussion_id,
+            page=1,
+            trigger="passive",
+            enqueue_remaining=True,
+            background=False,
+        )
         raise NotFoundError("讨论未被本站收录，已触发爬取，请稍后刷新")
 
     version = (
@@ -675,12 +681,18 @@ async def get_discussion(
     if blank_count:
         try:
             from app.core.redis_client import get_redis
-            from app.tasks.actors.crawl import crawl_discussion
+            from app.crawler.sources.discussion import enqueue_discussion_crawl
 
             redis = get_redis()
             repair_key = f"repair:discussion_empty_reply:{discussion_id}"
             if await redis.set(repair_key, "1", ex=300, nx=True):
-                crawl_discussion.send(discussion_id, 0, "passive", True)
+                await enqueue_discussion_crawl(
+                    discussion_id,
+                    page=0,
+                    trigger="passive",
+                    enqueue_remaining=True,
+                    background=False,
+                )
         except Exception:
             # 修复任务不可用不应阻断已有内容的读取。
             pass

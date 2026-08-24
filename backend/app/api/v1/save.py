@@ -194,9 +194,9 @@ async def _try_merge_or_enqueue(
 
     此处"task_id"约定为资源队列任务 id。已有 pending → 复用；否则新派发。
     """
+    from app.crawler.sources.discussion import enqueue_discussion_crawl
     from app.tasks.actors.crawl import (
         crawl_article,
-        crawl_discussion,
         crawl_judgement_hi,
         crawl_paste,
         crawl_user_feeds_hi,
@@ -218,13 +218,24 @@ async def _try_merge_or_enqueue(
 
     # 派发
     task_id: str | None = None
+    merged_existing = False
     try:
         if content_type == "article":
             msg = crawl_article.send(ident, "manual")
         elif content_type == "paste":
             msg = crawl_paste.send(ident, "manual")
         elif content_type == "discuss":
-            msg = crawl_discussion.send(int(ident), 0, "manual", True)
+            task_id = await enqueue_discussion_crawl(
+                int(ident),
+                page=0,
+                trigger="manual",
+                enqueue_remaining=True,
+                background=False,
+            )
+            if task_id is None:
+                # 活动链已经包含本次保存目标，不再制造第二条分页链。
+                task_id = f"discussion-active:{ident}"
+                merged_existing = True
         elif content_type == "user":
             msg = crawl_user_manual.send(int(ident))
         elif content_type == "feed":
@@ -259,7 +270,7 @@ async def _try_merge_or_enqueue(
         task_id = msg.message_id
     # 挂 pending 标记，TTL 5 分钟（爬完没这么久，但防止卡死）
     await redis.setex(key, 300, task_id)
-    return task_id, False
+    return task_id, merged_existing
 
 
 async def _try_get_pending(content_type: str, ident: str) -> str | None:

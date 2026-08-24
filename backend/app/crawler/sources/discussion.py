@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import db_session
 from app.core.exceptions import CrawlerError, CrawlerNotFound
+from app.core.locks import DistributedLock
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.crawler.cookies import lease_account
@@ -33,6 +34,167 @@ from app.models.luogu_content import (
 )
 
 log = get_logger(__name__)
+
+# 一条大型讨论可能需要连续抓取数小时。活动链每完成一页都会续期；
+# worker 停机超过此时间后锁会自然释放，调度器可以重新接管，不会永久卡住。
+DISCUSSION_CHAIN_TTL_SEC = 6 * 60 * 60
+_LEGACY_DRAIN_TTL_SEC = 24 * 60 * 60
+
+_RENEW_CHAIN_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
+    return 1
+end
+return 0
+"""
+
+_RELEASE_CHAIN_LUA = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+    return 0
+end
+redis.call('DEL', KEYS[1])
+redis.call('DEL', KEYS[2])
+if ARGV[2] == '1' then
+    redis.call('SETEX', KEYS[3], ARGV[3], '1')
+end
+return 1
+"""
+
+
+def _chain_key(discussion_id: int) -> str:
+    return f"crawl:discussion_chain:{discussion_id}"
+
+
+def _legacy_drain_key(discussion_id: int) -> str:
+    return f"crawl:discussion_legacy_drained:{discussion_id}"
+
+
+def _discovery_pending_key(discussion_id: int) -> str:
+    return f"discovery:discussion_pending:{discussion_id}"
+
+
+async def enqueue_discussion_crawl(
+    discussion_id: int,
+    *,
+    page: int = 0,
+    trigger: str = "manual",
+    enqueue_remaining: bool = True,
+    background: bool = False,
+) -> str | None:
+    """原子创建一条讨论归档链；已有活动链时不重复入队。"""
+    redis = get_redis()
+    lock = DistributedLock(redis)
+    token = await lock.acquire(
+        _chain_key(discussion_id),
+        ttl_sec=DISCUSSION_CHAIN_TTL_SEC,
+    )
+    if token is None:
+        log.info(
+            "crawl_discussion.skip_active_chain",
+            discussion_id=discussion_id,
+            page=page,
+            trigger=trigger,
+        )
+        return None
+
+    try:
+        # 兼容站点预览和旧版调度标记；该标记不再独立决定是否入队。
+        await redis.setex(
+            _discovery_pending_key(discussion_id),
+            DISCUSSION_CHAIN_TTL_SEC,
+            token,
+        )
+        from app.tasks.actors.crawl import crawl_discussion, crawl_discussion_bg
+
+        target = crawl_discussion_bg if background else crawl_discussion
+        message = target.send(
+            discussion_id,
+            page,
+            trigger,
+            enqueue_remaining,
+            token,
+        )
+        return message.message_id
+    except Exception:
+        await lock.release(_chain_key(discussion_id), token)
+        await redis.delete(_discovery_pending_key(discussion_id))
+        raise
+
+
+async def _claim_chain(
+    discussion_id: int,
+    chain_token: str | None,
+) -> str | None:
+    """校验新任务令牌，或让一条升级前遗留任务接管归档链。"""
+    redis = get_redis()
+    key = _chain_key(discussion_id)
+    if chain_token:
+        renew = redis.register_script(_RENEW_CHAIN_LUA)
+        renewed = await renew(
+            keys=[key],
+            args=[chain_token, DISCUSSION_CHAIN_TTL_SEC],
+        )
+        if renewed:
+            return chain_token
+        # actor 失败时会主动释放链，随后队列使用相同参数重试。若期间没有
+        # 新链接管，允许原令牌重新占有；SET NX 保证不会挤掉新任务。
+        reclaimed = await redis.set(
+            key,
+            chain_token,
+            nx=True,
+            ex=DISCUSSION_CHAIN_TTL_SEC,
+        )
+        return chain_token if reclaimed else None
+
+    # 部署前已经进入 Redis 的任务没有令牌。每个讨论只允许最先执行的
+    # 那一条接管；一条新链完成后，剩余旧副本在一天内直接丢弃。
+    if await redis.exists(_legacy_drain_key(discussion_id)):
+        return None
+    token = await DistributedLock(redis).acquire(
+        key,
+        ttl_sec=DISCUSSION_CHAIN_TTL_SEC,
+    )
+    return token
+
+
+async def _renew_chain(discussion_id: int, chain_token: str) -> bool:
+    redis = get_redis()
+    renew = redis.register_script(_RENEW_CHAIN_LUA)
+    renewed = bool(
+        await renew(
+            keys=[_chain_key(discussion_id)],
+            args=[chain_token, DISCUSSION_CHAIN_TTL_SEC],
+        )
+    )
+    if renewed:
+        await redis.setex(
+            _discovery_pending_key(discussion_id),
+            DISCUSSION_CHAIN_TTL_SEC,
+            chain_token,
+        )
+    return renewed
+
+
+async def _release_chain(
+    discussion_id: int,
+    chain_token: str,
+    *,
+    suppress_legacy: bool,
+) -> None:
+    redis = get_redis()
+    release = redis.register_script(_RELEASE_CHAIN_LUA)
+    await release(
+        keys=[
+            _chain_key(discussion_id),
+            _discovery_pending_key(discussion_id),
+            _legacy_drain_key(discussion_id),
+        ],
+        args=[
+            chain_token,
+            "1" if suppress_legacy else "0",
+            _LEGACY_DRAIN_TTL_SEC,
+        ],
+    )
 
 
 def _source_time(value: Any) -> datetime | None:
@@ -112,32 +274,69 @@ async def crawl_page(
     page: int = 0,
     trigger: str = "manual",
     enqueue_remaining: bool = True,
+    chain_token: str | None = None,
 ) -> None:
     """读取一页讨论；page=0 时从本地最后归档页的前一页开始。"""
     async with db_session() as session:
         existing = await session.get(Discussion, discussion_id)
-        if existing is not None and existing.auto_crawl_paused and trigger != "manual":
-            log.info("crawl_discussion.skip_paused", discussion_id=discussion_id)
-            return
+        paused = bool(
+            existing is not None
+            and existing.auto_crawl_paused
+            and trigger != "manual"
+        )
         if page <= 0:
             page = max(1, (existing.last_crawled_page or 1) - 1) if existing else 1
 
-    redis = get_redis()
-    recent_key = f"crawl:discussion_page_recent:{discussion_id}:{page}"
-    if await redis.exists(recent_key):
-        log.info("crawl_discussion.skip_recent", discussion_id=discussion_id, page=page)
+    claimed_token = await _claim_chain(discussion_id, chain_token)
+    if claimed_token is None:
+        log.info(
+            "crawl_discussion.skip_duplicate_chain",
+            discussion_id=discussion_id,
+            page=page,
+        )
+        return
+    await _renew_chain(discussion_id, claimed_token)
+
+    if paused:
+        log.info("crawl_discussion.skip_paused", discussion_id=discussion_id)
+        await _release_chain(
+            discussion_id,
+            claimed_token,
+            suppress_legacy=True,
+        )
         return
 
     async with task_lock("discussion_page", f"{discussion_id}:{page}") as got:
         if not got:
             log.info("crawl_discussion.skip_locked", discussion_id=discussion_id, page=page)
+            await _release_chain(
+                discussion_id,
+                claimed_token,
+                suppress_legacy=False,
+            )
             return
-        await _crawl_page_inner(
-            discussion_id,
-            page=page,
-            trigger=trigger,
-            enqueue_remaining=enqueue_remaining,
-        )
+        try:
+            finished = await _crawl_page_inner(
+                discussion_id,
+                page=page,
+                trigger=trigger,
+                enqueue_remaining=enqueue_remaining,
+                chain_token=claimed_token,
+            )
+        except BaseException:
+            # 网络错误交给 actor 重试；先释放链，重试消息才能重新取得所有权。
+            await _release_chain(
+                discussion_id,
+                claimed_token,
+                suppress_legacy=False,
+            )
+            raise
+        if finished:
+            await _release_chain(
+                discussion_id,
+                claimed_token,
+                suppress_legacy=True,
+            )
 
 
 async def _crawl_page_inner(
@@ -146,7 +345,8 @@ async def _crawl_page_inner(
     page: int,
     trigger: str,
     enqueue_remaining: bool,
-) -> None:
+    chain_token: str,
+) -> bool:
     node = get_default_node(NodeKind.AUTHED, cn=True)
     url = f"https://www.luogu.com.cn/discuss/{discussion_id}"
     task_id = await record_task_start(
@@ -238,32 +438,34 @@ async def _crawl_page_inner(
             discussion.auto_crawl_paused = False
             discussion.auto_crawl_paused_at = None
             discussion.last_crawl_status = "ok"
+            # 归档进度必须逐页更新，否则入口发现会一直认为大型讨论尚未开始，
+            # 在旧活动标记过期后反复创建新的分页链。
+            discussion.archived_reply_count = stored_reply_count
             if page == total_pages:
                 discussion.last_crawled_page = total_pages
-                discussion.archived_reply_count = stored_reply_count
             elif not page_out_of_range:
                 discussion.last_crawled_page = max(discussion.last_crawled_page, page)
             await session.commit()
 
+        has_next_page = False
         if enqueue_remaining and page_out_of_range:
             _enqueue_next_page(
                 discussion_id,
                 page=max(1, total_pages - 1),
                 trigger=trigger,
+                chain_token=chain_token,
             )
+            has_next_page = True
         elif enqueue_remaining and page < total_pages:
             _enqueue_next_page(
                 discussion_id,
                 page=page + 1,
                 trigger=trigger,
+                chain_token=chain_token,
             )
-        if page == total_pages:
-            await get_redis().delete(f"discovery:discussion_pending:{discussion_id}")
-        await get_redis().setex(
-            f"crawl:discussion_page_recent:{discussion_id}:{page}",
-            60,
-            "1",
-        )
+            has_next_page = True
+        if has_next_page:
+            await _renew_chain(discussion_id, chain_token)
 
         await record_task_done(
             task_id,
@@ -271,6 +473,7 @@ async def _crawl_page_inner(
             http_status=result.status,
             duration_ms=int((_t.monotonic() - started) * 1000),
         )
+        return not has_next_page
     except CrawlerNotFound as exc:
         await _pause_existing(discussion_id)
         await record_task_done(
@@ -281,6 +484,7 @@ async def _crawl_page_inner(
         )
         # 已删除或暂不可见只停止自动抓取；保留本站已有内容，不向前端加标签。
         log.info("crawl_discussion.source_unavailable", discussion_id=discussion_id, page=page)
+        return True
     except Exception as exc:
         await record_task_done(
             task_id,
@@ -292,13 +496,19 @@ async def _crawl_page_inner(
         raise
 
 
-def _enqueue_next_page(discussion_id: int, *, page: int, trigger: str) -> None:
+def _enqueue_next_page(
+    discussion_id: int,
+    *,
+    page: int,
+    trigger: str,
+    chain_token: str,
+) -> None:
     from app.tasks.actors.crawl import crawl_discussion, crawl_discussion_bg
 
     manual_batch = trigger.startswith("manual")
     target = crawl_discussion if manual_batch else crawl_discussion_bg
     child_trigger = "manual_followup" if manual_batch else trigger
-    target.send(discussion_id, page, child_trigger, True)
+    target.send(discussion_id, page, child_trigger, True, chain_token)
     log.info(
         "crawl_discussion.enqueued_next_page",
         discussion_id=discussion_id,

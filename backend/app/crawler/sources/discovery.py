@@ -175,20 +175,19 @@ async def _schedule_discussion_crawl(posts: list[dict[str, Any]]) -> None:
                 )
         await session.commit()
 
-    redis = get_redis()
-    from app.tasks.actors.crawl import crawl_discussion_bg
+    from app.crawler.sources.discussion import enqueue_discussion_crawl
 
     enqueued = 0
     for discussion_id, start_page in candidates:
-        pending = await redis.set(
-            f"discovery:discussion_pending:{discussion_id}",
-            "1",
-            ex=3600,
-            nx=True,
+        task_id = await enqueue_discussion_crawl(
+            discussion_id,
+            page=start_page,
+            trigger="discovery",
+            enqueue_remaining=True,
+            background=True,
         )
-        if not pending:
+        if task_id is None:
             continue
-        crawl_discussion_bg.send(discussion_id, start_page, "discovery", True)
         enqueued += 1
     if enqueued:
         log.info("discovery.enqueued_discussion_crawl", count=enqueued)
