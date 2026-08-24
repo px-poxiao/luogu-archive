@@ -1,0 +1,38 @@
+name: 新功能提议
+description: 为洛谷档案馆提一个您想要的新功能
+title: "[Feature] "
+labels: ["新功能"]
+type: "Feature"
+assignees: ["px-poxiao"]
+
+body:
+- type: markdown
+  attributes:
+    value: "我们很高兴您来到这里！请填写以下表单，为我们提出您想要的新功能："
+- type: checkboxes
+  id: confirm
+  attributes:
+    label: 检查单
+    options:
+    - label: 这个功能未在最新版中出现过。
+      required: true
+    - label: 我已搜索过 [Issues 列表](https://github.com/px-poxiao/luogu-archive/issues) 且确认了这个功能没有被提出过。
+      required: true
+    - label: 我正在写这个功能。
+      required: false
+- type: textarea
+  id: description
+  attributes:
+    label: 功能描述
+    description: "您描述地越详细，我们能越容易的理解您提出的新功能"
+    placeholder: "描述您逍遥的新功能"
+  validations:
+    required: true
+- type: textarea
+  id: reason
+  attributes:
+    label: 理由
+    description: "解释您为什么需要这个功能"
+    placeholder: "解释这个功能的用途"
+  validations:
+    required: false
