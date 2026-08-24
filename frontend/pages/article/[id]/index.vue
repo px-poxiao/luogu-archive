@@ -86,7 +86,7 @@ async function copyOriginalMarkdown() {
             :href="`https://www.luogu.com.cn/article/${id}`"
             target="_blank"
             rel="noopener noreferrer"
-            class="meta-action-btn"
+            class="archive-action-button meta-action-btn"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
@@ -100,7 +100,11 @@ async function copyOriginalMarkdown() {
             </svg>
             <span>查看原文</span>
           </a>
-          <button type="button" class="meta-copy-btn" @click="copyOriginalMarkdown">
+          <button
+            type="button"
+            class="archive-action-button meta-copy-btn"
+            @click="copyOriginalMarkdown"
+          >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
                 d="M8 8h10v12H8zM6 16H4V4h12v2"
@@ -225,28 +229,7 @@ async function copyOriginalMarkdown() {
 .meta-item.link:hover { text-decoration: underline; }
 .meta-action-btn,
 .meta-copy-btn {
-  display: inline-flex;
-  align-items: center;
   gap: 6px;
-  padding: 5px 10px;
-  border: 1px solid var(--hero-border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  transition: border-color 0.15s, color 0.15s, transform 0.1s;
-}
-.meta-action-btn {
-  text-decoration: none;
-}
-.meta-action-btn:hover,
-.meta-copy-btn:hover {
-  border-color: var(--link);
-  color: var(--link);
-  transform: translateY(-1px);
-  text-decoration: none;
 }
 .meta-action-btn svg,
 .meta-copy-btn svg {
