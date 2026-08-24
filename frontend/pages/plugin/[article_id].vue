@@ -39,6 +39,9 @@ const displayVersion = computed<PluginVersion | null>(() => {
   const snapshot = displaySnapshot.value
   return {
     id: 0,
+
+    download_count: 0,
+    
     version: snapshot.version,
     code: snapshot.code,
     code_bytes: snapshot.code_bytes ?? new TextEncoder().encode(snapshot.code).length,
@@ -227,6 +230,9 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
       <dl class="compat-grid">
         <div><dt>运行方式</dt><dd>{{ runtimeMode(displayVersion.runtime_mode) }}</dd></div>
         <div><dt>兼容设备</dt><dd>{{ [displayVersion.supports_desktop ? '桌面端' : '', displayVersion.supports_mobile ? '移动端' : ''].filter(Boolean).join('、') }}</dd></div>
+        
+        <div><dt>下载次数</dt><dd>{{ displayVersion.download_count ?? 0 }}</dd></div>
+        
         <div><dt>最后验证</dt><dd>{{ displayVersion.last_verified_on }}</dd></div>
         <div><dt>SHA-256</dt><dd><code>{{ displayVersion.code_sha256 }}</code></dd></div>
       </dl>
@@ -301,6 +307,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
 .tag { border: 1px solid var(--border); color: var(--text-muted); }
 .pending-banner, .down-banner { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 13px 16px; border-left: 4px solid var(--lg-orange); background: var(--surface); }
 .pending-banner p { margin: 3px 0 0; color: var(--text-muted); font-size: 13px; }
+.pending-banner button { flex-shrink: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 7px 11px; cursor: pointer; }
 .down-banner { justify-content: flex-start; border-left-color: var(--lg-red); }
 .tabs { display: flex; align-items: flex-end; justify-content: space-between; gap: 22px; border-bottom: 1px solid var(--border); }
 .tab-options { display: flex; gap: 22px; }
@@ -313,6 +320,9 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
 .version-picker > span { grid-column: 2; color: var(--text-muted); font-size: 12px; }
 select, textarea { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 8px 10px; font: inherit; }
 .code-actions { display: flex; gap: 9px; }
+.code-actions button, .detail-footer button, .report-form button { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 7px 11px; cursor: pointer; font: inherit; }
+.code-actions button:first-child, .report-form button { border-color: var(--link); background: var(--link); color: #fff; }
+.code-actions button:disabled { border-color: var(--border); background: var(--hover); color: var(--text-muted); cursor: not-allowed; opacity: .7; }
 .code-truncation { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 10px; padding: 10px 12px; border-left: 4px solid var(--lg-yellow); background: color-mix(in srgb, var(--lg-yellow) 10%, var(--surface)); }
 .code-truncation strong { font-size: 14px; }
 .code-truncation span { color: var(--text-muted); font-size: 13px; }

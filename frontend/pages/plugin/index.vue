@@ -209,6 +209,7 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
               </span>
               <span class="meta-item">{{ runtimeMode(row.runtime_mode) }}</span>
               <span class="meta-item">更新于 {{ format(row.updated_at) }}</span>
+              <span class="meta-item" v-if="row.total_usage !== undefined">使用次数 {{ row.total_usage }}</span>
             </div>
 
             <footer class="row-footer">
