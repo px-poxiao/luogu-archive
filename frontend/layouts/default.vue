@@ -116,6 +116,11 @@ const navItems = [
     icon: 'M4 5h16v10H7l-3 3V5z',
   },
   {
+    to: '/discuss',
+    label: '讨论',
+    icon: 'M4 5h16v11H8l-4 4V5zM8 9h8M8 13h5',
+  },
+  {
     to: '/judgement',
     label: '陶片放逐',
     icon: 'M4 14l6-6 4 4 6-6M4 20h16',

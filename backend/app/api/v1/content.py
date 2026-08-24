@@ -120,6 +120,32 @@ class DiscussionDetail(BaseModel):
     replies: list[DiscussionReplyItem]
 
 
+class DiscussionListItem(BaseModel):
+    discussion_id: int
+    title: str
+    author: _UserBrief | None
+    forum_name: str | None
+    source_time: datetime | None
+    crawled_at: datetime
+    stored_reply_count: int
+    latest_reply_author: _UserBrief | None
+    latest_reply_time: datetime | None
+
+
+class DiscussionForumItem(BaseModel):
+    name: str
+    slug: str
+    count: int
+
+
+class DiscussionListResponse(BaseModel):
+    items: list[DiscussionListItem]
+    forums: list[DiscussionForumItem]
+    total: int
+    page: int
+    page_size: int
+
+
 class FeedItem(BaseModel):
     id: int
     type: int
@@ -392,6 +418,159 @@ async def get_paste_history(
 # ============================================================
 # 讨论区
 # ============================================================
+
+@router.get("/discuss", response_model=DiscussionListResponse)
+async def list_discussions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100),
+    q: str = Query("", max_length=128),
+    forum: str = Query("", max_length=64),
+    db: AsyncSession = Depends(get_db),
+) -> DiscussionListResponse:
+    keyword = q.strip()
+    filters = [Discussion.current_version_id.is_not(None)]
+    if forum:
+        filters.append(Discussion.forum_slug == forum.strip())
+    if keyword:
+        search_filters = [
+            DiscussionVersion.title.like(f"%{keyword}%"),
+            Discussion.forum_name.like(f"%{keyword}%"),
+        ]
+        if keyword.isdigit():
+            search_filters.append(Discussion.discussion_id == int(keyword))
+        filters.append(or_(*search_filters))
+
+    count_stmt = (
+        select(func.count(Discussion.discussion_id))
+        .select_from(Discussion)
+        .join(
+            DiscussionVersion,
+            DiscussionVersion.id == Discussion.current_version_id,
+        )
+        .where(*filters)
+    )
+    total = int(await db.scalar(count_stmt) or 0)
+
+    forum_rows = (
+        await db.execute(
+            select(
+                Discussion.forum_name,
+                Discussion.forum_slug,
+                func.count(Discussion.discussion_id),
+            )
+            .where(
+                Discussion.current_version_id.is_not(None),
+                Discussion.forum_name.is_not(None),
+                Discussion.forum_slug.is_not(None),
+            )
+            .group_by(Discussion.forum_name, Discussion.forum_slug)
+            .order_by(desc(func.count(Discussion.discussion_id)))
+        )
+    ).all()
+
+    reply_counts = (
+        select(
+            DiscussionReply.discussion_id.label("discussion_id"),
+            func.count(DiscussionReply.reply_id).label("reply_count"),
+        )
+        .group_by(DiscussionReply.discussion_id)
+        .subquery()
+    )
+    stmt = (
+        select(
+            Discussion,
+            DiscussionVersion,
+            func.coalesce(reply_counts.c.reply_count, 0),
+        )
+        .join(
+            DiscussionVersion,
+            DiscussionVersion.id == Discussion.current_version_id,
+        )
+        .outerjoin(
+            reply_counts,
+            reply_counts.c.discussion_id == Discussion.discussion_id,
+        )
+        .where(*filters)
+        .order_by(
+            desc(Discussion.last_crawled_at),
+            desc(Discussion.discussion_id),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = (await db.execute(stmt)).all()
+    discussion_ids = [discussion.discussion_id for discussion, _version, _count in rows]
+    latest_replies: dict[int, DiscussionReply] = {}
+    if discussion_ids:
+        latest_reply_ids = (
+            select(
+                DiscussionReply.discussion_id.label("discussion_id"),
+                func.max(DiscussionReply.reply_id).label("reply_id"),
+            )
+            .where(DiscussionReply.discussion_id.in_(discussion_ids))
+            .group_by(DiscussionReply.discussion_id)
+            .subquery()
+        )
+        reply_rows = (
+            await db.execute(
+                select(DiscussionReply)
+                .join(
+                    latest_reply_ids,
+                    latest_reply_ids.c.reply_id == DiscussionReply.reply_id,
+                )
+            )
+        ).scalars().all()
+        for reply in reply_rows:
+            latest_replies[reply.discussion_id] = reply
+
+    users = await _user_brief_map(
+        db,
+        {
+            uid
+            for discussion, _version, _count in rows
+            for uid in (
+                discussion.author_uid,
+                latest_replies.get(discussion.discussion_id).author_uid
+                if latest_replies.get(discussion.discussion_id)
+                else None,
+            )
+            if uid
+        },
+    )
+
+    return DiscussionListResponse(
+        items=[
+            DiscussionListItem(
+                discussion_id=discussion.discussion_id,
+                title=version.title,
+                author=users.get(discussion.author_uid) if discussion.author_uid else None,
+                forum_name=discussion.forum_name,
+                source_time=discussion.source_time,
+                crawled_at=version.crawled_at,
+                stored_reply_count=int(reply_count),
+                latest_reply_author=(
+                    users.get(latest_replies[discussion.discussion_id].author_uid)
+                    if discussion.discussion_id in latest_replies
+                    and latest_replies[discussion.discussion_id].author_uid
+                    else None
+                ),
+                latest_reply_time=(
+                    latest_replies[discussion.discussion_id].source_time
+                    if discussion.discussion_id in latest_replies
+                    else None
+                ),
+            )
+            for discussion, version, reply_count in rows
+        ],
+        forums=[
+            DiscussionForumItem(name=name, slug=slug, count=int(count))
+            for name, slug, count in forum_rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
 
 @router.get("/discuss/{discussion_id}", response_model=DiscussionDetail)
 async def get_discussion(
