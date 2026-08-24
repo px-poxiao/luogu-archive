@@ -7,7 +7,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_client_ip
@@ -125,6 +125,8 @@ def _version_dict(row: PluginVersion, *, include_code: bool = True) -> dict:
         "supports_mobile": row.supports_mobile,
         "last_verified_on": row.last_verified_on.isoformat(),
         "published_at": row.published_at.isoformat(),
+        "download_count": getattr(row, "download_count", 0),
+        "copy_count": getattr(row, "copy_count", 0),
     }
     if include_code:
         preview, source_bytes, truncated = code_preview(row.code)
@@ -266,6 +268,9 @@ async def list_plugins(
             "is_official": plugin.is_official,
             "is_recommended": plugin.is_recommended,
             "tags": await plugin_tag_names(db, plugin.id),
+            "download_count": getattr(version, "download_count", 0),
+            "copy_count": getattr(version, "copy_count", 0),
+            "total_usage": getattr(plugin, "total_usage", 0),
             "updated_at": plugin.updated_at.isoformat(),
         })
     return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -419,7 +424,58 @@ async def download_plugin_version(
     version = await db.get(PluginVersion, version_id)
     if version is None or version.plugin_id != plugin.id:
         raise NotFoundError("代码版本不存在")
+
+    # 原子递增计数：避免读-改-写导致并发丢失。
+    try:
+        await db.execute(text("UPDATE plugin_versions SET download_count = download_count + 1 WHERE id = :id"), {"id": version.id})
+        await db.execute(text("UPDATE plugins SET total_usage = total_usage + 1 WHERE id = :pid"), {"pid": plugin.id})
+        await db.commit()
+    except Exception:
+        # 计数失败不应阻断下载流程，忽略错误（但不掩盖）
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
     return _code_download_response(version.code, version.download_filename)
+
+
+@router.post("/{article_id}/increment_download/{version_id}")
+async def increment_download(
+    article_id: str,
+    version_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """客户端可在触发下载前调用此接口以记录一次下载（客户端负责保证同一机器只调用一次）。"""
+    plugin = (await db.execute(select(Plugin).where(Plugin.article_id == article_id))).scalar_one_or_none()
+    if plugin is None or not plugin.is_listed:
+        raise NotFoundError("插件不存在或已下架")
+    version = await db.get(PluginVersion, version_id)
+    if version is None or version.plugin_id != plugin.id:
+        raise NotFoundError("代码版本不存在")
+    await db.execute(text("UPDATE plugin_versions SET download_count = download_count + 1 WHERE id = :id"), {"id": version.id})
+    await db.execute(text("UPDATE plugins SET total_usage = total_usage + 1 WHERE id = :pid"), {"pid": plugin.id})
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/{article_id}/increment_copy/{version_id}")
+async def increment_copy(
+    article_id: str,
+    version_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """客户端在复制到剪贴板后调用，客户端负责保证同一机器只调用一次。"""
+    plugin = (await db.execute(select(Plugin).where(Plugin.article_id == article_id))).scalar_one_or_none()
+    if plugin is None or not plugin.is_listed:
+        raise NotFoundError("插件不存在或已下架")
+    version = await db.get(PluginVersion, version_id)
+    if version is None or version.plugin_id != plugin.id:
+        raise NotFoundError("代码版本不存在")
+    await db.execute(text("UPDATE plugin_versions SET copy_count = copy_count + 1 WHERE id = :id"), {"id": version.id})
+    await db.execute(text("UPDATE plugins SET total_usage = total_usage + 1 WHERE id = :pid"), {"pid": plugin.id})
+    await db.commit()
+    return {"ok": True}
 
 
 @router.post("/applications/publish")
