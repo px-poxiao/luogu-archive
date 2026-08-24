@@ -9,7 +9,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -23,6 +23,10 @@ from app.crawler.revalidate import (
 from app.models.luogu_content import (
     Article,
     ArticleVersion,
+    Discussion,
+    DiscussionReply,
+    DiscussionReplyVersion,
+    DiscussionVersion,
     Feed,
     Judgement,
     Paste,
@@ -91,6 +95,29 @@ class ArticleHistoryResp(BaseModel):
 class PasteHistoryResp(BaseModel):
     paste_id: str
     versions: list[ContentVersionItem]
+
+
+class DiscussionReplyItem(BaseModel):
+    reply_id: int
+    content_md: str
+    author: _UserBrief | None
+    source_time: datetime | None
+    crawled_at: datetime
+
+
+class DiscussionDetail(BaseModel):
+    discussion_id: int
+    title: str
+    content_md: str
+    author: _UserBrief | None
+    forum_name: str | None
+    source_time: datetime | None
+    crawled_at: datetime
+    source_reply_count: int
+    stored_reply_count: int
+    page: int
+    per_page: int
+    replies: list[DiscussionReplyItem]
 
 
 class FeedItem(BaseModel):
@@ -184,6 +211,30 @@ async def _user_brief(session: AsyncSession, uid: int | None) -> _UserBrief | No
         xcpc_level=u.xcpc_level or 0,
         is_admin=u.is_admin,
     )
+
+
+async def _user_brief_map(
+    session: AsyncSession,
+    uids: set[int],
+) -> dict[int, _UserBrief]:
+    if not uids:
+        return {}
+    users = (
+        await session.execute(select(LuoguUser).where(LuoguUser.uid.in_(uids)))
+    ).scalars().all()
+    return {
+        user.uid: _UserBrief(
+            uid=user.uid,
+            name=user.name,
+            color=user.color.value,
+            badge=user.badge,
+            avatar=user.avatar,
+            ccf_level=user.ccf_level or 0,
+            xcpc_level=user.xcpc_level or 0,
+            is_admin=user.is_admin,
+        )
+        for user in users
+    }
 
 
 # ============================================================
@@ -334,6 +385,83 @@ async def get_paste_history(
                 is_current=v.id == paste.current_version_id,
             )
             for v in versions
+        ],
+    )
+
+
+# ============================================================
+# 讨论区
+# ============================================================
+
+@router.get("/discuss/{discussion_id}", response_model=DiscussionDetail)
+async def get_discussion(
+    discussion_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> DiscussionDetail:
+    discussion = await db.get(Discussion, discussion_id)
+    if discussion is None:
+        from app.tasks.actors.crawl import crawl_discussion
+
+        crawl_discussion.send(discussion_id, 1, "passive", True)
+        raise NotFoundError("讨论未被本站收录，已触发爬取，请稍后刷新")
+
+    version = (
+        await db.get(DiscussionVersion, discussion.current_version_id)
+        if discussion.current_version_id
+        else None
+    )
+    if version is None:
+        raise NotFoundError("讨论主帖版本缺失")
+
+    stored_count = int(
+        await db.scalar(
+            select(func.count(DiscussionReply.reply_id)).where(
+                DiscussionReply.discussion_id == discussion_id
+            )
+        )
+        or 0
+    )
+    rows = (
+        await db.execute(
+            select(DiscussionReply, DiscussionReplyVersion)
+            .join(
+                DiscussionReplyVersion,
+                DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+            )
+            .where(DiscussionReply.discussion_id == discussion_id)
+            .order_by(DiscussionReply.source_time.asc(), DiscussionReply.reply_id.asc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+        )
+    ).all()
+    uids = {reply.author_uid for reply, _version in rows if reply.author_uid is not None}
+    if discussion.author_uid is not None:
+        uids.add(discussion.author_uid)
+    users = await _user_brief_map(db, uids)
+
+    return DiscussionDetail(
+        discussion_id=discussion_id,
+        title=version.title,
+        content_md=version.content_md,
+        author=users.get(discussion.author_uid) if discussion.author_uid else None,
+        forum_name=discussion.forum_name,
+        source_time=discussion.source_time,
+        crawled_at=version.crawled_at,
+        source_reply_count=discussion.archived_reply_count,
+        stored_reply_count=stored_count,
+        page=page,
+        per_page=per_page,
+        replies=[
+            DiscussionReplyItem(
+                reply_id=reply.reply_id,
+                content_md=reply_version.content_md,
+                author=users.get(reply.author_uid) if reply.author_uid else None,
+                source_time=reply.source_time,
+                crawled_at=reply_version.crawled_at,
+            )
+            for reply, reply_version in rows
         ],
     )
 

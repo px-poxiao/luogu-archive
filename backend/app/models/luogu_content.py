@@ -136,6 +136,137 @@ class PasteVersion(Base):
 
 
 # ============================================================
+# 讨论区
+# ============================================================
+
+class Discussion(Base, TimestampMixin):
+    """讨论主帖及其自动爬取进度。暂停状态仅供爬虫使用，不对外展示。"""
+
+    __tablename__ = "discussions"
+
+    discussion_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=False
+    )
+    author_uid: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    current_version_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
+    forum_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    forum_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    observed_reply_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    archived_reply_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_crawled_page: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_per_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    auto_crawl_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    auto_crawl_paused_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_crawl_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    first_crawled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    last_crawled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    versions: Mapped[list[DiscussionVersion]] = relationship(
+        back_populates="discussion",
+        cascade="all, delete-orphan",
+        foreign_keys="DiscussionVersion.discussion_id",
+    )
+    replies: Mapped[list[DiscussionReply]] = relationship(
+        back_populates="discussion",
+        cascade="all, delete-orphan",
+    )
+
+
+class DiscussionVersion(Base):
+    """讨论主帖版本；正文或标题变化时追加。"""
+
+    __tablename__ = "discussion_versions"
+    __table_args__ = (
+        Index("ix_dv_discussion_crawled", "discussion_id", "crawled_at"),
+        UniqueConstraint("discussion_id", "content_hash", name="uq_dv_discussion_hash"),
+    )
+
+    id: Mapped[int] = BigPKColumn()
+    discussion_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("discussions.discussion_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_md: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    crawled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    crawler_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    discussion: Mapped[Discussion] = relationship(back_populates="versions")
+
+
+class DiscussionReply(Base):
+    """讨论回复最新快照；洛谷回复 ID 为主键。"""
+
+    __tablename__ = "discussion_replies"
+    __table_args__ = (
+        Index("ix_dr_discussion_time", "discussion_id", "source_time"),
+    )
+
+    reply_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    discussion_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("discussions.discussion_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    author_uid: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    current_version_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
+    source_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_crawled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    last_crawled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    discussion: Mapped[Discussion] = relationship(back_populates="replies")
+    versions: Mapped[list[DiscussionReplyVersion]] = relationship(
+        back_populates="reply",
+        cascade="all, delete-orphan",
+        foreign_keys="DiscussionReplyVersion.reply_id",
+    )
+
+
+class DiscussionReplyVersion(Base):
+    """回复版本；重扫重叠页时保留编辑前内容。"""
+
+    __tablename__ = "discussion_reply_versions"
+    __table_args__ = (
+        Index("ix_drv_reply_crawled", "reply_id", "crawled_at"),
+        UniqueConstraint("reply_id", "content_hash", name="uq_drv_reply_hash"),
+    )
+
+    id: Mapped[int] = BigPKColumn()
+    reply_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("discussion_replies.reply_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    content_md: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    crawled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    crawler_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    reply: Mapped[DiscussionReply] = relationship(back_populates="versions")
+
+
+# ============================================================
 # 犇犇（不可编辑，不做版本快照）
 # ============================================================
 

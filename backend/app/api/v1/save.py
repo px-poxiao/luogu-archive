@@ -1,7 +1,7 @@
 """保存按钮 API。
 
 POST /api/v1/save
-Body: { content_type: "article"|"paste"|"user"|"feed"|"judgement"|"problem"|"problem_solution", id: "...", captcha_token?: "..." }
+Body: { content_type: "article"|"paste"|"discuss"|"user"|"feed"|"judgement"|"problem"|"problem_solution", id: "...", captcha_token?: "..." }
 
 流程（3.md 十一-A.3）：
 1. 校验 IP 限流（滑动窗口 60s / 5 次）
@@ -38,7 +38,7 @@ router = APIRouter(tags=["save"])
 log = get_logger(__name__)
 
 ContentType = Literal[
-    "article", "paste", "user", "feed", "judgement", "problem", "problem_solution"
+    "article", "paste", "discuss", "user", "feed", "judgement", "problem", "problem_solution"
 ]
 
 
@@ -62,6 +62,8 @@ _CAPTCHA_REQUIRED_KEY_PREFIX = "save:captcha_required"
 
 _ARTICLE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _ARTICLE_PATH_RE = re.compile(r"^/(?:article|atricle)/([A-Za-z0-9_-]{1,64})/?$", re.IGNORECASE)
+_DISCUSSION_ID_RE = re.compile(r"^\d{1,18}$")
+_DISCUSSION_PATH_RE = re.compile(r"^/discuss/(\d{1,18})/?$", re.IGNORECASE)
 _LUOGU_HOSTS = {
     "www.luogu.com.cn",
     "luogu.com.cn",
@@ -94,6 +96,26 @@ def _normalize_article_ident(raw: str) -> str:
     if not m:
         raise ValidationError("文章链接格式应为 /article/{id}")
     return m.group(1)
+
+
+def _normalize_discussion_ident(raw: str) -> str:
+    """允许讨论保存传入完整链接、路径或纯数字 ID。"""
+    value = raw.strip()
+    if _DISCUSSION_ID_RE.fullmatch(value):
+        return value
+    if value.startswith(("www.luogu.", "luogu.")):
+        value = f"https://{value}"
+    if value.startswith(("http://", "https://")):
+        parsed = urlparse(value)
+        if parsed.netloc.lower() not in _LUOGU_HOSTS:
+            raise ValidationError("只支持洛谷讨论链接")
+        path = parsed.path
+    else:
+        path = value
+    match = _DISCUSSION_PATH_RE.fullmatch(path)
+    if not match:
+        raise ValidationError("讨论链接格式应为 /discuss/{id}")
+    return match.group(1)
 
 
 def _captcha_required_key(ip: str) -> str:
@@ -174,6 +196,7 @@ async def _try_merge_or_enqueue(
     """
     from app.tasks.actors.crawl import (
         crawl_article,
+        crawl_discussion,
         crawl_judgement_hi,
         crawl_paste,
         crawl_user_feeds_hi,
@@ -200,6 +223,8 @@ async def _try_merge_or_enqueue(
             msg = crawl_article.send(ident, "manual")
         elif content_type == "paste":
             msg = crawl_paste.send(ident, "manual")
+        elif content_type == "discuss":
+            msg = crawl_discussion.send(int(ident), 0, "manual", True)
         elif content_type == "user":
             msg = crawl_user_manual.send(int(ident))
         elif content_type == "feed":
@@ -250,7 +275,12 @@ async def _try_get_pending(content_type: str, ident: str) -> str | None:
 @router.post("/save", response_model=SaveResp)
 async def save(req: SaveReq, request: Request) -> SaveResp:
     ip = get_client_ip(request)
-    ident = _normalize_article_ident(req.id) if req.content_type == "article" else req.id
+    if req.content_type == "article":
+        ident = _normalize_article_ident(req.id)
+    elif req.content_type == "discuss":
+        ident = _normalize_discussion_ident(req.id)
+    else:
+        ident = req.id
 
     # 已隐藏目标不能通过保存按钮重新进入爬取队列；feed 保存参数实际是作者 UID。
     if req.content_type in {"article", "paste", "user", "feed"}:

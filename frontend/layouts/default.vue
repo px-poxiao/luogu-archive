@@ -17,7 +17,7 @@ type BrowserWindow = Window & { umami?: UmamiTracker }
 function sanitizeAnalyticsPath(value: string): string {
   const pathname = value.split(/[?#]/, 1)[0] || '/'
   const segments = pathname.split('/').filter(Boolean)
-  const sensitiveRoots = new Set(['user', 'contest', 'paste', 'article'])
+  const sensitiveRoots = new Set(['user', 'contest', 'paste', 'article', 'discuss'])
 
   if (segments.length >= 2 && sensitiveRoots.has(segments[0])) {
     return `/${segments[0]}/:id`

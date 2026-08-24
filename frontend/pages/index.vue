@@ -1,7 +1,7 @@
 <script setup lang="ts">
 definePageMeta({ layout: 'default' })
 
-type JumpType = 'article' | 'paste' | 'user'
+type JumpType = 'article' | 'paste' | 'discuss' | 'user'
 type Announcement = {
   id: number
   title: string
@@ -52,6 +52,12 @@ const jumpTypes: Array<{
     label: '剪贴板',
     placeholder: '例如 xy123abc',
     icon: 'M8 4h8l2 2v14H6V6l2-2zM9 9h6M9 13h6M9 17h4',
+  },
+  {
+    key: 'discuss',
+    label: '讨论',
+    placeholder: '例如 1337298',
+    icon: 'M4 5h16v11H8l-4 4V5zM8 9h8M8 13h5',
   },
   {
     key: 'user',
@@ -118,7 +124,7 @@ function announcementDate(value: string) {
   <div class="home-page">
     <PageHero
       title="洛谷档案馆"
-      subtitle="第三方存档：保存文章、剪贴板、犇犇、陶片放逐和题目信息。"
+      subtitle="第三方存档：保存文章、剪贴板、讨论、犇犇、陶片放逐和题目信息。"
     />
 
     <section

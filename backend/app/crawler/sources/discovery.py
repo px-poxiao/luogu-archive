@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import time as _t
+from typing import Any
 
 from sqlalchemy import select
 
@@ -17,6 +18,7 @@ from app.core.db import db_session
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.crawler.http import fetch_anon
+from app.crawler.lentille import data_from_lentille
 from app.crawler.nodes import NodeKind, get_default_node
 from app.crawler.sources.base import (
     record_task_done,
@@ -24,7 +26,7 @@ from app.crawler.sources.base import (
     trigger_from,
 )
 from app.models._common import CrawlTaskStatus, utcnow
-from app.models.luogu_content import Article
+from app.models.luogu_content import Article, Discussion
 from app.models.luogu_user import LuoguUser
 
 log = get_logger(__name__)
@@ -63,8 +65,14 @@ def _article_ids_from_body(body: str, limit: int = 200) -> list[str]:
     return article_ids
 
 
-async def _discover(url_path: str, task_type: str, *, trigger: str) -> tuple[list[int], str]:
-    node = get_default_node(NodeKind.ANON)
+async def _discover(
+    url_path: str,
+    task_type: str,
+    *,
+    trigger: str,
+    cn: bool = False,
+) -> tuple[list[int], str, dict[str, Any] | None]:
+    node = get_default_node(NodeKind.ANON, cn=cn)
     redis = get_redis()
     task_id = await record_task_start(
         task_type, url_path, trigger=trigger_from(trigger), node_id=node.node_id
@@ -81,7 +89,7 @@ async def _discover(url_path: str, task_type: str, *, trigger: str) -> tuple[lis
             http_status=result.status,
             duration_ms=dur,
         )
-        return uids, result.body_text
+        return uids, result.body_text, result.data
     except Exception as e:
         dur = int((_t.monotonic() - start) * 1000)
         await record_task_done(
@@ -91,21 +99,90 @@ async def _discover(url_path: str, task_type: str, *, trigger: str) -> tuple[lis
             duration_ms=dur,
         )
         log.error("discovery.failed", url=url_path, error=str(e))
-        return [], ""
+        return [], "", None
 
 
 async def from_discuss(*, trigger: str = "scheduled") -> None:
-    uids, _body = await _discover("/discuss", "discovery_discuss", trigger=trigger)
-    log.info("discovery.discuss", count=len(uids))
+    uids, _body, root = await _discover(
+        "https://www.luogu.com.cn/discuss",
+        "discovery_discuss",
+        trigger=trigger,
+        cn=True,
+    )
+    posts: list[dict[str, Any]] = []
+    if isinstance(root, dict):
+        data = data_from_lentille(root)
+        post_page = data.get("posts")
+        rows = post_page.get("result") if isinstance(post_page, dict) else None
+        if isinstance(rows, list):
+            posts = [row for row in rows if isinstance(row, dict)]
+    await _schedule_discussion_crawl(posts)
+    log.info("discovery.discuss", users=len(uids), posts=len(posts))
     await _schedule_user_crawl(uids)
 
 
 async def from_article_list(*, trigger: str = "scheduled") -> None:
-    uids, body = await _discover("/article", "discovery_article", trigger=trigger)
+    uids, body, _root = await _discover("/article", "discovery_article", trigger=trigger)
     article_ids = _article_ids_from_body(body)
     log.info("discovery.article", users=len(uids), articles=len(article_ids))
     await _schedule_article_crawl(article_ids)
     await _schedule_user_crawl(uids)
+
+
+async def _schedule_discussion_crawl(posts: list[dict[str, Any]]) -> None:
+    """新帖立即归档；旧帖比完整归档基线多 6 条回复时做增量归档。"""
+    summaries: dict[int, int] = {}
+    for post in posts:
+        try:
+            discussion_id = int(post["id"])
+            reply_count = max(0, int(post.get("replyCount") or 0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        summaries[discussion_id] = reply_count
+    if not summaries:
+        return
+
+    async with db_session() as session:
+        rows = (
+            await session.execute(
+                select(Discussion).where(
+                    Discussion.discussion_id.in_(summaries.keys())
+                )
+            )
+        ).scalars().all()
+        known = {row.discussion_id: row for row in rows}
+        candidates: list[tuple[int, int]] = []
+        for discussion_id, reply_count in summaries.items():
+            discussion = known.get(discussion_id)
+            if discussion is None:
+                candidates.append((discussion_id, 1))
+                continue
+            discussion.observed_reply_count = reply_count
+            if discussion.auto_crawl_paused:
+                continue
+            if reply_count - discussion.archived_reply_count > 5:
+                candidates.append(
+                    (discussion_id, max(1, discussion.last_crawled_page - 1))
+                )
+        await session.commit()
+
+    redis = get_redis()
+    from app.tasks.actors.crawl import crawl_discussion_bg
+
+    enqueued = 0
+    for discussion_id, start_page in candidates:
+        pending = await redis.set(
+            f"discovery:discussion_pending:{discussion_id}",
+            "1",
+            ex=3600,
+            nx=True,
+        )
+        if not pending:
+            continue
+        crawl_discussion_bg.send(discussion_id, start_page, "discovery", True)
+        enqueued += 1
+    if enqueued:
+        log.info("discovery.enqueued_discussion_crawl", count=enqueued)
 
 
 async def _schedule_article_crawl(article_ids: list[str]) -> None:
