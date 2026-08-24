@@ -132,13 +132,22 @@ async def from_article_list(*, trigger: str = "scheduled") -> None:
 async def _schedule_discussion_crawl(posts: list[dict[str, Any]]) -> None:
     """新帖立即归档；旧帖比完整归档基线多 6 条回复时做增量归档。"""
     summaries: dict[int, int] = {}
+    skipped_problem_forum = 0
     for post in posts:
+        if _is_problem_forum(post):
+            skipped_problem_forum += 1
+            continue
         try:
             discussion_id = int(post["id"])
             reply_count = max(0, int(post.get("replyCount") or 0))
         except (KeyError, TypeError, ValueError):
             continue
         summaries[discussion_id] = reply_count
+    if skipped_problem_forum:
+        log.info(
+            "discovery.skipped_problem_forum",
+            count=skipped_problem_forum,
+        )
     if not summaries:
         return
 
@@ -183,6 +192,13 @@ async def _schedule_discussion_crawl(posts: list[dict[str, Any]]) -> None:
         enqueued += 1
     if enqueued:
         log.info("discovery.enqueued_discussion_crawl", count=enqueued)
+
+
+def _is_problem_forum(post: dict[str, Any]) -> bool:
+    forum = post.get("forum")
+    if not isinstance(forum, dict):
+        return False
+    return isinstance(forum.get("problem"), dict)
 
 
 async def _schedule_article_crawl(article_ids: list[str]) -> None:
