@@ -473,6 +473,11 @@ async def list_discussions(
             DiscussionReply.discussion_id.label("discussion_id"),
             func.count(DiscussionReply.reply_id).label("reply_count"),
         )
+        .join(
+            DiscussionReplyVersion,
+            DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+        )
+        .where(func.length(func.trim(DiscussionReplyVersion.content_md)) > 0)
         .group_by(DiscussionReply.discussion_id)
         .subquery()
     )
@@ -507,7 +512,14 @@ async def list_discussions(
                 DiscussionReply.discussion_id.label("discussion_id"),
                 func.max(DiscussionReply.reply_id).label("reply_id"),
             )
-            .where(DiscussionReply.discussion_id.in_(discussion_ids))
+            .join(
+                DiscussionReplyVersion,
+                DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+            )
+            .where(
+                DiscussionReply.discussion_id.in_(discussion_ids),
+                func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
+            )
             .group_by(DiscussionReply.discussion_id)
             .subquery()
         )
@@ -596,12 +608,44 @@ async def get_discussion(
 
     stored_count = int(
         await db.scalar(
-            select(func.count(DiscussionReply.reply_id)).where(
-                DiscussionReply.discussion_id == discussion_id
+            select(func.count(DiscussionReply.reply_id))
+            .join(
+                DiscussionReplyVersion,
+                DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+            )
+            .where(
+                DiscussionReply.discussion_id == discussion_id,
+                func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
             )
         )
         or 0
     )
+    blank_count = int(
+        await db.scalar(
+            select(func.count(DiscussionReply.reply_id))
+            .join(
+                DiscussionReplyVersion,
+                DiscussionReplyVersion.id == DiscussionReply.current_version_id,
+            )
+            .where(
+                DiscussionReply.discussion_id == discussion_id,
+                func.length(func.trim(DiscussionReplyVersion.content_md)) == 0,
+            )
+        )
+        or 0
+    )
+    if blank_count:
+        try:
+            from app.core.redis_client import get_redis
+            from app.tasks.actors.crawl import crawl_discussion
+
+            redis = get_redis()
+            repair_key = f"repair:discussion_empty_reply:{discussion_id}"
+            if await redis.set(repair_key, "1", ex=300, nx=True):
+                crawl_discussion.send(discussion_id, 0, "passive", True)
+        except Exception:
+            # 修复任务不可用不应阻断已有内容的读取。
+            pass
     rows = (
         await db.execute(
             select(DiscussionReply, DiscussionReplyVersion)
@@ -609,7 +653,10 @@ async def get_discussion(
                 DiscussionReplyVersion,
                 DiscussionReplyVersion.id == DiscussionReply.current_version_id,
             )
-            .where(DiscussionReply.discussion_id == discussion_id)
+            .where(
+                DiscussionReply.discussion_id == discussion_id,
+                func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
+            )
             .order_by(DiscussionReply.source_time.asc(), DiscussionReply.reply_id.asc())
             .offset((page - 1) * per_page)
             .limit(per_page)
@@ -628,7 +675,7 @@ async def get_discussion(
         forum_name=discussion.forum_name,
         source_time=discussion.source_time,
         crawled_at=version.crawled_at,
-        source_reply_count=discussion.archived_reply_count,
+        source_reply_count=discussion.observed_reply_count,
         stored_reply_count=stored_count,
         page=page,
         per_page=per_page,

@@ -107,7 +107,7 @@ function goPage(page: number) {
       <header class="reply-head">
         <div>
           <h2 id="reply-title">回复</h2>
-          <p>已归档 {{ data.stored_reply_count }} 条，原站完整归档时记录 {{ data.source_reply_count }} 条。</p>
+          <p>本站已归档 {{ data.stored_reply_count }} 条，源站记录 {{ data.source_reply_count }} 条。</p>
         </div>
         <span>第 {{ currentPage }} / {{ totalPages }} 页</span>
       </header>
