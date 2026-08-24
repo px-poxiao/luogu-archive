@@ -42,7 +42,7 @@ interface DiscussionListResponse {
   page_size: number
 }
 
-const { data, pending } = useLazyAsyncData(
+const { data, pending, refresh: refreshList } = useLazyAsyncData(
   'discussion-list',
   () => api<DiscussionListResponse>('/discuss', {
     query: {
@@ -55,6 +55,31 @@ const { data, pending } = useLazyAsyncData(
 )
 
 const totalPages = computed(() => Math.max(1, Math.ceil((data.value?.total || 0) / pageSize)))
+const refreshState = ref<'idle' | 'pending' | 'success' | 'cooldown' | 'failed'>('idle')
+const refreshLabel = computed(() => ({
+  idle: '更新',
+  pending: '正在提交',
+  success: '已提交',
+  cooldown: '请稍后再试',
+  failed: '更新失败',
+}[refreshState.value]))
+
+async function updateDiscussions() {
+  if (refreshState.value === 'pending') return
+  refreshState.value = 'pending'
+  try {
+    const result = await api<{ queued: boolean; message: string; retry_after: number }>('/discuss/refresh', {
+      method: 'POST',
+    })
+    refreshState.value = result.queued ? 'success' : 'cooldown'
+    if (result.queued) {
+      window.setTimeout(() => void refreshList(), 3000)
+    }
+  } catch {
+    refreshState.value = 'failed'
+  }
+  window.setTimeout(() => { refreshState.value = 'idle' }, 4000)
+}
 
 function chooseForum(slug: string) {
   if (selectedForum.value === slug) return
@@ -64,9 +89,26 @@ function chooseForum(slug: string) {
 </script>
 
 <template>
-  <div class="discussion-page">
+  <div class="discussion-directory">
+    <header class="discussion-heading">
+      <div>
+        <h1>讨论区</h1>
+        <p>浏览已归档的洛谷讨论主帖与回复</p>
+      </div>
+      <button
+        type="button"
+        class="archive-action-button refresh-button"
+        :class="`is-${refreshState}`"
+        :disabled="refreshState === 'pending'"
+        @click="updateDiscussions"
+      >
+        {{ refreshLabel }}
+      </button>
+    </header>
+
+    <div class="discussion-page">
     <aside class="forum-panel" aria-label="讨论版块">
-      <h1>讨论区</h1>
+      <div class="forum-title">版块</div>
       <button
         type="button"
         class="forum-option all"
@@ -146,17 +188,39 @@ function chooseForum(slug: string) {
         <button class="archive-action-button" :disabled="page >= totalPages" @click="page++">下一页</button>
       </nav>
     </main>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.discussion-directory {
+  display: grid;
+  gap: 18px;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+.discussion-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 112px;
+  padding: 22px 26px;
+  box-sizing: border-box;
+  border: 1px solid var(--hero-border);
+  border-radius: 8px;
+  background: var(--hero-bg);
+}
+.discussion-heading h1 { margin: 0; font-size: 28px; }
+.discussion-heading p { margin: 6px 0 0; color: var(--hero-text-muted); }
+.refresh-button { flex: 0 0 auto; min-width: 92px; }
+.refresh-button.is-success { border-color: var(--lg-green); color: var(--lg-green); }
+.refresh-button.is-cooldown, .refresh-button.is-failed { border-color: var(--lg-orange); color: var(--lg-orange); }
 .discussion-page {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   align-items: start;
   gap: 18px;
-  max-width: 1180px;
-  margin: 0 auto;
 }
 .forum-panel {
   position: sticky;
@@ -168,7 +232,7 @@ function chooseForum(slug: string) {
   border-radius: 8px;
   background: var(--surface);
 }
-.forum-panel h1 { margin: 0 0 9px; font-size: 19px; }
+.forum-title { margin: 0 0 9px; font-size: 17px; font-weight: 700; }
 .forum-option {
   display: grid;
   grid-template-columns: 10px minmax(0, 1fr) auto;
@@ -224,9 +288,12 @@ function chooseForum(slug: string) {
 .empty { padding: 48px 20px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); text-align: center; }
 .pagination { display: flex; justify-content: center; align-items: center; gap: 14px; margin-top: 20px; }
 @media (max-width: 820px) {
+  .discussion-heading { align-items: flex-start; flex-direction: column; padding: 20px 17px; }
+  .discussion-heading h1 { font-size: 24px; }
+  .refresh-button { width: 100%; }
   .discussion-page { grid-template-columns: 1fr; }
   .forum-panel { position: static; display: flex; overflow-x: auto; padding: 10px; }
-  .forum-panel h1 { display: none; }
+  .forum-title { display: none; }
   .forum-option { flex: 0 0 auto; width: auto; grid-template-columns: 8px auto; white-space: nowrap; }
   .forum-count { display: none; }
   .discussion-card { grid-template-columns: 40px minmax(0, 1fr); padding: 13px; }

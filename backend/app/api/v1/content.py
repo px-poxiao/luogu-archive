@@ -146,6 +146,12 @@ class DiscussionListResponse(BaseModel):
     page_size: int
 
 
+class DiscussionRefreshResponse(BaseModel):
+    queued: bool
+    message: str
+    retry_after: int = 0
+
+
 class FeedItem(BaseModel):
     id: int
     type: int
@@ -477,7 +483,10 @@ async def list_discussions(
             DiscussionReplyVersion,
             DiscussionReplyVersion.id == DiscussionReply.current_version_id,
         )
-        .where(func.length(func.trim(DiscussionReplyVersion.content_md)) > 0)
+        .where(
+            DiscussionReplyVersion.content_md != "",
+            func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
+        )
         .group_by(DiscussionReply.discussion_id)
         .subquery()
     )
@@ -518,6 +527,7 @@ async def list_discussions(
             )
             .where(
                 DiscussionReply.discussion_id.in_(discussion_ids),
+                DiscussionReplyVersion.content_md != "",
                 func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
             )
             .group_by(DiscussionReply.discussion_id)
@@ -584,6 +594,30 @@ async def list_discussions(
     )
 
 
+@router.post("/discuss/refresh", response_model=DiscussionRefreshResponse)
+async def refresh_discussions() -> DiscussionRefreshResponse:
+    """提交一次讨论区首页发现任务；全站共享短冷却以避免重复抓取。"""
+    from app.core.redis_client import get_redis
+    from app.tasks.actors.crawl import discover_from_discuss_hi
+
+    redis = get_redis()
+    cooldown_key = "manual:discussion_discovery"
+    queued = await redis.set(cooldown_key, "1", ex=60, nx=True)
+    if not queued:
+        retry_after = max(1, int(await redis.ttl(cooldown_key)))
+        return DiscussionRefreshResponse(
+            queued=False,
+            message="更新任务刚刚提交过，请稍后再试",
+            retry_after=retry_after,
+        )
+
+    discover_from_discuss_hi.send("manual")
+    return DiscussionRefreshResponse(
+        queued=True,
+        message="更新任务已提交",
+    )
+
+
 @router.get("/discuss/{discussion_id}", response_model=DiscussionDetail)
 async def get_discussion(
     discussion_id: int,
@@ -615,6 +649,7 @@ async def get_discussion(
             )
             .where(
                 DiscussionReply.discussion_id == discussion_id,
+                DiscussionReplyVersion.content_md != "",
                 func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
             )
         )
@@ -629,7 +664,10 @@ async def get_discussion(
             )
             .where(
                 DiscussionReply.discussion_id == discussion_id,
-                func.length(func.trim(DiscussionReplyVersion.content_md)) == 0,
+                or_(
+                    DiscussionReplyVersion.content_md == "",
+                    func.length(func.trim(DiscussionReplyVersion.content_md)) == 0,
+                ),
             )
         )
         or 0
@@ -655,6 +693,7 @@ async def get_discussion(
             )
             .where(
                 DiscussionReply.discussion_id == discussion_id,
+                DiscussionReplyVersion.content_md != "",
                 func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
             )
             .order_by(DiscussionReply.source_time.asc(), DiscussionReply.reply_id.asc())
@@ -662,6 +701,12 @@ async def get_discussion(
             .limit(per_page)
         )
     ).all()
+    # 兼容旧版爬虫已经写入的空正文，避免空回复卡片漏到前端。
+    rows = [
+        (reply, reply_version)
+        for reply, reply_version in rows
+        if str(reply_version.content_md or "").strip()
+    ]
     uids = {reply.author_uid for reply, _version in rows if reply.author_uid is not None}
     if discussion.author_uid is not None:
         uids.add(discussion.author_uid)

@@ -417,6 +417,17 @@ def discover_from_discuss(trigger: str = "scheduled") -> None:
     )
 
 
+@actor(queue_name=QUEUE_CRAWL_HI, resources=ANON_CN, **_RETRY)
+def discover_from_discuss_hi(trigger: str = "manual") -> None:
+    """用户主动更新讨论区目录，只把首页发现请求放入高优先级。"""
+    log.info("actor.discover_from_discuss_hi", trigger=trigger)
+    _run_or_defer(
+        "discover_from_discuss_hi",
+        (trigger,),
+        _run_domain_task(lambda: _discover_from_discuss(trigger=trigger), cn=True),
+    )
+
+
 @actor(queue_name=QUEUE_CRAWL_MID, resources=ANON_COM, **_RETRY)
 def discover_from_article_list(trigger: str = "scheduled") -> None:
     log.info("actor.discover_from_article_list", trigger=trigger)

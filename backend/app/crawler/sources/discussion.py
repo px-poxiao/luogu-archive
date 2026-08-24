@@ -77,9 +77,12 @@ def _discussion_fields(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
     unique: dict[int, dict[str, Any]] = {}
     for row in candidates:
         try:
-            unique[int(row["id"])] = row
+            reply_id = int(row["id"])
         except (KeyError, TypeError, ValueError):
             continue
+        # result 中的完整回复排在前面；recentReply / pinnedReply 常是
+        # 不含正文的精简对象，不能覆盖同 ID 的完整数据。
+        unique.setdefault(reply_id, row)
     return post, replies, list(unique.values())
 
 
@@ -150,10 +153,11 @@ async def _crawl_page_inner(
             raise CrawlerError("讨论页无 lentille-context")
         data = data_from_lentille(result.data)
         post, replies, rows = _discussion_fields(data)
-        if any(not str(row.get("content") or "").strip() for row in rows):
-            # 新回复偶尔会先返回 ID、作者和时间，正文稍后才补齐。
-            # 此时整页暂不落库，避免永久保存半成品空回复。
-            raise CrawlerError("讨论回复正文暂未就绪")
+        rows = [
+            row
+            for row in rows
+            if str(row.get("content") or "").strip()
+        ]
 
         try:
             reply_count = max(0, int(replies.get("count") or post.get("replyCount") or 0))
