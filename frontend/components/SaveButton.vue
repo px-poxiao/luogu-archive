@@ -71,7 +71,7 @@ async function onCaptchaVerified(token: string) {
 <template>
   <div class="save-action">
     <button
-      class="hero-save-btn"
+      class="archive-action-button"
       :class="{
         success: state === 'success',
         error: state === 'failed',
@@ -98,24 +98,7 @@ async function onCaptchaVerified(token: string) {
   gap: 8px;
 }
 
-.hero-save-btn {
-  flex-shrink: 0;
-  padding: 6px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--hero-border);
-  background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-  font-size: 13.5px;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s, color 0.15s;
-}
-.hero-save-btn:hover:not(:disabled) {
-  border-color: var(--link);
-  color: var(--link);
-  transform: translateY(-1px);
-}
-.hero-save-btn:disabled { opacity: 0.7; cursor: not-allowed; }
-.hero-save-btn.success { color: var(--lg-green); border-color: var(--lg-green); }
-.hero-save-btn.error { color: var(--lg-red); border-color: var(--lg-red); }
-.hero-save-btn.cooldown { color: var(--lg-orange); border-color: var(--lg-orange); }
+.archive-action-button.success { color: var(--lg-green); border-color: var(--lg-green); }
+.archive-action-button.error { color: var(--lg-red); border-color: var(--lg-red); }
+.archive-action-button.cooldown { color: var(--lg-orange); border-color: var(--lg-orange); }
 </style>

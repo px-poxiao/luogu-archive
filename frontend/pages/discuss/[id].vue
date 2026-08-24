@@ -91,10 +91,10 @@ function goPage(page: number) {
         </div>
       </div>
       <div class="head-actions">
-        <a :href="`https://www.luogu.com.cn/discuss/${id}`" target="_blank" rel="noopener noreferrer" class="action-btn">
+        <a :href="`https://www.luogu.com.cn/discuss/${id}`" target="_blank" rel="noopener noreferrer" class="archive-action-button">
           查看原文
         </a>
-        <button type="button" class="action-btn" @click="copyMarkdown('post', data.content_md)">
+        <button type="button" class="archive-action-button" @click="copyMarkdown('post', data.content_md)">
           {{ copied === 'post' ? '已复制' : '复制原文' }}
         </button>
         <SaveButton content-type="discuss" :content-id="String(id)" />
@@ -171,7 +171,7 @@ function goPage(page: number) {
 .avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
 .avatar.small { width: 27px; height: 27px; }
 .head-actions { justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
-.action-btn, .copy-reply, .pagination button {
+.copy-reply, .pagination button {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface);
@@ -179,8 +179,7 @@ function goPage(page: number) {
   cursor: pointer;
   font: inherit;
 }
-.action-btn { padding: 7px 11px; font-size: 13px; text-decoration: none; }
-.action-btn:hover, .copy-reply:hover, .pagination button:hover:not(:disabled) { border-color: var(--link); color: var(--link); }
+.copy-reply:hover, .pagination button:hover:not(:disabled) { border-color: var(--link); color: var(--link); }
 .post-body { padding: 26px; border-bottom: 1px solid var(--border); }
 .reply-section { display: grid; gap: 14px; }
 .reply-head { display: flex; justify-content: space-between; align-items: end; gap: 18px; }
