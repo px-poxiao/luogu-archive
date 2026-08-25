@@ -57,6 +57,8 @@ export interface PluginDetail {
   is_owner: boolean
   pending_only: boolean
   tags: PluginTag[]
+  updated_at?: string
+  total_usage?: number
   current: PluginVersion | null
   versions: Array<{
     id: number

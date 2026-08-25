@@ -342,6 +342,8 @@ async def plugin_detail(
             "pending_only": True,
             "is_owner": True,
             "is_listed": False,
+            "updated_at": pending.created_at.isoformat(),
+            "total_usage": 0,
             "pending_application": {
                 "id": pending.id,
                 "type": pending.application_type,
@@ -377,6 +379,8 @@ async def plugin_detail(
         "is_owner": is_owner,
         "pending_only": False,
         "tags": await plugin_tag_names(db, plugin.id),
+        "updated_at": plugin.updated_at.isoformat(),
+        "total_usage": getattr(plugin, "total_usage", 0),
         "current": _version_dict(current) if plugin.is_listed or is_owner else None,
         "versions": [
             {"id": row.id, "version": row.version, "published_at": row.published_at.isoformat(), "is_current": row.id == plugin.current_version_id}
