@@ -25,7 +25,7 @@ body:
   attributes:
     label: 功能描述
     description: "您描述地越详细，我们能越容易的理解您提出的新功能"
-    placeholder: "描述您逍遥的新功能"
+    placeholder: "描述您想要的新功能"
   validations:
     required: true
 - type: textarea
