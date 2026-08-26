@@ -172,6 +172,69 @@ async def send_plugin_admin_notice(
             )
 
 
+async def send_takedown_admin_notice(
+    recipients: list[str],
+    *,
+    target_url: str,
+    target_type: str,
+    target_id: str,
+    requester_name: str | None,
+    requester_email: str | None,
+    reason: str,
+    auto_approved: bool,
+) -> None:
+    """通知管理员有新的内容删除申请。"""
+    state = "作者本人申请，已自动批准" if auto_approved else "等待管理员审核"
+    subject = f"[洛谷档案馆] 新的内容删除申请：{target_type}/{target_id}"
+    body = (
+        f"目标：{target_url}\n"
+        f"状态：{state}\n"
+        f"申请人：{requester_name or '未填写'}\n"
+        f"联系邮箱：{requester_email or '未填写'}\n"
+        f"理由：{reason}\n"
+        "请登录管理后台查看。"
+    )
+    html = _takedown_admin_notice_html(
+        target_url=target_url,
+        target_type=target_type,
+        target_id=target_id,
+        requester_name=requester_name,
+        requester_email=requester_email,
+        reason=reason,
+        auto_approved=auto_approved,
+    )
+    for recipient in recipients:
+        ok = await send_email(recipient, subject, body, html)
+        if not ok:
+            log.error(
+                "email.takedown_admin_notice_failed",
+                to=recipient,
+                target_type=target_type,
+                target_id=target_id,
+            )
+
+
+async def send_takedown_result_email(
+    to: str,
+    *,
+    target_url: str,
+    approved: bool,
+    reason: str | None = None,
+) -> bool:
+    """通知申请人内容删除申请的处理结果。"""
+    result = "已批准" if approved else "未批准"
+    subject = f"[洛谷档案馆] 内容删除申请{result}"
+    body = f"目标：{target_url}\n处理结果：{result}\n"
+    if reason:
+        body += f"处理说明：{reason}\n"
+    html = _takedown_result_html(
+        target_url=target_url,
+        approved=approved,
+        reason=reason,
+    )
+    return await send_email(to, subject, body, html)
+
+
 def _plugin_result_html(
     *,
     plugin_name: str,
@@ -241,6 +304,82 @@ def _plugin_admin_notice_html(
             </td>
           </tr>
           {_email_button_row(admin_url, "前往管理后台", brand)}"""
+    return _email_shell(content)
+
+
+def _takedown_admin_notice_html(
+    *,
+    target_url: str,
+    target_type: str,
+    target_id: str,
+    requester_name: str | None,
+    requester_email: str | None,
+    reason: str,
+    auto_approved: bool,
+) -> str:
+    """生成管理员内容删除通知邮件。"""
+    brand = "#0969da"
+    state = "已自动批准" if auto_approved else "待处理"
+    state_color = "#1a7f37" if auto_approved else brand
+    state_bg = "#dafbe1" if auto_approved else "#ddf4ff"
+    admin_url = f"{settings.WEB_PUBLIC_ORIGIN.rstrip('/')}/admin/takedowns"
+    content = f"""
+          <tr>
+            <td style="padding:36px 32px 20px;">
+              <div style="display:inline-block;margin-bottom:18px;padding:5px 11px;border-radius:999px;background-color:{state_bg};color:{state_color};font-size:13px;font-weight:700;">{state}</div>
+              <h1 style="margin:0 0 20px;font-size:21px;color:#1f2328;font-weight:700;">新的内容删除申请</h1>
+              {_email_info_table((("内容类型", target_type), ("内容编号", target_id), ("目标地址", target_url), ("申请人", requester_name or "未填写"), ("联系邮箱", requester_email or "未填写")))}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f6f8fa;border-left:4px solid {state_color};border-radius:6px;">
+                <tr><td style="padding:14px 16px;">
+                  <p style="margin:0 0 5px;font-size:13px;font-weight:700;color:#57606a;">申请理由</p>
+                  <p style="margin:0;font-size:14px;line-height:1.7;color:#1f2328;word-break:break-word;">{_email_text(reason)}</p>
+                </td></tr>
+              </table>
+            </td>
+          </tr>
+          {_email_button_row(admin_url, "查看删除申请", brand)}"""
+    return _email_shell(content)
+
+
+def _takedown_result_html(
+    *,
+    target_url: str,
+    approved: bool,
+    reason: str | None,
+) -> str:
+    """生成申请人内容删除审核结果邮件。"""
+    brand = "#0969da"
+    status_color = "#1a7f37" if approved else "#cf222e"
+    status_bg = "#dafbe1" if approved else "#ffebe9"
+    result = "申请已批准" if approved else "申请未批准"
+    reason_html = ""
+    if reason:
+        reason_html = f"""
+          <tr>
+            <td style="padding:0 32px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f6f8fa;border-left:4px solid {status_color};border-radius:6px;">
+                <tr><td style="padding:14px 16px;">
+                  <p style="margin:0 0 5px;font-size:13px;font-weight:700;color:#57606a;">处理说明</p>
+                  <p style="margin:0;font-size:14px;line-height:1.7;color:#1f2328;word-break:break-word;">{_email_text(reason)}</p>
+                </td></tr>
+              </table>
+            </td>
+          </tr>"""
+    home_url = settings.WEB_PUBLIC_ORIGIN.rstrip("/")
+    content = f"""
+          <tr>
+            <td style="padding:36px 32px 20px;">
+              <div style="display:inline-block;margin-bottom:18px;padding:5px 11px;border-radius:999px;background-color:{status_bg};color:{status_color};font-size:13px;font-weight:700;">{result}</div>
+              <h1 style="margin:0 0 20px;font-size:21px;color:#1f2328;font-weight:700;">内容删除申请处理结果</h1>
+              {_email_info_table((("目标地址", target_url), ("处理结果", result)))}
+            </td>
+          </tr>
+          {reason_html}
+          {_email_button_row(home_url, "返回洛谷档案馆", brand)}"""
     return _email_shell(content)
 
 

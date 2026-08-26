@@ -30,6 +30,7 @@ from app.models.plugin import (
     PluginVersion,
 )
 from app.models.site_user import SiteUser
+from app.services.admin_notifications import admin_notification_emails
 from app.services.plugin_marketplace import (
     REPORT_TYPES,
     PluginSnapshot,
@@ -40,7 +41,6 @@ from app.services.plugin_marketplace import (
     plugin_tag_names,
     snapshot_preview_dict,
     validate_tag_ids,
-    admin_notification_emails,
 )
 
 
@@ -342,6 +342,8 @@ async def plugin_detail(
             "pending_only": True,
             "is_owner": True,
             "is_listed": False,
+            "updated_at": pending.created_at.isoformat(),
+            "total_usage": 0,
             "pending_application": {
                 "id": pending.id,
                 "type": pending.application_type,
@@ -377,6 +379,8 @@ async def plugin_detail(
         "is_owner": is_owner,
         "pending_only": False,
         "tags": await plugin_tag_names(db, plugin.id),
+        "updated_at": plugin.updated_at.isoformat(),
+        "total_usage": getattr(plugin, "total_usage", 0),
         "current": _version_dict(current) if plugin.is_listed or is_owner else None,
         "versions": [
             {"id": row.id, "version": row.version, "published_at": row.published_at.isoformat(), "is_current": row.id == plugin.current_version_id}
@@ -504,8 +508,19 @@ async def apply_publish(
         snapshot_json=encode_snapshot(snapshot),
     )
     db.add(row)
+    emails = await admin_notification_emails(db)
     await db.commit()
     await db.refresh(row)
+    await send_plugin_admin_notice(
+        emails,
+        event_name="首次发布申请",
+        plugin_name=article.title,
+        detail=(
+            f"文章编号：{body.article_id}\n"
+            f"代码版本：{snapshot.version}\n"
+            f"请求等级：{snapshot.user_request_level}"
+        ),
+    )
     return {"id": row.id, "status": row.status}
 
 
@@ -554,8 +569,19 @@ async def apply_update(
         snapshot_json=encode_snapshot(clean),
     )
     db.add(row)
+    emails = await admin_notification_emails(db)
     await db.commit()
     await db.refresh(row)
+    await send_plugin_admin_notice(
+        emails,
+        event_name="版本更新申请",
+        plugin_name=plugin.name,
+        detail=(
+            f"文章编号：{article_id}\n"
+            f"代码版本：{clean.version}\n"
+            f"请求等级：{clean.user_request_level}"
+        ),
+    )
     return {"id": row.id, "status": row.status}
 
 

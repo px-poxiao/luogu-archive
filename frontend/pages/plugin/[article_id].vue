@@ -150,6 +150,21 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
           <span v-if="detail.is_official" class="trust official">官方插件</span>
           <span v-if="detail.is_recommended" class="trust recommended">推荐插件</span>
         </div>
+        <div v-if="article.author" class="meta-line">
+          <div class="meta-author">
+            <NuxtLink :to="`/user/${article.author.uid}`" class="author-avatar" tabindex="-1" aria-hidden="true">
+              <img v-if="article.author.avatar" :src="article.author.avatar" alt="" loading="lazy">
+              <span v-else :data-color="article.author.color">{{ (article.author.name || '?').charAt(0).toUpperCase() }}</span>
+            </NuxtLink>
+            <LuoguUserName :user="article.author" show-badge />
+          </div>
+          <span class="meta-separator">·</span>
+          <span class="meta-item">{{ displayVersion ? runtimeMode(displayVersion.runtime_mode) : '未知运行方式' }}</span>
+          <span class="meta-separator">·</span>
+          <span class="meta-item">{{ detail.updated_at ? `更新于 ${format(detail.updated_at)}` : '更新时间未知' }}</span>
+          <span class="meta-separator">·</span>
+          <span class="meta-item" v-if="detail.total_usage !== undefined">使用次数 {{ detail.total_usage }}</span>
+        </div>
         <div class="tag-row">
           <span v-for="tag in displayTags" :key="tag.id" class="tag">{{ tag.name }}</span>
         </div>
@@ -300,6 +315,22 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
 .header-main { min-width: 0; }
 .title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
 .title-line h1 { margin: 0; font-size: 29px; overflow-wrap: anywhere; }
+.meta-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 12px; color: var(--text-muted); font-size: 14px; }
+.meta-author { display: inline-flex; align-items: center; gap: 8px; }
+.author-avatar { display: inline-flex; flex: 0 0 28px; width: 28px; height: 28px; border-radius: 50%; overflow: hidden; text-decoration: none; }
+.author-avatar img, .author-avatar > span { width: 100%; height: 100%; }
+.author-avatar img { display: block; object-fit: cover; background: var(--bg); }
+.author-avatar > span { display: grid; place-items: center; background: var(--lg-gray); color: #fff; font-weight: 600; }
+.author-avatar > span[data-color="Blue"] { background: var(--lg-blue); }
+.author-avatar > span[data-color="Green"] { background: var(--lg-green); }
+.author-avatar > span[data-color="Orange"] { background: var(--lg-orange); }
+.author-avatar > span[data-color="Red"] { background: var(--lg-red); }
+.author-avatar > span[data-color="Purple"] { background: var(--lg-purple); }
+.author-avatar > span[data-color="Cyan"] { background: var(--lg-cyan); }
+.author-avatar > span[data-color="Black"] { background: var(--lg-black); }
+.author-avatar > span[data-color="Cheater"] { background: var(--lg-cheater-tag); }
+.meta-separator { color: var(--text-muted); }
+.meta-item { white-space: nowrap; }
 .trust, .tag { border-radius: 4px; padding: 2px 8px; font-size: 12px; }
 .official { background: var(--lg-blue); color: #fff; }
 .recommended { background: var(--lg-yellow); color: #332800; }
@@ -321,7 +352,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
 select, textarea { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 8px 10px; font: inherit; }
 .code-actions { display: flex; gap: 9px; }
 .code-actions button, .detail-footer button, .report-form button { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 7px 11px; cursor: pointer; font: inherit; }
-.code-actions button:first-child, .report-form button { border-color: var(--link); background: var(--link); color: #fff; }
+.report-form button { border-color: var(--link); background: var(--link); color: #fff; }
 .code-actions button:disabled { border-color: var(--border); background: var(--hover); color: var(--text-muted); cursor: not-allowed; opacity: .7; }
 .code-truncation { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 10px; padding: 10px 12px; border-left: 4px solid var(--lg-yellow); background: color-mix(in srgb, var(--lg-yellow) 10%, var(--surface)); }
 .code-truncation strong { font-size: 14px; }

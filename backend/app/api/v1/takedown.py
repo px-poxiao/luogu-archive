@@ -13,12 +13,14 @@ from app.api.deps import get_client_ip
 from app.auth.deps import get_optional_site_user
 from app.core.db import get_db
 from app.core.exceptions import ConflictError, RateLimitError, ValidationError
+from app.core.mail import send_takedown_admin_notice, send_takedown_result_email
 from app.core.ratelimit import SlidingWindowLimiter, ratelimit_key
 from app.core.redis_client import get_redis
 from app.models._common import TakedownStatus, utcnow
 from app.models.luogu_content import Article, Feed, Paste
 from app.models.site_user import SiteUser
 from app.models.task import TakedownProbe, TakedownRequest
+from app.services.admin_notifications import admin_notification_emails
 from app.services.content_suppression import apply_takedown, detect_target_url, find_active_suppression
 
 router = APIRouter(tags=["takedown"])
@@ -133,5 +135,23 @@ async def submit_takedown(body: SubmitReq, request: Request,
     await db.flush()
     if is_owner:
         await apply_takedown(db, row)
+    emails = await admin_notification_emails(db)
     await db.commit()
+    await send_takedown_admin_notice(
+        emails,
+        target_url=row.target_url,
+        target_type=row.target_type,
+        target_id=row.target_id,
+        requester_name=row.requester_name,
+        requester_email=row.requester_email,
+        reason=row.reason,
+        auto_approved=is_owner,
+    )
+    if is_owner and row.requester_email:
+        await send_takedown_result_email(
+            row.requester_email,
+            target_url=row.target_url,
+            approved=True,
+            reason="绑定账号本人申请，已自动停止公开展示。",
+        )
     return {"id": row.id, "status": row.status.value, "auto_approved": is_owner}
