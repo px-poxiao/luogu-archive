@@ -30,6 +30,7 @@ from app.models.plugin import (
     PluginVersion,
 )
 from app.models.site_user import SiteUser
+from app.services.admin_notifications import admin_notification_emails
 from app.services.plugin_marketplace import (
     REPORT_TYPES,
     PluginSnapshot,
@@ -40,7 +41,6 @@ from app.services.plugin_marketplace import (
     plugin_tag_names,
     snapshot_preview_dict,
     validate_tag_ids,
-    admin_notification_emails,
 )
 
 
@@ -508,8 +508,19 @@ async def apply_publish(
         snapshot_json=encode_snapshot(snapshot),
     )
     db.add(row)
+    emails = await admin_notification_emails(db)
     await db.commit()
     await db.refresh(row)
+    await send_plugin_admin_notice(
+        emails,
+        event_name="首次发布申请",
+        plugin_name=article.title,
+        detail=(
+            f"文章编号：{body.article_id}\n"
+            f"代码版本：{snapshot.version}\n"
+            f"请求等级：{snapshot.user_request_level}"
+        ),
+    )
     return {"id": row.id, "status": row.status}
 
 
@@ -558,8 +569,19 @@ async def apply_update(
         snapshot_json=encode_snapshot(clean),
     )
     db.add(row)
+    emails = await admin_notification_emails(db)
     await db.commit()
     await db.refresh(row)
+    await send_plugin_admin_notice(
+        emails,
+        event_name="版本更新申请",
+        plugin_name=plugin.name,
+        detail=(
+            f"文章编号：{article_id}\n"
+            f"代码版本：{clean.version}\n"
+            f"请求等级：{clean.user_request_level}"
+        ),
+    )
     return {"id": row.id, "status": row.status}
 
 

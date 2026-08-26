@@ -352,7 +352,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
 select, textarea { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 8px 10px; font: inherit; }
 .code-actions { display: flex; gap: 9px; }
 .code-actions button, .detail-footer button, .report-form button { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 7px 11px; cursor: pointer; font: inherit; }
-.code-actions button:first-child, .report-form button { border-color: var(--link); background: var(--link); color: #fff; }
+.report-form button { border-color: var(--link); background: var(--link); color: #fff; }
 .code-actions button:disabled { border-color: var(--border); background: var(--hover); color: var(--text-muted); cursor: not-allowed; opacity: .7; }
 .code-truncation { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 10px; padding: 10px 12px; border-left: 4px solid var(--lg-yellow); background: color-mix(in srgb, var(--lg-yellow) 10%, var(--surface)); }
 .code-truncation strong { font-size: 14px; }

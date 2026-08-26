@@ -44,6 +44,7 @@ from app.api.deps import get_client_ip
 from app.auth.deps import get_current_admin
 from app.core.db import get_db
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.mail import send_takedown_result_email
 from app.crawler.cookies import encrypt_cookie
 from app.models._common import (
     NameViolationSource,
@@ -416,6 +417,13 @@ async def approve_takedown(
         target_type="takedown", target_id=str(tid),
     )
     await db.commit()
+    if t.requester_email:
+        await send_takedown_result_email(
+            t.requester_email,
+            target_url=t.target_url,
+            approved=True,
+            reason=t.admin_note,
+        )
     return {"message": "已批准并停止公开展示"}
 
 
@@ -466,6 +474,13 @@ async def reject_takedown(
         target_type="takedown", target_id=str(tid),
     )
     await db.commit()
+    if t.requester_email:
+        await send_takedown_result_email(
+            t.requester_email,
+            target_url=t.target_url,
+            approved=False,
+            reason=t.admin_note,
+        )
     return {"message": "已拒绝"}
 
 

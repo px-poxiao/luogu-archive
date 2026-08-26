@@ -12,7 +12,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
-from app.models.admin import Admin
 from app.models.plugin import PluginTag, PluginTagLink, PluginVersion
 
 
@@ -223,12 +222,3 @@ def version_from_snapshot(
         source_application_id=source_application_id,
         reviewed_by_admin_id=admin_id,
     )
-
-
-async def admin_notification_emails(db: AsyncSession) -> list[str]:
-    """返回所有启用管理员保存的通知邮箱，不再要求邮件验证。"""
-    q = select(Admin.notification_email).where(
-        Admin.notification_email.is_not(None),
-        Admin.is_disabled.is_(False),
-    )
-    return sorted({str(value) for value in (await db.execute(q)).scalars().all() if value})
