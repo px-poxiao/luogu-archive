@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.contest_problem_mapping import (
@@ -100,8 +100,14 @@ async def user_rating_predictions(
                 ContestParticipant.is_penalized.is_(False),
                 ContestParticipant.predicted_rating.is_not(None),
                 ContestParticipant.official_rating.is_(None),
-                Contest.status == ContestArchiveStatus.predicted,
-                Contest.elo_done.is_(False),
+                or_(
+                    and_(
+                        Contest.status == ContestArchiveStatus.predicted,
+                        Contest.elo_done.is_(False),
+                    ),
+                    # 正式结果正在整批刷新与重算时，继续向用户展示旧预测。
+                    Contest.status == ContestArchiveStatus.refreshing_users,
+                ),
                 Contest.predicted_at.is_not(None),
                 Contest.rated_type > 0,
                 Contest.elo_threshold.is_not(None),
