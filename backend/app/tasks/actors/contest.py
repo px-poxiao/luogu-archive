@@ -247,6 +247,12 @@ async def _prepare_refresh_user(contest_id: int, uid: int, phase: str) -> None:
     if not await refresh_user_pending(contest_id, uid, phase):
         return
 
+    # 正式出分后必须重新抓取榜内每一名用户。旧缓存可能生成于出分之前，
+    # 即使不足一天也不包含本场正式等级分，复用它会把该用户误判为 0 变化。
+    if phase == "official":
+        refresh_contest_user.send(contest_id, uid, phase, True)
+        return
+
     async with db_session() as session:
         user = await session.get(LuoguUser, uid)
     last_crawled_at = user.last_crawled_at if user else None

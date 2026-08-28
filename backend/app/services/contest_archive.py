@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from math import ceil
 from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.contest_problem_mapping import align_problem_ids, scoreboard_problem_ids
 from app.core.db import db_session
@@ -945,11 +947,32 @@ async def _finish_refresh(contest_id: int, phase: str) -> None:
         calculate_contest_prediction.send(contest_id)
 
 
-async def calculate_prediction(contest_id: int, *, cascade: bool = True) -> None:
+@asynccontextmanager
+async def _prediction_session(existing: AsyncSession | None):
+    """复用正式结算事务，普通预测则自行创建数据库会话。"""
+
+    if existing is not None:
+        yield existing
+        return
+    async with db_session() as session:
+        yield session
+
+
+async def calculate_prediction(
+    contest_id: int,
+    *,
+    cascade: bool = True,
+    _session: AsyncSession | None = None,
+    _commit: bool = True,
+) -> None:
     """读取赛前快照并生成唯一一版公开预测。"""
 
-    async with db_session() as session:
-        contest = await session.get(Contest, contest_id)
+    async with _prediction_session(_session) as session:
+        contest = (
+            await session.execute(
+                select(Contest).where(Contest.id == contest_id).with_for_update()
+            )
+        ).scalar_one_or_none()
         if contest is None or not contest.is_elo_rated:
             return
         participants = (
@@ -1115,39 +1138,66 @@ async def calculate_prediction(contest_id: int, *, cascade: bool = True) -> None
         contest.status = ContestArchiveStatus.predicted
         contest.predicted_at = utcnow()
         contest.error_message = None
-        await session.commit()
+        if _commit:
+            await session.commit()
 
     if cascade:
         await recalculate_following_predictions(contest_id)
 
 
+async def _following_prediction_ids(
+    session: AsyncSession,
+    contest_id: int,
+) -> list[int]:
+    """按时间顺序返回锚点之后尚未正式出分的公开预测。"""
+
+    anchor = await session.get(Contest, contest_id)
+    if anchor is None:
+        return []
+    return [
+        int(value)
+        for value in (
+            await session.execute(
+                select(Contest.id)
+                .where(
+                    Contest.id != contest_id,
+                    Contest.status == ContestArchiveStatus.predicted,
+                    Contest.elo_done.is_(False),
+                    Contest.rated_type > 0,
+                    Contest.elo_threshold > 0,
+                    Contest.elo_threshold.is_not(None),
+                    Contest.start_time >= anchor.end_time,
+                )
+                .order_by(Contest.start_time.asc(), Contest.end_time.asc(), Contest.id.asc())
+            )
+        ).scalars().all()
+    ]
+
+
 async def recalculate_following_predictions(contest_id: int) -> int:
-    """前序预测或正式结果变化后，按时间顺序重算后续比赛。"""
+    """前序预测变化后，按时间顺序重算后续比赛。"""
 
     async with db_session() as session:
-        anchor = await session.get(Contest, contest_id)
-        if anchor is None:
-            return 0
-        following_ids = list(
-            (
-                await session.execute(
-                    select(Contest.id)
-                    .where(
-                        Contest.id != contest_id,
-                        Contest.status == ContestArchiveStatus.predicted,
-                        Contest.rated_type > 0,
-                        Contest.elo_threshold > 0,
-                        Contest.elo_threshold.is_not(None),
-                        Contest.start_time >= anchor.end_time,
-                    )
-                    .order_by(Contest.start_time.asc(), Contest.end_time.asc(), Contest.id.asc())
-                )
-            ).scalars().all()
-        )
+        following_ids = await _following_prediction_ids(session, contest_id)
 
     for following_id in following_ids:
         await calculate_prediction(int(following_id), cascade=False)
     return len(following_ids)
+
+
+async def _recalculate_predictions_in_session(
+    session: AsyncSession,
+    contest_ids: list[int],
+) -> None:
+    """在调用方事务内依次重算，期间不单独提交任何一场比赛。"""
+
+    for following_id in contest_ids:
+        await calculate_prediction(
+            following_id,
+            cascade=False,
+            _session=session,
+            _commit=False,
+        )
 
 
 async def detect_official_from_user(contest_id: int, uid: int) -> bool:
@@ -1205,10 +1255,14 @@ async def begin_official_refresh(contest_id: int) -> None:
 
 
 async def finalize_official(contest_id: int) -> None:
-    """使用正式历史替换公开预测结果。"""
+    """原子发布正式结果，并顺序重算其后的全部未出分比赛。"""
 
     async with db_session() as session:
-        contest = await session.get(Contest, contest_id)
+        contest = (
+            await session.execute(
+                select(Contest).where(Contest.id == contest_id).with_for_update()
+            )
+        ).scalar_one_or_none()
         if contest is None or not contest.is_elo_rated:
             return
         participants = (
@@ -1246,9 +1300,12 @@ async def finalize_official(contest_id: int) -> None:
         contest.elo_done = True
         contest.official_at = utcnow()
         contest.error_message = None
-        await session.commit()
 
-    await recalculate_following_predictions(contest_id)
+        # 后续比赛只使用刚刚写入的正式历史重算，不再发主页爬取任务。
+        # 所有结果共用当前事务，公开接口在最终 commit 前仍只能读到旧预测。
+        following_ids = await _following_prediction_ids(session, contest_id)
+        await _recalculate_predictions_in_session(session, following_ids)
+        await session.commit()
 
 
 async def mark_failed(contest_id: int, error: Exception) -> None:
