@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const form = ref({ email: '', password: '' })
+const form = ref({ email: '', password: '', totp_code: '' })
 const err = ref('')
 const loading = ref(false)
 
@@ -88,6 +88,8 @@ onUnmounted(() => {
       <input v-model="form.email" type="email" autocomplete="email" required>
       <label>密码</label>
       <input v-model="form.password" type="password" autocomplete="current-password" required>
+      <label>2FA 验证码（若已启用）</label>
+      <input v-model="form.totp_code" maxlength="6" minlength="6" inputmode="numeric" placeholder="可选">
       <button :disabled="loading" type="submit">
         {{ loading ? '登录中...' : '登录' }}
       </button>
