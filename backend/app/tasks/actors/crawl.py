@@ -13,6 +13,7 @@ from app.core.exceptions import (
     CrawlerAccountInvalid,
     CrawlerNotFound,
 )
+from app.core.crawl_policy import crawl_trigger_allowed, proactive_crawling_enabled
 from app.core.locks import DistributedLock
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
@@ -60,6 +61,19 @@ _RETRY = {
     "max_backoff": 60_000,
     "throws": (CrawlerNotFound, CrawlerAccountInvalid),
 }
+
+
+def _skip_disallowed(actor_name: str, trigger: str) -> bool:
+    """丢弃升级前残留的主动任务，同时保留用户明确发起的任务。"""
+
+    if crawl_trigger_allowed(trigger):
+        return False
+    log.info(
+        "actor.skipped_by_crawl_policy",
+        actor=actor_name,
+        trigger=trigger,
+    )
+    return True
 
 
 async def _run_domain_task(
@@ -146,6 +160,8 @@ async def _run_feed_task(
 @actor(queue_name=QUEUE_CRAWL_HI, resources=ANON_COM, **_RETRY)
 def crawl_article(article_id: str, trigger: str = "manual") -> None:
     """用户触发的文章抓取：手动保存或首次访问未收录文章。"""
+    if _skip_disallowed("crawl_article", trigger):
+        return
     log.info("actor.crawl_article", article_id=article_id, trigger=trigger)
     _run_or_defer(
         "crawl_article",
@@ -157,6 +173,8 @@ def crawl_article(article_id: str, trigger: str = "manual") -> None:
 @actor(queue_name=QUEUE_CRAWL_MID, resources=ANON_COM, **_RETRY)
 def crawl_article_bg(article_id: str, trigger: str = "passive") -> None:
     """后台文章抓取：过期刷新、发现或级联。"""
+    if _skip_disallowed("crawl_article_bg", trigger):
+        return
     log.info("actor.crawl_article_bg", article_id=article_id, trigger=trigger)
     _run_or_defer(
         "crawl_article_bg",
@@ -168,6 +186,8 @@ def crawl_article_bg(article_id: str, trigger: str = "passive") -> None:
 @actor(queue_name=QUEUE_CRAWL_HI, resources=ANON_COM, **_RETRY)
 def crawl_paste(paste_id: str, trigger: str = "manual") -> None:
     """用户触发的剪贴板抓取：手动保存或首次访问未收录内容。"""
+    if _skip_disallowed("crawl_paste", trigger):
+        return
     log.info("actor.crawl_paste", paste_id=paste_id, trigger=trigger)
     _run_or_defer(
         "crawl_paste",
@@ -179,6 +199,8 @@ def crawl_paste(paste_id: str, trigger: str = "manual") -> None:
 @actor(queue_name=QUEUE_CRAWL_MID, resources=ANON_COM, **_RETRY)
 def crawl_paste_bg(paste_id: str, trigger: str = "passive") -> None:
     """后台剪贴板抓取：过期刷新或级联。"""
+    if _skip_disallowed("crawl_paste_bg", trigger):
+        return
     log.info("actor.crawl_paste_bg", paste_id=paste_id, trigger=trigger)
     _run_or_defer(
         "crawl_paste_bg",
@@ -236,21 +258,30 @@ def crawl_discussion_bg(
 @actor(queue_name=QUEUE_CRAWL_HI, resources=ANON_COM, **_RETRY)
 def crawl_user(uid: int, trigger: str = "manual") -> None:
     """用户触发的主页抓取，用于首次访问未收录用户。"""
+    if _skip_disallowed("crawl_user", trigger):
+        return
     log.info("actor.crawl_user", uid=uid, trigger=trigger)
     _run_or_defer(
         "crawl_user",
         (uid, trigger),
-        _run_domain_task(lambda: _crawl_user_one(uid, trigger=trigger)),
+        _run_domain_task(
+            lambda: _crawl_user_one(
+                uid,
+                trigger=trigger,
+                enqueue_feed=False,
+                enqueue_content=False,
+            )
+        ),
     )
 
 
 @actor(queue_name=QUEUE_CRAWL_HI, resources=_manual_user_resources, **_RETRY)
 def crawl_user_manual(uid: int, profile_done: bool = False) -> None:
-    """手动刷新用户：先抓主页，再以高优先级抓犇犇第一页。"""
+    """手动刷新用户主页；旧的第二阶段参数仅用于兼容排队中的消息。"""
     log.info("actor.crawl_user_manual", uid=uid)
     # 两个阶段分别走完整冷却；第二阶段被延迟时不能重新爬一遍主页。
     if not profile_done:
-        completed = _run_or_defer(
+        _run_or_defer(
             "crawl_user_manual",
             (uid, False),
             _run_domain_task(
@@ -258,14 +289,11 @@ def crawl_user_manual(uid: int, profile_done: bool = False) -> None:
                     uid,
                     trigger="manual",
                     enqueue_feed=False,
-                    enqueue_content=True,
+                    enqueue_content=False,
                 )
             ),
         )
-        if not completed:
-            return
-        # 第二阶段依赖账号，重新入队后由调度器原子选择最早可用账号。
-        crawl_user_manual.send(uid, True)
+        # 不再自动级联犇犇、文章或剪贴板；这些对象由用户分别指定。
         return
     _run_or_defer(
         "crawl_user_manual",
@@ -277,11 +305,20 @@ def crawl_user_manual(uid: int, profile_done: bool = False) -> None:
 @actor(queue_name=QUEUE_CRAWL_MID, resources=ANON_COM, **_RETRY)
 def crawl_user_bg(uid: int, trigger: str = "passive") -> None:
     """后台用户主页抓取：过期刷新、发现或级联。"""
+    if _skip_disallowed("crawl_user_bg", trigger):
+        return
     log.info("actor.crawl_user_bg", uid=uid, trigger=trigger)
     _run_or_defer(
         "crawl_user_bg",
         (uid, trigger),
-        _run_domain_task(lambda: _crawl_user_one(uid, trigger=trigger)),
+        _run_domain_task(
+            lambda: _crawl_user_one(
+                uid,
+                trigger=trigger,
+                enqueue_feed=False,
+                enqueue_content=False,
+            )
+        ),
     )
 
 
@@ -293,6 +330,15 @@ def crawl_user_feeds(
     dedup_token: str | None = None,
 ) -> None:
     """定时、被动或级联触发的犇犇抓取。"""
+    if _skip_disallowed("crawl_user_feeds", trigger):
+        if dedup_token:
+            run_async(
+                DistributedLock(get_redis()).release(
+                    _scheduled_feed_key(uid),
+                    dedup_token,
+                )
+            )
+        return
     log.info("actor.crawl_user_feeds", uid=uid, page=page, trigger=trigger)
     _run_or_defer(
         "crawl_user_feeds",
@@ -304,6 +350,8 @@ def crawl_user_feeds(
 @actor(queue_name=QUEUE_CRAWL_HI, resources=AUTH_COM, **_RETRY)
 def crawl_user_feeds_hi(uid: int, page: int = 1, trigger: str = "manual") -> None:
     """手动触发的单页犇犇抓取。"""
+    if _skip_disallowed("crawl_user_feeds_hi", trigger):
+        return
     log.info("actor.crawl_user_feeds_hi", uid=uid, page=page, trigger=trigger)
     _run_or_defer(
         "crawl_user_feeds_hi",
@@ -315,6 +363,8 @@ def crawl_user_feeds_hi(uid: int, page: int = 1, trigger: str = "manual") -> Non
 @actor(queue_name=QUEUE_CRAWL_MID, resources=ANON_CN, **_RETRY)
 def crawl_judgement(trigger: str = "scheduled") -> None:
     """定时抓取全站陶片放逐。"""
+    if _skip_disallowed("crawl_judgement", trigger):
+        return
     log.info("actor.crawl_judgement", trigger=trigger)
     _run_or_defer(
         "crawl_judgement",
@@ -326,6 +376,8 @@ def crawl_judgement(trigger: str = "scheduled") -> None:
 @actor(queue_name=QUEUE_CRAWL_HI, resources=ANON_CN, **_RETRY)
 def crawl_judgement_hi(trigger: str = "manual") -> None:
     """手动触发的陶片放逐抓取。"""
+    if _skip_disallowed("crawl_judgement_hi", trigger):
+        return
     log.info("actor.crawl_judgement_hi", trigger=trigger)
     _run_or_defer(
         "crawl_judgement_hi",
@@ -340,6 +392,10 @@ def sync_problem_catalog(
     dedup_token: str | None = None,
 ) -> None:
     """从洛谷 CDN 的官方题库包全量同步题目元数据。"""
+    if not proactive_crawling_enabled():
+        log.info("actor.skipped_by_crawl_policy", actor="sync_problem_catalog", trigger=trigger)
+        run_async(release_problem_job("catalog", "official", dedup_token))
+        return
     log.info("actor.sync_problem_catalog", trigger=trigger)
     try:
         completed = _run_or_defer(
@@ -378,6 +434,9 @@ def crawl_problem_solution(
     dedup_token: str | None = None,
 ) -> None:
     """题解开放状态检查始终使用低优先级。"""
+    if _skip_disallowed("crawl_problem_solution", trigger):
+        run_async(release_problem_job("solution", pid.upper(), dedup_token))
+        return
     log.info("actor.crawl_problem_solution", pid=pid, trigger=trigger)
     try:
         completed = _run_or_defer(
@@ -399,6 +458,8 @@ def crawl_problem_solution(
 @actor(queue_name=QUEUE_CRAWL_LOW, resources=ANON_CN, **_RETRY)
 def crawl_problem_solution_hi(pid: str, trigger: str = "manual") -> None:
     """兼容旧消息；题目检查现在统一使用低优先级。"""
+    if _skip_disallowed("crawl_problem_solution_hi", trigger):
+        return
     log.info("actor.crawl_problem_solution_hi", pid=pid, trigger=trigger)
     _run_or_defer(
         "crawl_problem_solution_hi",
@@ -413,6 +474,8 @@ def crawl_problem_solution_hi(pid: str, trigger: str = "manual") -> None:
 
 @actor(queue_name=QUEUE_CRAWL_MID, resources=ANON_CN, **_RETRY)
 def discover_from_discuss(trigger: str = "scheduled") -> None:
+    if _skip_disallowed("discover_from_discuss", trigger):
+        return
     log.info("actor.discover_from_discuss", trigger=trigger)
     _run_or_defer(
         "discover_from_discuss",
@@ -424,6 +487,8 @@ def discover_from_discuss(trigger: str = "scheduled") -> None:
 @actor(queue_name=QUEUE_CRAWL_HI, resources=ANON_CN, **_RETRY)
 def discover_from_discuss_hi(trigger: str = "manual") -> None:
     """用户主动更新讨论区目录，只把首页发现请求放入高优先级。"""
+    if _skip_disallowed("discover_from_discuss_hi", trigger):
+        return
     log.info("actor.discover_from_discuss_hi", trigger=trigger)
     _run_or_defer(
         "discover_from_discuss_hi",
@@ -434,6 +499,13 @@ def discover_from_discuss_hi(trigger: str = "manual") -> None:
 
 @actor(queue_name=QUEUE_CRAWL_MID, resources=ANON_COM, **_RETRY)
 def discover_from_article_list(trigger: str = "scheduled") -> None:
+    if not proactive_crawling_enabled():
+        log.info(
+            "actor.skipped_by_crawl_policy",
+            actor="discover_from_article_list",
+            trigger=trigger,
+        )
+        return
     log.info("actor.discover_from_article_list", trigger=trigger)
     _run_or_defer(
         "discover_from_article_list",

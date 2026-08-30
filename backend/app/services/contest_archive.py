@@ -591,10 +591,16 @@ async def archive_scoreboard_page(
                 run_id,
             )
 
-    await scoreboard_page_finished(contest_id, page, run_id)
+    await scoreboard_page_finished(contest_id, page, run_id, trigger=trigger)
 
 
-async def scoreboard_page_finished(contest_id: int, page: int, run_id: str) -> None:
+async def scoreboard_page_finished(
+    contest_id: int,
+    page: int,
+    run_id: str,
+    *,
+    trigger: str,
+) -> None:
     """记录分页完成，并且只派发一次汇总任务。"""
 
     from app.tasks.actors.contest import finalize_contest_scoreboard
@@ -613,13 +619,18 @@ async def scoreboard_page_finished(contest_id: int, page: int, run_id: str) -> N
     finalize_key = _scoreboard_finalize_key(contest_id)
     if await redis.set(finalize_key, "1", nx=True, ex=_CONTEST_PIPELINE_TTL_SEC):
         try:
-            finalize_contest_scoreboard.send(contest_id, run_id)
+            finalize_contest_scoreboard.send(contest_id, run_id, trigger)
         except Exception:
             await redis.delete(finalize_key)
             raise
 
 
-async def finalize_scoreboard(contest_id: int, run_id: str) -> None:
+async def finalize_scoreboard(
+    contest_id: int,
+    run_id: str,
+    *,
+    trigger: str = "scheduled",
+) -> None:
     """全部榜单页落库后统一计算名次，并派发用户主页任务。"""
 
     if not await _scoreboard_run_is_current(contest_id, run_id):

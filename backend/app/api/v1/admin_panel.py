@@ -43,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_client_ip
 from app.auth.deps import get_current_admin
 from app.core.db import get_db
+from app.core.crawl_policy import proactive_crawling_enabled
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.mail import send_takedown_result_email
 from app.crawler.cookies import encrypt_cookie
@@ -759,6 +760,9 @@ async def admin_discover_contests(
 ) -> dict:
     """立即扫描比赛列表第一页。"""
 
+    if not proactive_crawling_enabled():
+        raise ConflictError("主动比赛发现已按社区规范关闭")
+
     from app.tasks.actors.contest import discover_contests
 
     discover_contests.send()
@@ -829,6 +833,9 @@ async def admin_check_contest_official(
 ) -> dict:
     """立即用阈值内前 20 名检查正式等级分。"""
 
+    if not proactive_crawling_enabled():
+        raise ConflictError("批量用户等级分探测已按社区规范关闭")
+
     from app.tasks.actors.contest import probe_contest_official
 
     contest = await db.get(Contest, contest_id)
@@ -838,7 +845,7 @@ async def admin_check_contest_official(
         raise ConflictError("该比赛不计等级分")
     if contest.status == ContestArchiveStatus.official:
         raise ConflictError("该比赛已经保存正式结果")
-    probe_contest_official.send(contest_id)
+    probe_contest_official.send(contest_id, "admin")
     await _audit(
         db,
         admin,

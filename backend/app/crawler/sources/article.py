@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import db_session
+from app.core.crawl_policy import automatic_cascade_allowed, crawl_trigger_allowed
 from app.core.exceptions import CrawlerError
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
@@ -42,6 +43,9 @@ log = get_logger(__name__)
 
 
 async def crawl_one(article_id: str, *, trigger: str = "manual") -> None:
+    if not crawl_trigger_allowed(trigger):
+        log.info("crawl_article.skipped_by_policy", article_id=article_id, trigger=trigger)
+        return
     async with db_session() as session:
         existing = await session.get(Article, article_id)
         if await find_active_suppression(
@@ -116,7 +120,7 @@ async def _crawl_inner(article_id: str, *, trigger: str) -> None:
 
         # 作者用户若 author_raw 里信息不全（比如缺 slogan/introduction），
         # 额外派一次完整用户爬取（带去重锁，不会重复）
-        if fields.get("author_uid"):
+        if fields.get("author_uid") and automatic_cascade_allowed():
             try:
                 from app.tasks.actors.crawl import crawl_user_bg
                 crawl_user_bg.send(fields["author_uid"], "cascaded_from_article")

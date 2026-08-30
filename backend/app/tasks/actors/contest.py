@@ -7,6 +7,7 @@ from time import perf_counter
 from typing import Any, TypeVar
 
 from app.core.db import db_session
+from app.core.crawl_policy import crawl_trigger_allowed, proactive_crawling_enabled
 from app.core.exceptions import CrawlerCooldownDeferred
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
@@ -100,6 +101,10 @@ async def _run_com_task(factory: Callable[[], Awaitable[T]]) -> T:
 def discover_contests() -> None:
     """扫描洛谷比赛列表第一页。"""
 
+    if not proactive_crawling_enabled():
+        log.info("contest.discovery_skipped_by_policy")
+        return
+
     from app.services.contest_archive import discover_first_page
 
     run_async(_run_cn_task(discover_first_page))
@@ -144,6 +149,10 @@ async def _archive(contest_id: int, trigger: str, force: bool) -> None:
 )
 def archive_contest(contest_id: int, trigger: str = "scheduled", force: bool = False) -> None:
     """抓比赛详情并启动分页榜单流水线。"""
+
+    if not crawl_trigger_allowed(trigger):
+        log.info("contest.archive_skipped_by_policy", contest_id=contest_id, trigger=trigger)
+        return
 
     run_async(_archive(contest_id, trigger, force))
 
@@ -204,18 +213,31 @@ def archive_contest_scoreboard_page(
 ) -> None:
     """抓取并保存一页比赛榜单。"""
 
+    if not crawl_trigger_allowed(trigger):
+        log.info(
+            "contest.scoreboard_skipped_by_policy",
+            contest_id=contest_id,
+            page=page,
+            trigger=trigger,
+        )
+        return
+
     run_async(_archive_scoreboard_page(contest_id, page, trigger, run_id))
 
 
 @actor(queue_name=QUEUE_CRAWL_MID, resources=NO_RESOURCES, max_retries=0)
-def finalize_contest_scoreboard(contest_id: int, run_id: str) -> None:
+def finalize_contest_scoreboard(
+    contest_id: int,
+    run_id: str,
+    trigger: str = "scheduled",
+) -> None:
     """全部榜单页完成后统一汇总并派发用户主页任务。"""
 
     from app.services.contest_archive import finalize_scoreboard, mark_failed
 
     async def finalize() -> None:
         try:
-            await finalize_scoreboard(contest_id, run_id)
+            await finalize_scoreboard(contest_id, run_id, trigger=trigger)
         except Exception as exc:
             await mark_failed(contest_id, exc)
             raise
@@ -247,6 +269,12 @@ async def _prepare_refresh_user(contest_id: int, uid: int, phase: str) -> None:
     if not await refresh_user_pending(contest_id, uid, phase):
         return
 
+    # 比赛归档可以复用已有用户资料做本地计算，但不得借机批量请求主页。
+    if not proactive_crawling_enabled():
+        await snapshot_user(contest_id, uid, profile_source="cache")
+        await refresh_finished(contest_id, uid, phase)
+        return
+
     # 正式出分后必须重新抓取榜内每一名用户。旧缓存可能生成于出分之前，
     # 即使不足一天也不包含本场正式等级分，复用它会把该用户误判为 0 变化。
     if phase == "official":
@@ -273,6 +301,10 @@ async def _refresh_user_from_network(contest_id: int, uid: int, phase: str) -> N
     from app.services.contest_archive import refresh_finished, snapshot_user
 
     profile_source = "cache"
+    if not proactive_crawling_enabled():
+        await snapshot_user(contest_id, uid, profile_source=profile_source)
+        await refresh_finished(contest_id, uid, phase)
+        return
     try:
         # 比赛任务只需要用户资料和 Elo，不级联抓犇犇、文章或剪贴板。
         await _run_com_task(
@@ -395,9 +427,16 @@ async def _probe_official_user(contest_id: int, uid: int) -> None:
 
 
 @actor(queue_name=QUEUE_CRAWL_MID, resources=NO_RESOURCES, max_retries=0)
-def probe_contest_official(contest_id: int) -> None:
+def probe_contest_official(contest_id: int, trigger: str = "scheduled") -> None:
     """派发阈值内前 20 名的单用户正式记录探测任务。"""
 
+    if not proactive_crawling_enabled():
+        log.info(
+            "contest.official_probe_skipped_by_policy",
+            contest_id=contest_id,
+            trigger=trigger,
+        )
+        return
     run_async(_probe_official(contest_id))
 
 
@@ -405,4 +444,11 @@ def probe_contest_official(contest_id: int) -> None:
 def probe_contest_official_user(contest_id: int, uid: int) -> None:
     """只刷新一名用户并检查目标比赛的正式等级分记录。"""
 
+    if not proactive_crawling_enabled():
+        log.info(
+            "contest.official_probe_user_skipped_by_policy",
+            contest_id=contest_id,
+            uid=uid,
+        )
+        return
     run_async(_probe_official_user(contest_id, uid))

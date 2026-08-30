@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import db_session
+from app.core.crawl_policy import crawl_trigger_allowed, is_user_requested_trigger
 from app.core.exceptions import CrawlerError, CrawlerNotFound
 from app.core.locks import DistributedLock
 from app.core.logging import get_logger
@@ -82,6 +83,13 @@ async def enqueue_discussion_crawl(
     background: bool = False,
 ) -> str | None:
     """原子创建一条讨论归档链；已有活动链时不重复入队。"""
+    if not crawl_trigger_allowed(trigger):
+        log.info(
+            "crawl_discussion.enqueue_skipped_by_policy",
+            discussion_id=discussion_id,
+            trigger=trigger,
+        )
+        return None
     redis = get_redis()
     lock = DistributedLock(redis)
     token = await lock.acquire(
@@ -282,7 +290,7 @@ async def crawl_page(
         paused = bool(
             existing is not None
             and existing.auto_crawl_paused
-            and trigger != "manual"
+            and not is_user_requested_trigger(trigger)
         )
         if page <= 0:
             page = max(1, (existing.last_crawled_page or 1) - 1) if existing else 1
@@ -296,6 +304,22 @@ async def crawl_page(
         )
         return
     await _renew_chain(discussion_id, claimed_token)
+
+    # 部署前已经进入 Redis 的发现任务也会到达这里。先释放整条分页链，
+    # 再标记旧副本已处理，确保不会继续请求下一页。
+    if not crawl_trigger_allowed(trigger):
+        log.info(
+            "crawl_discussion.skipped_by_policy",
+            discussion_id=discussion_id,
+            page=page,
+            trigger=trigger,
+        )
+        await _release_chain(
+            discussion_id,
+            claimed_token,
+            suppress_legacy=True,
+        )
+        return
 
     if paused:
         log.info("crawl_discussion.skip_paused", discussion_id=discussion_id)
