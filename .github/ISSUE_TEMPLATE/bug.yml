@@ -1,0 +1,84 @@
+name: Bug 反馈
+description: 反馈 Bug 来帮助我们优化洛谷档案馆
+title: "[Bug] "
+labels: ["bug"]
+type: "Bug"
+assignees: ["px-poxiao"]
+
+body:
+- type: markdown
+  attributes:
+    value: "我们很高兴您来到这里！请填写以下表单，以报告洛谷档案馆的 Bug："
+- type: checkboxes
+  id: confirm
+  attributes:
+    label: 检查单
+    options:
+    - label: 这个 Bug 没有在最新版本中修复。
+      required: true
+    - label: 我已搜索过 [Issues 列表](https://github.com/px-poxiao/luogu-archive/issues) 且确认了这个 Bug 没有被提出过。
+      required: true
+    - label: 我正在修复这个 Bug。
+      required: false
+- type: dropdown
+  id: browser
+  attributes:
+    label: 浏览器
+    description: "您在使用以下哪一个浏览器？"
+    options:
+      - Chrome
+      - Firefox
+      - Edge
+      - Safari
+      - Opera
+      - 其它（请在下面的输入框中标注）
+  validations:
+    required: true
+- type: input
+  id: browser_version
+  attributes:
+    label: 浏览器版本
+    description: "请注明您的浏览器版本 (e.g., 150.0.7871.187)."
+    placeholder: "150.0.7871.187 / Brave 1.92.144"
+  validations:
+    required: true
+- type: input
+  id: os
+  attributes:
+    label: 操作系统
+    description: "包括系统名称和版本 (e.g., Windows 11, macOS 14.5, Ubuntu 22.04)."
+    placeholder: "Windows 11 26H2"
+  validations:
+    required: true
+- type: textarea
+  id: problem
+  attributes:
+    label: Bug 描述
+    description: "截图可以让我们更容易理解"
+    placeholder: "描述这个 Bug"
+  validations:
+    required: true
+- type: textarea
+  id: expected
+  attributes:
+    label: 预期行为
+    description: "您想要这个 Bug 修复后的效果？"
+    placeholder: "截图可以让我们更容易理解"
+  validations:
+    required: false
+- type: textarea
+  id: reproduce
+  attributes:
+    label: 复现步骤
+    description: "请注明详细的步骤来复现这个 Bug"
+    placeholder: "描述如何复现这个 Bug"
+  validations:
+    required: false
+- type: textarea
+  id: console
+  attributes:
+    label: 控制台错误信息
+    description: "如果没有可以忽略"
+    placeholder: "粘贴控制台错误信息到这里"
+  validations:
+    required: false
