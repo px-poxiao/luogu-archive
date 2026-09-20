@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { PluginDetail, PluginSnapshot, PluginVersion } from '~/types/plugin'
-import { PLUGIN_CODE_COPY_MAX_BYTES } from '~/utils/pluginCode'
+import { PLUGIN_CODE_COPY_MAX_BYTES, formatBytes, isBinaryCode } from '~/utils/pluginCode'
 
 const route = useRoute()
 const articleId = String(route.params.article_id)
@@ -44,6 +44,7 @@ const displayVersion = computed<PluginVersion | null>(() => {
     
     version: snapshot.version,
     code: snapshot.code,
+    code_encoding: snapshot.code_encoding,
     code_bytes: snapshot.code_bytes ?? new TextEncoder().encode(snapshot.code).length,
     code_truncated: snapshot.code_truncated ?? false,
     code_sha256: '审核通过后由后端计算',
@@ -65,7 +66,9 @@ const codePreview = computed(() => ({
   code: displayVersion.value?.code || '',
   truncated: displayVersion.value?.code_truncated ?? false,
 }))
-const copyDisabled = computed(() => (displayVersion.value?.code_bytes ?? 0) > PLUGIN_CODE_COPY_MAX_BYTES)
+const isBinaryVersion = computed(() => isBinaryCode(displayVersion.value?.code_encoding))
+const copyDisabled = computed(() => isBinaryVersion.value
+  || (displayVersion.value?.code_bytes ?? 0) > PLUGIN_CODE_COPY_MAX_BYTES)
 
 const userAnalysisHtml = computed(() => render(displayVersion.value?.user_request_analysis || ''))
 const adminAnalysisHtml = computed(() => render(displayVersion.value?.admin_request_analysis || ''))
@@ -98,6 +101,10 @@ async function selectVersion(versionId: string) {
 function openInstall(nextAction: 'copy' | 'download') {
   if (showPending.value) {
     toast.value = '待审核代码仅供上传者预览，审核通过后才能复制或下载。'
+    return
+  }
+  if (nextAction === 'copy' && isBinaryVersion.value) {
+    showToast('二进制文件不能复制，请下载文件')
     return
   }
   if (nextAction === 'copy' && copyDisabled.value) {
@@ -227,24 +234,33 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
             type="button"
             class="archive-action-button"
             :disabled="copyDisabled"
-            :title="copyDisabled ? '完整代码超过 100 KiB，仅支持下载' : '复制代码'"
+            :title="isBinaryVersion ? '二进制文件不能复制，仅支持下载' : copyDisabled ? '完整代码超过 100 KiB，仅支持下载' : '复制代码'"
             @click="openInstall('copy')"
           >复制代码</button>
           <button type="button" class="archive-action-button" title="下载代码" @click="openInstall('download')">下载文件</button>
         </div>
       </div>
-      <div v-if="codePreview.truncated" class="code-truncation" role="status">
+      <div v-if="isBinaryVersion" class="bin-notice" role="status">
+        <strong>这是二进制文件，不提供在线预览</strong>
+        <span>下载后查看内容；页面展示的体积与 SHA-256 均按实际文件计算。</span>
+      </div>
+      <div v-else-if="codePreview.truncated" class="code-truncation" role="status">
         <strong>代码较长，已截断显示</strong>
         <span>页面最多展示前 1000 行且不超过 50 KiB，完整代码未被修改。</span>
       </div>
-      <div v-if="copyDisabled" class="copy-restriction" role="status">
+      <div v-if="isBinaryVersion" class="copy-restriction" role="status">
+        <strong>复制已禁用</strong>
+        <span>二进制文件不能复制，请下载文件。</span>
+      </div>
+      <div v-else-if="copyDisabled" class="copy-restriction" role="status">
         <strong>复制已禁用</strong>
         <span>完整代码超过 100 KiB，请下载文件。</span>
       </div>
-      <pre class="code-view"><code>{{ codePreview.code }}</code></pre>
+      <pre v-if="!isBinaryVersion" class="code-view"><code>{{ codePreview.code }}</code></pre>
       <dl class="compat-grid">
         <div><dt>运行方式</dt><dd>{{ runtimeMode(displayVersion.runtime_mode) }}</dd></div>
         <div><dt>兼容设备</dt><dd>{{ [displayVersion.supports_desktop ? '桌面端' : '', displayVersion.supports_mobile ? '移动端' : ''].filter(Boolean).join('、') }}</dd></div>
+        <div><dt>文件大小</dt><dd>{{ formatBytes(displayVersion.code_bytes) }}</dd></div>
         
         <div><dt>下载次数</dt><dd>{{ displayVersion.download_count ?? 0 }}</dd></div>
         
@@ -357,6 +373,9 @@ select, textarea { border: 1px solid var(--border); border-radius: 6px; backgrou
 .code-truncation { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 10px; padding: 10px 12px; border-left: 4px solid var(--lg-yellow); background: color-mix(in srgb, var(--lg-yellow) 10%, var(--surface)); }
 .code-truncation strong { font-size: 14px; }
 .code-truncation span { color: var(--text-muted); font-size: 13px; }
+.bin-notice { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 10px; padding: 10px 12px; border-left: 4px solid var(--link); background: color-mix(in srgb, var(--link) 8%, var(--surface)); }
+.bin-notice strong { font-size: 14px; }
+.bin-notice span { color: var(--text-muted); font-size: 13px; }
 .copy-restriction { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 10px; padding: 10px 12px; border-left: 4px solid var(--lg-red); background: color-mix(in srgb, var(--lg-red) 8%, var(--surface)); }
 .copy-restriction strong { font-size: 14px; }
 .copy-restriction span { color: var(--text-muted); font-size: 13px; }

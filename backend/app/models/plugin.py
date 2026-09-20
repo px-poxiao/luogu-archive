@@ -72,6 +72,10 @@ class PluginVersion(Base):
     )
     version: Mapped[str] = mapped_column(String(64), nullable=False)
     code: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
+    # text：code 为源码；base64：code 为二进制文件的 base64 文本。
+    code_encoding: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="text", server_default="text"
+    )
     code_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     download_filename: Mapped[str] = mapped_column(String(128), nullable=False)
 

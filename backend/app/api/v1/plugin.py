@@ -35,7 +35,9 @@ from app.services.plugin_marketplace import (
     REPORT_TYPES,
     PluginSnapshot,
     article_summary,
+    code_media_type,
     code_preview,
+    decode_code,
     decode_snapshot,
     encode_snapshot,
     plugin_tag_names,
@@ -78,9 +80,13 @@ class ReportReq(BaseModel):
     description: str = Field(..., min_length=10, max_length=5000)
 
 
-def _code_download_response(code: str, filename: str) -> StreamingResponse:
-    """分块发送代码并关闭代理缓冲，让浏览器及时显示下载进度。"""
-    content = code.encode("utf-8")
+def _code_download_response(
+    content: bytes, filename: str, media_type: str
+) -> StreamingResponse:
+    """分块发送内容并关闭代理缓冲，让浏览器及时显示下载进度。
+
+    二进制内容必须以 bytes 传入，任何一次 encode/decode 都会损坏文件。
+    """
 
     async def chunks():
         for offset in range(0, len(content), DOWNLOAD_CHUNK_BYTES):
@@ -89,7 +95,7 @@ def _code_download_response(code: str, filename: str) -> StreamingResponse:
     encoded = quote(filename, safe="")
     return StreamingResponse(
         chunks(),
-        media_type="text/plain; charset=utf-8",
+        media_type=media_type,
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded}",
             "Content-Length": str(len(content)),
@@ -121,6 +127,7 @@ def _version_dict(row: PluginVersion, *, include_code: bool = True) -> dict:
         "version": row.version,
         "code_sha256": row.code_sha256,
         "download_filename": row.download_filename,
+        "code_encoding": row.code_encoding,
         "user_request_level": row.user_request_level,
         "user_request_analysis": row.user_request_analysis,
         "admin_request_level": row.admin_request_level,
@@ -135,7 +142,7 @@ def _version_dict(row: PluginVersion, *, include_code: bool = True) -> dict:
         "copy_count": getattr(row, "copy_count", 0),
     }
     if include_code:
-        preview, source_bytes, truncated = code_preview(row.code)
+        preview, source_bytes, truncated = code_preview(row.code, row.code_encoding)
         result.update({
             "code": preview,
             "code_bytes": source_bytes,
@@ -469,7 +476,11 @@ async def download_plugin_version(
         )
         await db.commit()
 
-    return _code_download_response(version.code, version.download_filename)
+    return _code_download_response(
+        decode_code(version.code, version.code_encoding),
+        version.download_filename,
+        code_media_type(version.code_encoding),
+    )
 
 @router.post("/{article_id}/increment_download/{version_id}")
 async def increment_download(
@@ -728,7 +739,11 @@ async def download_own_application_code(
     if row is None or row.applicant_user_id != user.id or row.snapshot_json == "{}":
         raise NotFoundError("插件申请代码不存在")
     snapshot = decode_snapshot(row.snapshot_json)
-    return _code_download_response(snapshot.code, snapshot.download_filename)
+    return _code_download_response(
+        decode_code(snapshot.code, snapshot.code_encoding),
+        snapshot.download_filename,
+        code_media_type(snapshot.code_encoding),
+    )
 
 
 @router.post("/{article_id}/reports")

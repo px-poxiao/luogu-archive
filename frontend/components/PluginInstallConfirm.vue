@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { PluginVersion } from '~/types/plugin'
+import { PLUGIN_CODE_COPY_MAX_BYTES, formatBytes, isBinaryCode } from '~/utils/pluginCode'
 
 const props = defineProps<{
   open: boolean
@@ -13,14 +14,18 @@ const emit = defineEmits<{ close: []; done: [message: string]; analysis: [] }>()
 const api = useApi()
 const config = useRuntimeConfig()
 const { runtimeMode } = usePluginLabels()
+const binary = computed(() => isBinaryCode(props.version.code_encoding))
 const codeBytes = computed(() => props.version.code_bytes)
-const copyBlocked = computed(() => props.action === 'copy' && codeBytes.value > 100 * 1024)
-const codeSize = computed(() => {
-  if (codeBytes.value < 1024 * 1024) return `${Math.ceil(codeBytes.value / 1024)} KiB`
-  return `${(codeBytes.value / 1024 / 1024).toFixed(2)} MiB`
-})
+const copyBlocked = computed(() => props.action === 'copy'
+  && (binary.value || codeBytes.value > PLUGIN_CODE_COPY_MAX_BYTES))
+const codeSize = computed(() => formatBytes(codeBytes.value))
 
 async function confirm() {
+  if (binary.value && props.action === 'copy') {
+    emit('done', '二进制文件不能复制，请下载文件')
+    emit('close')
+    return
+  }
   if (copyBlocked.value) {
     emit('done', '完整代码超过 100 KiB，请下载文件')
     emit('close')
@@ -83,13 +88,18 @@ async function confirm() {
         <dl>
           <div><dt>插件</dt><dd>{{ pluginName }}</dd></div>
           <div><dt>版本</dt><dd>{{ version.version }}</dd></div>
+          <div><dt>内容形式</dt><dd>{{ binary ? '二进制文件' : '文本代码' }}</dd></div>
+          <div><dt>文件大小</dt><dd>{{ codeSize }}</dd></div>
           <div><dt>请求等级</dt><dd><PluginRequestLevelBadge :level="version.final_request_level" compact /></dd></div>
           <div><dt>运行方式</dt><dd>{{ runtimeMode(version.runtime_mode) }}</dd></div>
           <div><dt>最后验证</dt><dd>{{ version.last_verified_on }}</dd></div>
           <div><dt>SHA-256</dt><dd><code>{{ version.code_sha256 }}</code></dd></div>
         </dl>
         <p class="notice">代码由上传者提供，本站不会执行或自动验证代码。安装前请阅读请求分析并自行确认风险。</p>
-        <p v-if="copyBlocked" class="copy-warning">
+        <p v-if="binary && action === 'copy'" class="copy-warning">
+          这是二进制文件，不能复制，请下载文件。
+        </p>
+        <p v-else-if="copyBlocked" class="copy-warning">
           完整代码大小为 {{ codeSize }}，超过 100 KiB，不能复制，请下载文件。
         </p>
         <footer>
