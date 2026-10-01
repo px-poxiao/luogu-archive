@@ -4,7 +4,8 @@ const api = useApi()
 const { format } = useTime()
 const { render } = useMarkdown()
 const id = Number(route.params.id)
-const perPage = 30
+// 回复分页与洛谷一致，每页展示 10 条。
+const perPage = 10
 const currentPage = computed(() => Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1))
 
 interface UserBrief {
