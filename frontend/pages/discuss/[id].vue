@@ -53,6 +53,13 @@ const { data, error, pending } = useLazyAsyncData(
 const totalPages = computed(() => Math.max(1, Math.ceil((data.value?.stored_reply_count || 0) / perPage)))
 const contentRef = ref<HTMLElement | null>(null)
 useCopyCode(contentRef)
+
+// 回复数据异步加载，等目标页的 DOM 出现后再定位，不能只依赖浏览器首次跳锚点。
+watch([() => data.value, () => route.hash], async () => {
+  if (data.value?.page !== currentPage.value || !/^#reply-\d+$/.test(route.hash)) return
+  await nextTick()
+  contentRef.value?.querySelector(route.hash)?.scrollIntoView({ block: 'center' })
+}, { flush: 'post' })
 const copied = ref<string | null>(null)
 
 async function copyMarkdown(key: string, content: string) {

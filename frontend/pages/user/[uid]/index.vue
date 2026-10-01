@@ -57,6 +57,7 @@ interface ActivityItem {
   discussion_excerpt?: string
   discussion_reply_count?: number
   discussion_reply_id?: number
+  discussion_reply_page?: number
   discussion_reply_excerpt?: string
   judgement_reason?: string
   judgement_revoked?: number
@@ -480,7 +481,7 @@ function formatScore(s: number): string {
               </template>
               <template v-else-if="a.kind === 'discussion_reply'">
                 <p class="discussion-context">
-                  在讨论 <NuxtLink :to="`/discuss/${a.discussion_id}`">《{{ a.discussion_title || `讨论 ${a.discussion_id}` }}》</NuxtLink> 回复：
+                  在讨论 <NuxtLink :to="a.discussion_reply_page ? `/discuss/${a.discussion_id}?page=${a.discussion_reply_page}#reply-${a.discussion_reply_id}` : `/discuss/${a.discussion_id}`">《{{ a.discussion_title || `讨论 ${a.discussion_id}` }}》</NuxtLink> 回复：
                 </p>
                 <blockquote class="discussion-quote">{{ a.discussion_reply_excerpt || '（暂无回复摘要）' }}</blockquote>
               </template>

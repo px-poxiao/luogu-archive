@@ -119,6 +119,7 @@ class ActivityItem(BaseModel):
     discussion_excerpt: str | None = None
     discussion_reply_count: int | None = None
     discussion_reply_id: int | None = None
+    discussion_reply_page: int | None = None
     discussion_reply_excerpt: str | None = None
     judgement_reason: str | None = None
     judgement_revoked: int | None = None
@@ -413,7 +414,33 @@ async def user_activity(
         if before is not None:
             rq = rq.where(reply_time < before)
         rq = rq.order_by(desc(reply_time), desc(DiscussionReply.reply_id)).limit(limit)
-        for reply, title, excerpt, activity_time in (await db.execute(rq)).all():
+        reply_rows = (await db.execute(rq)).all()
+        reply_pages: dict[int, int] = {}
+        if reply_rows:
+            # 在帖子全部有效回复中计算位置，不能只数该用户自己的回复。
+            # 批量窗口查询避免每条活动各查一次；排序和过滤与讨论详情页保持一致。
+            positions = (
+                select(
+                    DiscussionReply.reply_id,
+                    func.row_number().over(
+                        partition_by=DiscussionReply.discussion_id,
+                        order_by=(DiscussionReply.source_time.asc(), DiscussionReply.reply_id.asc()),
+                    ).label("position"),
+                )
+                .join(DiscussionReplyVersion, DiscussionReplyVersion.id == DiscussionReply.current_version_id)
+                .where(
+                    DiscussionReply.discussion_id.in_({row[0].discussion_id for row in reply_rows}),
+                    func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
+                )
+                .subquery()
+            )
+            page_rows = (await db.execute(
+                select(positions.c.reply_id, positions.c.position)
+                .where(positions.c.reply_id.in_([row[0].reply_id for row in reply_rows]))
+            )).all()
+            # 前端讨论页固定每页十条；先算完整帖子位置，再筛选目标回复。
+            reply_pages = {reply_id: (position - 1) // 10 + 1 for reply_id, position in page_rows}
+        for reply, title, excerpt, activity_time in reply_rows:
             items.append(
                 ActivityItem(
                     kind="discussion_reply",
@@ -421,6 +448,7 @@ async def user_activity(
                     discussion_id=reply.discussion_id,
                     discussion_title=title,
                     discussion_reply_id=reply.reply_id,
+                    discussion_reply_page=reply_pages.get(reply.reply_id),
                     discussion_reply_excerpt=_discussion_excerpt(excerpt, limit=300),
                 )
             )
