@@ -54,6 +54,8 @@ interface ActivityItem {
   paste_id?: string
   discussion_id?: number
   discussion_title?: string
+  discussion_excerpt?: string
+  discussion_reply_count?: number
   discussion_reply_id?: number
   discussion_reply_excerpt?: string
   judgement_reason?: string
@@ -66,7 +68,7 @@ const KIND_LABEL: Record<string, string> = {
   feed: '动态',
   article: '文章',
   paste: '剪贴板',
-  discussion: '讨论',
+  discussion: '发起讨论',
   discussion_reply: '回复讨论',
   judgement: '陶片放逐',
 }
@@ -468,12 +470,19 @@ function formatScore(s: number): string {
                   <NuxtLink :to="`/paste/${a.paste_id}`">剪贴板 {{ a.paste_id }}</NuxtLink>
                 </div>
               </template>
-              <template v-else-if="a.kind === 'discussion' || a.kind === 'discussion_reply'">
-                <div class="link-line">
+              <template v-else-if="a.kind === 'discussion'">
+                <h3 class="discussion-title">
                   <NuxtLink :to="`/discuss/${a.discussion_id}`">{{ a.discussion_title || `讨论 ${a.discussion_id}` }}</NuxtLink>
-                </div>
-                <!-- 摘要作为纯文本显示，截断的 Markdown 不参与渲染。 -->
-                <p v-if="a.kind === 'discussion_reply'" class="discussion-excerpt">{{ a.discussion_reply_excerpt }}</p>
+                </h3>
+                <!-- 摘要使用后端生成的纯文本，避免半截 Markdown 破坏排版。 -->
+                <p v-if="a.discussion_excerpt" class="discussion-excerpt">{{ a.discussion_excerpt }}</p>
+                <div v-if="a.discussion_reply_count != null" class="discussion-stats">回复 {{ a.discussion_reply_count }}</div>
+              </template>
+              <template v-else-if="a.kind === 'discussion_reply'">
+                <p class="discussion-context">
+                  在讨论 <NuxtLink :to="`/discuss/${a.discussion_id}`">《{{ a.discussion_title || `讨论 ${a.discussion_id}` }}》</NuxtLink> 回复：
+                </p>
+                <blockquote class="discussion-quote">{{ a.discussion_reply_excerpt || '（暂无回复摘要）' }}</blockquote>
               </template>
               <template v-else-if="a.kind === 'judgement'">
                 <div class="judgement-card">
@@ -861,13 +870,41 @@ function formatScore(s: number): string {
 .discussion-excerpt {
   margin: 8px 0 0;
   color: var(--text-muted);
-  white-space: pre-wrap;
+  line-height: 1.7;
   overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
 }
+.discussion-title {
+  margin: 12px 0 0;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.discussion-title a { color: var(--text); }
+.discussion-title a:hover { color: var(--link); }
+.discussion-context {
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.discussion-quote {
+  margin: 10px 0 2px;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.discussion-stats { margin-top: 10px; color: var(--text-muted); font-size: 12px; }
 .name-history-panel {
   overflow: hidden;
   border: 1px solid var(--border);

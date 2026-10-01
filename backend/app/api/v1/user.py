@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
+from markdown_it import MarkdownIt
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -101,6 +102,8 @@ class ActivityItem(BaseModel):
     paste_id: str | None = None
     discussion_id: int | None = None
     discussion_title: str | None = None
+    discussion_excerpt: str | None = None
+    discussion_reply_count: int | None = None
     discussion_reply_id: int | None = None
     discussion_reply_excerpt: str | None = None
     judgement_reason: str | None = None
@@ -111,6 +114,28 @@ class ActivityItem(BaseModel):
 # ============================================================
 # Endpoints
 # ============================================================
+
+def _discussion_excerpt(content: str, *, limit: int) -> str:
+    """有限长度的 Markdown 转为纯文本摘要，不向活动列表输出 HTML 或链接语法。"""
+    parts: list[str] = []
+    # 查询最多读取 1201 字；最后一个字只用于判断原文是否还有后续。
+    for token in MarkdownIt("commonmark", {"html": True}).parse(content[:1200]):
+        if token.type == "inline":
+            for child in token.children or []:
+                if child.type in {"text", "code_inline", "image"}:
+                    parts.append(child.content)
+                elif child.type in {"softbreak", "hardbreak"}:
+                    parts.append(" ")
+            parts.append(" ")
+        elif token.type in {"fence", "code_block"}:
+            parts.extend([token.content, " "])
+    text = " ".join("".join(parts).split())
+    if not text:
+        return "（暂无正文摘要）"
+    if len(text) > limit or len(content) > 1200:
+        return text[:limit].rstrip() + "…"
+    return text
+
 
 @router.get("/{uid}", response_model=UserProfile)
 async def get_user(
@@ -290,20 +315,27 @@ async def user_activity(
         # 优先使用源站发布时间；旧记录缺失该时间时回退到首次归档时间。
         discussion_time = func.coalesce(Discussion.source_time, Discussion.first_crawled_at)
         dq = (
-            select(Discussion, DiscussionVersion.title, discussion_time.label("activity_time"))
+            select(
+                Discussion,
+                DiscussionVersion.title,
+                func.substr(DiscussionVersion.content_md, 1, 1201).label("excerpt"),
+                discussion_time.label("activity_time"),
+            )
             .join(DiscussionVersion, DiscussionVersion.id == Discussion.current_version_id)
             .where(Discussion.author_uid == uid)
         )
         if before is not None:
             dq = dq.where(discussion_time < before)
         dq = dq.order_by(desc(discussion_time), desc(Discussion.discussion_id)).limit(limit)
-        for discussion, title, activity_time in (await db.execute(dq)).all():
+        for discussion, title, excerpt, activity_time in (await db.execute(dq)).all():
             items.append(
                 ActivityItem(
                     kind="discussion",
                     time=activity_time,
                     discussion_id=discussion.discussion_id,
                     discussion_title=title,
+                    discussion_excerpt=_discussion_excerpt(excerpt, limit=160),
+                    discussion_reply_count=discussion.observed_reply_count,
                 )
             )
 
@@ -313,7 +345,7 @@ async def user_activity(
             select(
                 DiscussionReply,
                 DiscussionVersion.title,
-                func.substr(DiscussionReplyVersion.content_md, 1, 300).label("excerpt"),
+                func.substr(DiscussionReplyVersion.content_md, 1, 1201).label("excerpt"),
                 reply_time.label("activity_time"),
             )
             .join(DiscussionReplyVersion, DiscussionReplyVersion.id == DiscussionReply.current_version_id)
@@ -335,7 +367,7 @@ async def user_activity(
                     discussion_id=reply.discussion_id,
                     discussion_title=title,
                     discussion_reply_id=reply.reply_id,
-                    discussion_reply_excerpt=excerpt,
+                    discussion_reply_excerpt=_discussion_excerpt(excerpt, limit=300),
                 )
             )
 
