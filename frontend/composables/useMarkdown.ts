@@ -465,7 +465,11 @@ function build(): MarkdownIt {
     linkify: true,
     typographer: false,
   })
-  md.use(mdKatex, {
+  // CommonJS 下直接导出函数，Node ESM 下可能包装成 { default: 函数 }。
+  // 先统一插件入口，避免服务器把模块对象传给 MarkdownIt.use 导致页面 500。
+  const katexModule = mdKatex as unknown as typeof mdKatex | { default: typeof mdKatex }
+  const katexPlugin = typeof katexModule === 'function' ? katexModule : katexModule.default
+  md.use(katexPlugin, {
     throwOnError: false,
     errorColor: '#f44',
     enableBareBlocks: true,
