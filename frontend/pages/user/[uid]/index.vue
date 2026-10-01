@@ -52,6 +52,10 @@ interface ActivityItem {
   article_id?: string
   article_title?: string
   paste_id?: string
+  discussion_id?: number
+  discussion_title?: string
+  discussion_reply_id?: number
+  discussion_reply_excerpt?: string
   judgement_reason?: string
   judgement_revoked?: number
   judgement_added?: number
@@ -62,6 +66,8 @@ const KIND_LABEL: Record<string, string> = {
   feed: '动态',
   article: '文章',
   paste: '剪贴板',
+  discussion: '讨论',
+  discussion_reply: '回复讨论',
   judgement: '陶片放逐',
 }
 
@@ -105,11 +111,14 @@ const { data: profile, error, pending: profilePending } = useLazyAsyncData(`user
 )
 
 const includeFeed = ref(true)
+const includeDiscussion = ref(true)
 // 活动列表分页：游标 = 列表最后一条的 time（更老的时间）
 const activity = ref<ActivityItem[]>([])
 const activityLoading = ref(false)
 const activityNoMore = ref(false)
 const activityBefore = ref<string | null>(null)
+// 筛选变化后丢弃旧请求结果，避免快速切换开关时串入上一次筛选的数据。
+let activityRequestVersion = 0
 const PAGE_SIZE = 50
 
 // 活动第一页同样懒加载，避免用户资料页等待活动接口。
@@ -117,28 +126,35 @@ const { data: firstPage, pending: activityInitialPending } = useLazyAsyncData(
   `user-activity-${uid}`,
   () =>
     api<ActivityItem[]>(`/user/${uid}/activity`, {
-      query: { include_feed: includeFeed.value ? 'true' : 'false', limit: PAGE_SIZE },
+      query: {
+        include_feed: includeFeed.value,
+        include_discussion: includeDiscussion.value,
+        limit: PAGE_SIZE,
+      },
     }),
   { server: false },
 )
 
 watch(firstPage, (page) => {
-  if (!page) return
+  if (!page || activityRequestVersion !== 0) return
   activity.value = [...page]
   activityBefore.value = page.length ? page[page.length - 1].time : null
   activityNoMore.value = page.length < PAGE_SIZE
 }, { immediate: true })
 
 async function loadMoreActivity() {
-  if (activityLoading.value || activityNoMore.value) return
+  if (activityLoading.value || activityInitialPending.value || activityNoMore.value) return
+  const requestVersion = activityRequestVersion
   activityLoading.value = true
   try {
     const q: Record<string, any> = {
       include_feed: includeFeed.value ? 'true' : 'false',
+      include_discussion: includeDiscussion.value,
       limit: PAGE_SIZE,
     }
     if (activityBefore.value) q.before = activityBefore.value
     const page = await api<ActivityItem[]>(`/user/${uid}/activity`, { query: q })
+    if (requestVersion !== activityRequestVersion) return
     if (page.length === 0) {
       activityNoMore.value = true
     } else {
@@ -147,20 +163,26 @@ async function loadMoreActivity() {
       if (page.length < PAGE_SIZE) activityNoMore.value = true
     }
   } finally {
-    activityLoading.value = false
+    if (requestVersion === activityRequestVersion) activityLoading.value = false
   }
 }
 
-// 切换"包含动态"开关 → 重置 + 拉第一页
-watch(includeFeed, async () => {
+// 两种活动独立筛选；切换后重新分页，避免隐藏内容占用返回条数。
+watch([includeFeed, includeDiscussion], async () => {
+  const requestVersion = ++activityRequestVersion
   activity.value = []
   activityBefore.value = null
   activityNoMore.value = false
   activityLoading.value = true
   try {
     const page = await api<ActivityItem[]>(`/user/${uid}/activity`, {
-      query: { include_feed: includeFeed.value ? 'true' : 'false', limit: PAGE_SIZE },
+      query: {
+        include_feed: includeFeed.value,
+        include_discussion: includeDiscussion.value,
+        limit: PAGE_SIZE,
+      },
     })
+    if (requestVersion !== activityRequestVersion) return
     activity.value = page
     if (page.length === 0) {
       activityNoMore.value = true
@@ -169,7 +191,7 @@ watch(includeFeed, async () => {
       if (page.length < PAGE_SIZE) activityNoMore.value = true
     }
   } finally {
-    activityLoading.value = false
+    if (requestVersion === activityRequestVersion) activityLoading.value = false
   }
 })
 
@@ -404,9 +426,14 @@ function formatScore(s: number): string {
         <section v-if="activeTab === 'activity'">
           <div class="section-head">
             <h2>活动</h2>
-            <label class="toggle">
-              <input type="checkbox" v-model="includeFeed"> 包含动态
-            </label>
+            <div class="activity-filters">
+              <label class="toggle">
+                <input type="checkbox" v-model="includeFeed"> 显示犇犇
+              </label>
+              <label class="toggle">
+                <input type="checkbox" v-model="includeDiscussion"> 显示讨论
+              </label>
+            </div>
           </div>
           <LoadingPanel
             v-if="activityInitialPending && !activity.length"
@@ -440,6 +467,13 @@ function formatScore(s: number): string {
                 <div class="link-line">
                   <NuxtLink :to="`/paste/${a.paste_id}`">剪贴板 {{ a.paste_id }}</NuxtLink>
                 </div>
+              </template>
+              <template v-else-if="a.kind === 'discussion' || a.kind === 'discussion_reply'">
+                <div class="link-line">
+                  <NuxtLink :to="`/discuss/${a.discussion_id}`">{{ a.discussion_title || `讨论 ${a.discussion_id}` }}</NuxtLink>
+                </div>
+                <!-- 摘要作为纯文本显示，截断的 Markdown 不参与渲染。 -->
+                <p v-if="a.kind === 'discussion_reply'" class="discussion-excerpt">{{ a.discussion_reply_excerpt }}</p>
               </template>
               <template v-else-if="a.kind === 'judgement'">
                 <div class="judgement-card">
@@ -755,11 +789,20 @@ function formatScore(s: number): string {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 .section-head h2 { margin: 0; }
+.activity-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
 .toggle {
   font-size: 14px;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 .section-action-btn {
   display: inline-flex;
@@ -814,6 +857,16 @@ function formatScore(s: number): string {
 .link-line {
   /* 文章 / 剪贴板的链接独占一行，上方留空与 feed 内容块保持一致 */
   margin-top: 8px;
+}
+.discussion-excerpt {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 .name-history-panel {
   overflow: hidden;

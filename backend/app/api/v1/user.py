@@ -1,11 +1,11 @@
-"""用户聚合主页 API + 活动流（犇犇 / 文章 / 剪贴板 / 陶片）。"""
+"""用户聚合主页 API + 活动流（犇犇 / 文章 / 剪贴板 / 讨论 / 陶片）。"""
 from __future__ import annotations
 
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, select, union_all
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
@@ -14,6 +14,10 @@ from app.crawler.revalidate import is_stale, schedule_refresh_user
 from app.models.luogu_content import (
     Article,
     ArticleVersion,
+    Discussion,
+    DiscussionReply,
+    DiscussionReplyVersion,
+    DiscussionVersion,
     Feed,
     Judgement,
     Paste,
@@ -83,7 +87,7 @@ class UserProfile(BaseModel):
 
 
 class ActivityItem(BaseModel):
-    kind: str  # "feed" | "article" | "paste" | "judgement"
+    kind: str  # "feed" | "article" | "paste" | "discussion" | "discussion_reply" | "judgement"
     time: datetime
     # 任一类型的关键字段，前端分别渲染
     feed_id: int | None = None
@@ -95,6 +99,10 @@ class ActivityItem(BaseModel):
     article_id: str | None = None
     article_title: str | None = None
     paste_id: str | None = None
+    discussion_id: int | None = None
+    discussion_title: str | None = None
+    discussion_reply_id: int | None = None
+    discussion_reply_excerpt: str | None = None
     judgement_reason: str | None = None
     judgement_revoked: int | None = None
     judgement_added: int | None = None
@@ -198,16 +206,17 @@ async def get_user(
 async def user_activity(
     uid: int,
     include_feed: bool = Query(True, description="是否包含犇犇（用户可折叠）"),
+    include_discussion: bool = Query(True, description="是否包含讨论主帖和回复"),
     limit: int = Query(50, ge=1, le=200),
     before: datetime | None = Query(
         None, description="分页锚点：拿严格早于此时间的活动，时间倒序游标分页"
     ),
     db: AsyncSession = Depends(get_db),
 ) -> list[ActivityItem]:
-    """聚合用户的所有活动：犇犇 + 文章 + 剪贴板 + 陶片，按时间倒序。
+    """聚合用户的已归档活动：犇犇 + 文章 + 剪贴板 + 讨论及回复 + 陶片。
 
     分页：传 before（最后一条的 time）拿更老的；不传从最新开始。
-    每路（feed/article/paste/judgement）各取 limit 条，合并排序后再裁 limit。
+    每种活动各取 limit 条，合并按时间倒序排列后再裁 limit。
     所以总返回 ≤ limit 条；前端判断"返回 0 条"即认为没有更早的了。
     """
     await ensure_content_visible(db, "user", str(uid))
@@ -275,6 +284,60 @@ async def user_activity(
                 paste_id=p.paste_id,
             )
         )
+
+    if include_discussion:
+        # 讨论只读取已有归档，避免访问个人主页时扫描用户在源站的发帖记录。
+        # 优先使用源站发布时间；旧记录缺失该时间时回退到首次归档时间。
+        discussion_time = func.coalesce(Discussion.source_time, Discussion.first_crawled_at)
+        dq = (
+            select(Discussion, DiscussionVersion.title, discussion_time.label("activity_time"))
+            .join(DiscussionVersion, DiscussionVersion.id == Discussion.current_version_id)
+            .where(Discussion.author_uid == uid)
+        )
+        if before is not None:
+            dq = dq.where(discussion_time < before)
+        dq = dq.order_by(desc(discussion_time), desc(Discussion.discussion_id)).limit(limit)
+        for discussion, title, activity_time in (await db.execute(dq)).all():
+            items.append(
+                ActivityItem(
+                    kind="discussion",
+                    time=activity_time,
+                    discussion_id=discussion.discussion_id,
+                    discussion_title=title,
+                )
+            )
+
+        # 回复使用最新正文，空白占位记录不展示；数据库只返回短摘要，避免传输长帖。
+        reply_time = func.coalesce(DiscussionReply.source_time, DiscussionReply.first_crawled_at)
+        rq = (
+            select(
+                DiscussionReply,
+                DiscussionVersion.title,
+                func.substr(DiscussionReplyVersion.content_md, 1, 300).label("excerpt"),
+                reply_time.label("activity_time"),
+            )
+            .join(DiscussionReplyVersion, DiscussionReplyVersion.id == DiscussionReply.current_version_id)
+            .join(Discussion, Discussion.discussion_id == DiscussionReply.discussion_id)
+            .join(DiscussionVersion, DiscussionVersion.id == Discussion.current_version_id)
+            .where(
+                DiscussionReply.author_uid == uid,
+                func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
+            )
+        )
+        if before is not None:
+            rq = rq.where(reply_time < before)
+        rq = rq.order_by(desc(reply_time), desc(DiscussionReply.reply_id)).limit(limit)
+        for reply, title, excerpt, activity_time in (await db.execute(rq)).all():
+            items.append(
+                ActivityItem(
+                    kind="discussion_reply",
+                    time=activity_time,
+                    discussion_id=reply.discussion_id,
+                    discussion_title=title,
+                    discussion_reply_id=reply.reply_id,
+                    discussion_reply_excerpt=excerpt,
+                )
+            )
 
     jq = select(Judgement).where(Judgement.uid == uid)
     if before is not None:
