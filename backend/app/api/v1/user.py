@@ -26,6 +26,7 @@ from app.models.luogu_content import (
 )
 from app.models.luogu_user import (
     LuoguUser,
+    UserEloHistory,
     UserNameVersion,
     UserPrize,
 )
@@ -57,6 +58,19 @@ class PrizeItem(BaseModel):
     prize: str
     score: float | None = None
     rank: int | None = None
+
+
+class UserRatingHistoryItem(BaseModel):
+    """已缓存的官方等级分结果；缺失的旧分或变化值保持为空。"""
+
+    contest_id: int
+    contest_name: str
+    time: datetime
+    contest_start_time: datetime | None
+    contest_end_time: datetime | None
+    rating: int
+    previous_rating: int | None
+    rating_change: int | None
 
 
 class UserProfile(BaseModel):
@@ -225,6 +239,46 @@ async def get_user(
         ],
         name_hidden=current_name_hidden,
     )
+
+
+@router.get("/{uid}/rating-history", response_model=list[UserRatingHistoryItem])
+async def user_rating_history(
+    uid: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[UserRatingHistoryItem]:
+    """按比赛时间从旧到新返回官方缓存历史，不触发首次爬取或过期刷新。"""
+    await ensure_content_visible(db, "user", str(uid))
+    if await db.get(LuoguUser, uid) is None:
+        raise NotFoundError("用户未被本站收录")
+
+    # 只查询官方历史表，不读取本站比赛预测；结束时间缺失时使用结果时间排序。
+    query = (
+        select(UserEloHistory)
+        .where(UserEloHistory.uid == uid)
+        .order_by(
+            func.coalesce(UserEloHistory.contest_end_time, UserEloHistory.time),
+            UserEloHistory.time,
+            UserEloHistory.contest_id,
+        )
+    )
+    rows = (await db.execute(query)).scalars().all()
+    history: list[UserRatingHistoryItem] = []
+    for row in rows:
+        # 与正式比赛结果保持同一口径；不能用相邻缓存记录猜旧分，历史可能不完整。
+        previous_rating = row.previous_rating
+        if previous_rating is None and row.prev_diff is not None:
+            previous_rating = row.rating - row.prev_diff
+        history.append(UserRatingHistoryItem(
+            contest_id=row.contest_id,
+            contest_name=row.contest_name,
+            time=row.time,
+            contest_start_time=row.contest_start_time,
+            contest_end_time=row.contest_end_time,
+            rating=row.rating,
+            previous_rating=previous_rating,
+            rating_change=(row.rating - previous_rating) if previous_rating is not None else None,
+        ))
+    return history
 
 
 @router.get("/{uid}/activity", response_model=list[ActivityItem])
