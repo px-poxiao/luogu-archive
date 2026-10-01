@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { PluginSnapshot, PluginTag } from '~/types/plugin'
+import { formatBytes, isBinaryCode } from '~/utils/pluginCode'
 
 definePageMeta({ layout: 'admin' })
 const admin = useAdminStore()
@@ -23,6 +24,8 @@ const submittedCodePreview = computed(() => ({
   code: snapshot.value?.code || '',
   truncated: snapshot.value?.code_truncated ?? false,
 }))
+const submittedIsBinary = computed(() => isBinaryCode(snapshot.value?.code_encoding))
+const currentIsBinary = computed(() => isBinaryCode(selected.value?.current?.code_encoding))
 const userAnalysisHtml = computed(() => render(snapshot.value?.user_request_analysis || ''))
 const submittedTags = computed(() => {
   const selectedIds = new Set(snapshot.value?.tag_ids || [])
@@ -165,7 +168,9 @@ watch([status, applicationType], () => { void loadList() })
             <dl>
               <div><dt>介绍</dt><dd>{{ snapshot.summary || '留空，由系统从文章正文生成' }}</dd></div>
               <div><dt>代码版本</dt><dd>{{ snapshot.version }}</dd></div>
+              <div><dt>内容形式</dt><dd>{{ submittedIsBinary ? '二进制文件' : '文本代码' }}</dd></div>
               <div><dt>下载文件名</dt><dd>{{ snapshot.download_filename }}</dd></div>
+              <div><dt>文件大小</dt><dd>{{ formatBytes(snapshot.code_bytes ?? 0) }}</dd></div>
               <div><dt>运行方式</dt><dd>{{ runtimeMode(snapshot.runtime_mode) }}</dd></div>
               <div><dt>兼容设备</dt><dd>{{ [snapshot.supports_desktop ? '桌面端' : '', snapshot.supports_mobile ? '移动端' : ''].filter(Boolean).join('、') || '-' }}</dd></div>
               <div><dt>最后验证</dt><dd>{{ snapshot.last_verified_on }}</dd></div>
@@ -184,13 +189,15 @@ watch([status, applicationType], () => { void loadList() })
               <div class="code-diff">
                 <div>
                   <strong>当前正式版</strong>
-                  <p v-if="currentCodePreview.truncated">预览已截断，完整代码未被修改。</p>
-                  <pre>{{ currentCodePreview.code }}</pre>
+                  <p v-if="currentIsBinary">二进制文件，不提供预览。</p>
+                  <p v-else-if="currentCodePreview.truncated">预览已截断，完整代码未被修改。</p>
+                  <pre v-if="!currentIsBinary">{{ currentCodePreview.code }}</pre>
                 </div>
                 <div>
                   <strong>本次申请版</strong>
-                  <p v-if="submittedCodePreview.truncated">预览已截断，完整代码未被修改。</p>
-                  <pre>{{ submittedCodePreview.code }}</pre>
+                  <p v-if="submittedIsBinary">二进制文件，不提供预览。</p>
+                  <p v-else-if="submittedCodePreview.truncated">预览已截断，完整代码未被修改。</p>
+                  <pre v-if="!submittedIsBinary">{{ submittedCodePreview.code }}</pre>
                 </div>
               </div>
             </details>
@@ -198,11 +205,14 @@ watch([status, applicationType], () => { void loadList() })
 
           <section v-else-if="snapshot" class="submitted-code">
             <div class="section-title">
-              <h3>代码预览</h3>
-              <button type="button" @click="downloadSubmittedCode">下载完整代码</button>
+              <h3>{{ submittedIsBinary ? '二进制文件' : '代码预览' }}</h3>
+              <button type="button" @click="downloadSubmittedCode">
+                {{ submittedIsBinary ? '下载文件并检查' : '下载完整代码' }}
+              </button>
             </div>
-            <p v-if="submittedCodePreview.truncated" class="preview-limit">预览最多显示 1000 行且不超过 50 KiB，完整代码未被修改。</p>
-            <pre>{{ submittedCodePreview.code }}</pre>
+            <p v-if="submittedIsBinary" class="preview-limit">二进制内容无法在线预览，请下载文件后检查（.crx 本质是 zip，可直接解开）。</p>
+            <p v-else-if="submittedCodePreview.truncated" class="preview-limit">预览最多显示 1000 行且不超过 50 KiB，完整代码未被修改。</p>
+            <pre v-if="!submittedIsBinary">{{ submittedCodePreview.code }}</pre>
           </section>
 
           <template v-if="snapshot">

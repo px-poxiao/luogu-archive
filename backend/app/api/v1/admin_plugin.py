@@ -22,7 +22,9 @@ from app.models.site_user import SiteUser
 from app.services.plugin_marketplace import (
     PluginSnapshot,
     article_summary,
+    code_media_type,
     code_preview,
+    decode_code,
     decode_snapshot,
     plugin_tag_names,
     replace_plugin_tags,
@@ -36,9 +38,13 @@ router = APIRouter(prefix="/admin", tags=["admin-plugins"])
 DOWNLOAD_CHUNK_BYTES = 64 * 1024
 
 
-def _code_download_response(code: str, filename: str) -> StreamingResponse:
-    """管理员明确下载时分块发送完整代码，避免代理先缓冲整个响应。"""
-    content = code.encode("utf-8")
+def _code_download_response(
+    content: bytes, filename: str, media_type: str
+) -> StreamingResponse:
+    """管理员明确下载时分块发送内容，避免代理先缓冲整个响应。
+
+    二进制内容必须以 bytes 传入，任何一次 encode/decode 都会损坏文件。
+    """
 
     async def chunks():
         for offset in range(0, len(content), DOWNLOAD_CHUNK_BYTES):
@@ -47,7 +53,7 @@ def _code_download_response(code: str, filename: str) -> StreamingResponse:
     encoded = quote(filename, safe="")
     return StreamingResponse(
         chunks(),
-        media_type="text/plain; charset=utf-8",
+        media_type=media_type,
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded}",
             "Content-Length": str(len(content)),
@@ -171,11 +177,12 @@ async def plugin_application_detail(
     result = _application_dict(row, include_snapshot=True)
     plugin = await db.get(Plugin, row.plugin_id) if row.plugin_id else None
     current = await db.get(PluginVersion, plugin.current_version_id) if plugin and plugin.current_version_id else None
-    current_preview = code_preview(current.code) if current else None
+    current_preview = code_preview(current.code, current.code_encoding) if current else None
     result["current"] = ({
         "name": plugin.name,
         "summary": plugin.summary,
         "version": current.version,
+        "code_encoding": current.code_encoding,
         "code": current_preview[0],
         "code_bytes": current_preview[1],
         "code_truncated": current_preview[2],
@@ -202,7 +209,11 @@ async def download_plugin_application_code(
     if row is None or row.snapshot_json == "{}":
         raise NotFoundError("插件申请代码不存在")
     snapshot = decode_snapshot(row.snapshot_json)
-    return _code_download_response(snapshot.code, snapshot.download_filename)
+    return _code_download_response(
+        decode_code(snapshot.code, snapshot.code_encoding),
+        snapshot.download_filename,
+        code_media_type(snapshot.code_encoding),
+    )
 
 
 @router.post("/plugin-applications/{application_id}/review")
@@ -397,6 +408,7 @@ async def admin_plugin_detail(
         summary=plugin.summary,
         version=current.version,
         code=current.code,
+        code_encoding=current.code_encoding,
         download_filename=current.download_filename,
         user_request_level=current.user_request_level,
         user_request_analysis=current.user_request_analysis,
