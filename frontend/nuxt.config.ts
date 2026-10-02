@@ -1,3 +1,8 @@
+const extendedArchiveModulesEnabled = process.env.NUXT_PUBLIC_EXTENDED_ARCHIVE_MODULES_ENABLED === 'true'
+
+const hiddenArchiveExactPages = new Set(['/feed', '/fake-realtime'])
+const hiddenArchivePagePrefixes = ['/problem', '/contest', '/admin/problems', '/admin/contests']
+
 export default defineNuxtConfig({
   devtools: { enabled: true },
   ssr: true,
@@ -13,6 +18,7 @@ export default defineNuxtConfig({
       || `http://127.0.0.1:${process.env.WEB_PORT || '8001'}`,
     public: {
       apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL || '',
+      extendedArchiveModulesEnabled,
       siteName: '\u6d1b\u8c37\u6863\u6848\u9986',
       captchaProvider: process.env.NUXT_PUBLIC_CAPTCHA_PROVIDER || 'turnstile',
       captchaSiteKey: process.env.NUXT_PUBLIC_CAPTCHA_SITE_KEY || '',
@@ -35,6 +41,29 @@ export default defineNuxtConfig({
       headers: {
         'cache-control': 'public, max-age=604800, stale-while-revalidate=86400',
       },
+    },
+  },
+  hooks: {
+    'pages:extend'(pages) {
+      if (extendedArchiveModulesEnabled) return
+
+      const removeHiddenPages = (items: typeof pages) => {
+        for (let index = items.length - 1; index >= 0; index -= 1) {
+          const page = items[index]
+          if (
+            hiddenArchiveExactPages.has(page.path)
+            || hiddenArchivePagePrefixes.some(prefix => (
+              page.path === prefix || page.path.startsWith(`${prefix}/`)
+            ))
+          ) {
+            items.splice(index, 1)
+            continue
+          }
+          if (page.children) removeHiddenPages(page.children)
+        }
+      }
+
+      removeHiddenPages(pages)
     },
   },
   app: {

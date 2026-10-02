@@ -102,6 +102,42 @@ class PluginVersion(Base):
     copy_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class PluginUsageEvent(Base):
+    """一次经过后端按日去重的插件复制或下载事件。
+
+    visitor_key 是不可逆 HMAC；数据库不保存访客原始 IP 和 User-Agent。
+    同一访客每天对同一插件的复制、下载各最多记录一次。
+    """
+
+    __tablename__ = "plugin_usage_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "plugin_id",
+            "visitor_key",
+            "event_date",
+            "action",
+            name="uq_plugin_usage_visitor_day_action",
+        ),
+        Index("ix_plugin_usage_date_plugin", "event_date", "plugin_id"),
+        Index("ix_plugin_usage_plugin_date", "plugin_id", "event_date"),
+        Index("ix_plugin_usage_version_date", "version_id", "event_date"),
+    )
+
+    id: Mapped[int] = BigPKColumn()
+    plugin_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("plugins.id", ondelete="CASCADE"), nullable=False
+    )
+    version_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("plugin_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    visitor_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_date: Mapped[date] = mapped_column(Date, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
 class PluginTag(Base, TimestampMixin):
     """管理员维护的固定功能标签。"""
 

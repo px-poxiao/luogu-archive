@@ -72,7 +72,10 @@ async function inspectArticle() {
         snapshot.value = { ...detail.pending_application.snapshot, code: fullCode }
         message.value = '已载入你的待审核申请，可以查看但不能重复提交。'
       } else if (detail.current) {
-        const fullCode = await loadFullCode(`/plugins/${articleId.value}/download/${detail.current.id}`)
+        // 编辑时读取现有代码不属于真实安装，避免污染插件使用统计。
+        const fullCode = await loadFullCode(
+          `/plugins/${articleId.value}/download/${detail.current.id}?track_usage=false`,
+        )
         snapshot.value = snapshotFromVersion(detail, fullCode)
       }
     } catch (error: any) {

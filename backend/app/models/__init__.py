@@ -55,6 +55,7 @@ from app.models.plugin import (
     PluginReport,
     PluginTag,
     PluginTagLink,
+    PluginUsageEvent,
     PluginVersion,
 )
 from app.models.task import (
@@ -94,6 +95,7 @@ __all__ = [
     "PluginReport",
     "PluginTag",
     "PluginTagLink",
+    "PluginUsageEvent",
     "PluginVersion",
     "SaveRequest",
     "SiteAnnouncement",

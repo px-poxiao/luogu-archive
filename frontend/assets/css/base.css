@@ -434,6 +434,36 @@ a:hover {
   padding: 6px 10px;
 }
 
+/* Tuack 表格使用简洁的横线；合并单元格沿用浏览器的行列跨度布局。 */
+.lg-table-scroll { max-width: 100%; overflow-x: auto; margin: 12px 0; }
+.lg-table-scroll > table { margin-top: 0; margin-bottom: 0; }
+.lg-content .lg-cute-table { width: 100%; }
+.lg-content .lg-cute-table td,
+.lg-content .lg-cute-table th {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+}
+.lg-content .lg-cute-table thead { border-top: 2px solid var(--text-muted); border-bottom: 2px solid var(--text-muted); }
+.lg-content .lg-cute-table tbody { border-bottom: 2px solid var(--text-muted); }
+.lg-content .lg-task-list { list-style: none; }
+.lg-task-checkbox { margin: 0 6px 0 0; accent-color: var(--link); vertical-align: middle; }
+
+/* 行号是视觉注释，不进入 code.textContent，保持复制结果为完整原始代码。 */
+.lg-content pre.lg-code-block { padding-left: 0; padding-right: 0; }
+.lg-code-line { display: inline-block; box-sizing: border-box; min-width: 100%; padding: 0 12px; }
+.lg-code-line.is-highlighted { background: color-mix(in srgb, var(--link) 14%, transparent); }
+.has-line-numbers .lg-code-line::before {
+  content: attr(data-line);
+  display: inline-block;
+  width: 3.5em;
+  padding-right: 1em;
+  box-sizing: border-box;
+  color: var(--text-muted);
+  text-align: right;
+  user-select: none;
+}
+
 /* 洛谷折叠框 / 告示框 —— :::info / :::warning / :::success / :::spoiler */
 .lg-callout {
   margin: 14px 0;
@@ -496,6 +526,8 @@ a:hover {
 
 /* 对齐块：:::align{center|right} */
 .lg-align { margin: 10px 0; }
+.lg-align[style*="text-align:center"] table { margin-left: auto; margin-right: auto; }
+.lg-align[style*="text-align:right"] table { margin-left: auto; }
 
 /* 题记 / 引文：右对齐 + 斜体 + 署名破折号 */
 .lg-epigraph {
@@ -507,8 +539,7 @@ a:hover {
   border-right: 3px solid var(--border);
   padding-right: 14px;
 }
-.lg-epigraph[data-source]::after {
-  content: "—— " attr(data-source);
+.lg-epigraph-source {
   display: block;
   margin-top: 4px;
   font-style: normal;

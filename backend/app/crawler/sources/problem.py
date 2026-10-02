@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from app.core.db import db_session
+from app.core.crawl_policy import crawl_trigger_allowed, proactive_crawling_enabled
 from app.core.exceptions import CrawlerError
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
@@ -140,6 +141,9 @@ def _problemset_row(item: dict, now) -> dict | None:
 
 async def sync_problem_catalog(*, trigger: str = "scheduled") -> None:
     """下载官方题库包，并全量更新其中每一道题的元数据。"""
+    if not proactive_crawling_enabled():
+        log.info("problem_catalog.skipped_by_policy", trigger=trigger)
+        return
 
     async with task_lock("problem_catalog", "official", ttl_sec=30 * 60) as got:
         if not got:
@@ -251,6 +255,9 @@ async def sync_problem_catalog(*, trigger: str = "scheduled") -> None:
 
 async def crawl_solution_state(pid: str, *, trigger: str = "scheduled") -> None:
     """爬题目详情页，读 acceptSolution 字段判定题解是否开放。"""
+    if not crawl_trigger_allowed(trigger):
+        log.info("problem_solution.skipped_by_policy", pid=pid, trigger=trigger)
+        return
     async with task_lock("problem_solution", pid) as got:
         if not got:
             log.info("crawl_problem_solution.skip_locked", pid=pid)

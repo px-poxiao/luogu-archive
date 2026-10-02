@@ -7,7 +7,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select, text
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_client_ip
@@ -42,6 +42,12 @@ from app.services.plugin_marketplace import (
     snapshot_preview_dict,
     validate_tag_ids,
 )
+from app.services.plugin_ranking import (
+    plugin_ordering,
+    recent_usage_columns,
+    usage_statistics,
+)
+from app.services.plugin_usage import record_plugin_usage
 
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
@@ -206,15 +212,27 @@ async def list_plugins(
     official: bool | None = None,
     recommended: bool | None = None,
     updated_within_days: int | None = Query(None, ge=1, le=365),
+    sort: str = Query("smart", pattern=r"^(smart|latest|usage|verified)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    today = utcnow().date()
+    usage_stats = usage_statistics(today)
+    usage_30d, usage_7d = recent_usage_columns(usage_stats)
     q = (
-        select(Plugin, PluginVersion, Article, LuoguUser)
+        select(
+            Plugin,
+            PluginVersion,
+            Article,
+            LuoguUser,
+            usage_30d.label("usage_30d"),
+            usage_7d.label("usage_7d"),
+        )
         .join(PluginVersion, PluginVersion.id == Plugin.current_version_id)
         .join(Article, Article.article_id == Plugin.article_id)
         .outerjoin(LuoguUser, LuoguUser.uid == Article.author_uid)
+        .outerjoin(usage_stats, usage_stats.c.plugin_id == Plugin.id)
         .where(Plugin.is_listed.is_(True), visible_content_clause("article", Article.article_id, Article.author_uid))
     )
     if tag_id is not None:
@@ -238,13 +256,13 @@ async def list_plugins(
     total = int(await db.scalar(count_q) or 0)
     rows = (
         await db.execute(
-            q.order_by(desc(Plugin.updated_at), desc(Plugin.id))
+            q.order_by(*plugin_ordering(sort, usage_stats, today))
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
     ).all()
     items = []
-    for plugin, version, article, author in rows:
+    for plugin, version, article, author, recent_usage, weekly_usage in rows:
         items.append({
             "article_id": plugin.article_id,
             "name": article.title,
@@ -271,9 +289,17 @@ async def list_plugins(
             "download_count": getattr(version, "download_count", 0),
             "copy_count": getattr(version, "copy_count", 0),
             "total_usage": getattr(plugin, "total_usage", 0),
+            "usage_30d": int(recent_usage or 0),
+            "usage_7d": int(weekly_usage or 0),
             "updated_at": plugin.updated_at.isoformat(),
         })
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "sort": sort,
+    }
 
 
 @router.get("/manage")
@@ -418,6 +444,8 @@ async def get_plugin_version(
 async def download_plugin_version(
     article_id: str,
     version_id: int,
+    request: Request,
+    track_usage: bool = Query(True),
     user: SiteUser | None = Depends(get_optional_site_user),
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
@@ -429,44 +457,60 @@ async def download_plugin_version(
     if version is None or version.plugin_id != plugin.id:
         raise NotFoundError("代码版本不存在")
 
+    # 下载端点本身就是可信动作入口，不再依赖浏览器额外上报。
+    if plugin.is_listed and track_usage:
+        await record_plugin_usage(
+            db,
+            request,
+            plugin,
+            version,
+            "download",
+            user=user,
+        )
+        await db.commit()
+
     return _code_download_response(version.code, version.download_filename)
 
 @router.post("/{article_id}/increment_download/{version_id}")
 async def increment_download(
     article_id: str,
     version_id: int,
+    request: Request,
+    user: SiteUser | None = Depends(get_optional_site_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """客户端可在触发下载前调用此接口以记录一次下载（客户端负责保证同一机器只调用一次）。"""
+    """兼容旧前端的下载上报；真实下载接口也会记录且数据库负责去重。"""
     plugin = (await db.execute(select(Plugin).where(Plugin.article_id == article_id))).scalar_one_or_none()
     if plugin is None or not plugin.is_listed:
         raise NotFoundError("插件不存在或已下架")
     version = await db.get(PluginVersion, version_id)
     if version is None or version.plugin_id != plugin.id:
         raise NotFoundError("代码版本不存在")
-    await db.execute(text("UPDATE plugin_versions SET download_count = download_count + 1 WHERE id = :id"), {"id": version.id})
-    await db.execute(text("UPDATE plugins SET total_usage = total_usage + 1 WHERE id = :pid"), {"pid": plugin.id})
+    counted = await record_plugin_usage(
+        db, request, plugin, version, "download", user=user
+    )
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "counted": counted}
 
 
 @router.post("/{article_id}/increment_copy/{version_id}")
 async def increment_copy(
     article_id: str,
     version_id: int,
+    request: Request,
+    user: SiteUser | None = Depends(get_optional_site_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """客户端在复制到剪贴板后调用，客户端负责保证同一机器只调用一次。"""
+    """客户端复制成功后上报，后端按访客、插件、操作和日期去重。"""
     plugin = (await db.execute(select(Plugin).where(Plugin.article_id == article_id))).scalar_one_or_none()
     if plugin is None or not plugin.is_listed:
         raise NotFoundError("插件不存在或已下架")
     version = await db.get(PluginVersion, version_id)
     if version is None or version.plugin_id != plugin.id:
         raise NotFoundError("代码版本不存在")
-    await db.execute(text("UPDATE plugin_versions SET copy_count = copy_count + 1 WHERE id = :id"), {"id": version.id})
-    await db.execute(text("UPDATE plugins SET total_usage = total_usage + 1 WHERE id = :pid"), {"pid": plugin.id})
+    counted = await record_plugin_usage(db, request, plugin, version, "copy", user=user)
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "counted": counted}
 
 
 @router.post("/applications/publish")

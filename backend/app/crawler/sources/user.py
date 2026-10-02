@@ -20,6 +20,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import db_session
+from app.core.crawl_policy import automatic_cascade_allowed, crawl_trigger_allowed
 from app.core.exceptions import CrawlerError
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
@@ -70,6 +71,10 @@ async def _enqueue_feed_cascade(uid: int, *, trigger: str) -> None:
 
     manual 走 hi 队列，passive / cascaded 走 feed 队列。
     """
+    if not automatic_cascade_allowed():
+        log.info("crawl_user.cascade_disabled", uid=uid, target="feed")
+        return
+
     from app.tasks.actors.crawl import crawl_user_feeds, crawl_user_feeds_hi
 
     if trigger == "passive":
@@ -93,6 +98,10 @@ async def _enqueue_articles_pastes_cascade(uid: int) -> None:
 
     仅在 manual 或首次入库时调用，避免 passive 反复刷新把节点打爆。
     """
+    if not automatic_cascade_allowed():
+        log.info("crawl_user.cascade_disabled", uid=uid, target="content")
+        return
+
     from app.models.luogu_content import Article, Paste
     from app.tasks.actors.crawl import crawl_article_bg, crawl_paste_bg
 
@@ -170,6 +179,9 @@ async def crawl_one(
     enqueue_content: bool = True,
 ) -> None:
     """爬取一个用户的主页。"""
+    if not crawl_trigger_allowed(trigger):
+        log.info("crawl_user.skipped_by_policy", uid=uid, trigger=trigger)
+        return
     async with db_session() as session:
         if await find_active_suppression(session, "user", str(uid)):
             log.info("crawl_user.skip_suppressed", uid=uid)

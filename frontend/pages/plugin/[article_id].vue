@@ -203,6 +203,7 @@ useHead(() => ({ title: `${displayName.value} - 插件广场` }))
     </nav>
 
     <section v-if="activeTab === 'article'" class="tab-content article-tab">
+      <ArticleAdminNote :note="article.admin_note" />
       <article ref="articleRef" class="lg-content" v-html="articleHtml" />
     </section>
 

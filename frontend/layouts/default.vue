@@ -104,7 +104,7 @@ const runDays = computed(() => {
 })
 
 // 左侧导航项。icon 为内联 SVG path（24x24 viewBox）
-const navItems = [
+const allNavItems = [
   {
     to: '/',
     label: '首页',
@@ -113,6 +113,7 @@ const navItems = [
   {
     to: '/feed',
     label: '伪全网犇',
+    extendedArchiveModule: true,
     icon: 'M4 5h16v10H7l-3 3V5z',
   },
   {
@@ -128,11 +129,13 @@ const navItems = [
   {
     to: '/problem/list',
     label: '题目',
+    extendedArchiveModule: true,
     icon: 'M6 4h10l4 4v12H6V4zM9 14h6M9 18h6',
   },
   {
     to: '/contest',
     label: '比赛',
+    extendedArchiveModule: true,
     icon: 'M8 4h8v3a4 4 0 01-8 0V4zM6 5H3v2a4 4 0 004 4M18 5h3v2a4 4 0 01-4 4M12 11v5M8 20h8M9 16h6',
   },
   {
@@ -151,6 +154,10 @@ const navItems = [
     icon: 'M4 19V5M9 19v-8M14 19v-5M19 19V9M3 19h18',
   },
 ]
+
+const navItems = computed(() => allNavItems.filter(
+  item => !item.extendedArchiveModule || runtimeConfig.public.extendedArchiveModulesEnabled,
+))
 </script>
 
 <template>

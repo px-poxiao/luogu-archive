@@ -622,7 +622,7 @@ async def refresh_discussions() -> DiscussionRefreshResponse:
 async def get_discussion(
     discussion_id: int,
     page: int = Query(1, ge=1),
-    per_page: int = Query(30, ge=1, le=100),
+    per_page: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> DiscussionDetail:
     discussion = await db.get(Discussion, discussion_id)

@@ -18,6 +18,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import func, or_, select
 
 from app.core.db import db_session
+from app.core.crawl_policy import proactive_crawling_enabled
 from app.core.locks import DistributedLock
 from app.core.logging import get_logger, setup_logging
 from app.core.redis_client import get_redis
@@ -420,6 +421,11 @@ async def job_problem_catalog_sync() -> None:
 
 def build_scheduler() -> AsyncIOScheduler:
     sched = AsyncIOScheduler(timezone="UTC")
+    if not proactive_crawling_enabled():
+        # 保留下面所有旧任务定义与注册代码，只在当前规范模式下不注册。
+        # worker 执行层还有第二道校验，可安全消化升级前已经排队的旧消息。
+        log.warning("scheduler.proactive_crawling_disabled")
+        return sched
     # 稍微错开分钟数，避免所有任务同时触发
     sched.add_job(job_discover_discuss, "interval", seconds=150, id="discover_discuss")
     sched.add_job(job_discover_article, "interval", minutes=10, id="discover_article")

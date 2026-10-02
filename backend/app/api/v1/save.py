@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import get_client_ip
 from app.core.captcha import verify_captcha
 from app.core.config import settings
+from app.core.crawl_policy import proactive_crawling_enabled
 from app.core.db import db_session
 from app.core.exceptions import (
     CaptchaRequired,
@@ -253,6 +254,8 @@ async def _try_merge_or_enqueue(
             # 题库页点刷新会解析官方题库包；具体 PID 仍检查题解开放状态。
             ident_norm = ident.strip()
             if ident_norm.lower() == "list":
+                if not proactive_crawling_enabled():
+                    raise ValidationError("全量题库同步已按社区规范关闭，请指定单道题目")
                 queued = await enqueue_problem_catalog("manual")
                 task_id = queued.message_id
             else:
@@ -286,6 +289,11 @@ async def _try_get_pending(content_type: str, ident: str) -> str | None:
 @router.post("/save", response_model=SaveResp)
 async def save(req: SaveReq, request: Request) -> SaveResp:
     ip = get_client_ip(request)
+    if (
+        not settings.EXTENDED_ARCHIVE_MODULES_ENABLED
+        and req.content_type in {"problem", "problem_solution"}
+    ):
+        raise NotFoundError("该保存类型当前未开放")
     if req.content_type == "article":
         ident = _normalize_article_ident(req.id)
     elif req.content_type == "discuss":

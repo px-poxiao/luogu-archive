@@ -29,25 +29,8 @@ async function confirm() {
   try {
     const path = `/plugins/${props.articleId}/download/${props.version.id}`
 
-    // localStorage key helpers：同一机器只计一次（客户端负责率限制）
-    const downloadKey = `plugin_counted_download:${props.articleId}:${props.version.id}`
-    const copyKey = `plugin_counted_copy:${props.articleId}:${props.version.id}`
-    const hasLocal = (k: string) => {
-      try { return !!localStorage.getItem(k) } catch { return false }
-    }
-    const markLocal = (k: string) => { try { localStorage.setItem(k, '1') } catch { } }
-
-    // 如果是公开下载，先尝试由客户端记录一次计数（若尚未记录），然后用锚点触发浏览器下载。
+    // 公开下载由真实文件请求在后端记数，不再依赖可绕过的客户端累计接口。
     if (props.action === 'download' && props.publicDownload) {
-      if (!hasLocal(downloadKey)) {
-        try {
-          await api(`/plugins/${props.articleId}/increment_download/${props.version.id}`, { method: 'POST' })
-          markLocal(downloadKey)
-        } catch (e) {
-          // 计数失败不应阻断下载
-        }
-      }
-
       const base = String(config.public.apiBaseUrl || '').replace(/\/$/, '')
       const anchor = document.createElement('a')
       anchor.href = `${base}/api/v1${path}`
@@ -61,30 +44,19 @@ async function confirm() {
       return
     }
 
-    // 复制和需要登录的下载：先按需读取完整代码，然后在本地记录并向后端上报一次计数。
-    const blob = await api<Blob>(path, { responseType: 'blob' })
+    // 复制只在剪贴板写入成功后上报，读取代码本身不应被算作下载。
+    const codePath = props.action === 'copy' ? `${path}?track_usage=false` : path
+    const blob = await api<Blob>(codePath, { responseType: 'blob' })
     if (props.action === 'copy') {
       await navigator.clipboard.writeText(await blob.text())
-      // 本地端保障同一机器只提交一次计数
-      if (!hasLocal(copyKey)) {
-        try {
-          await api(`/plugins/${props.articleId}/increment_copy/${props.version.id}`, { method: 'POST' })
-          markLocal(copyKey)
-        } catch (e) {
-          // 忽略计数失败
-        }
+      try {
+        await api(`/plugins/${props.articleId}/increment_copy/${props.version.id}`, { method: 'POST' })
+      } catch (e) {
+        // 统计失败不能影响已经完成的复制操作。
       }
       emit('done', '代码已复制')
     } else {
-      // 需要登录或私有下载，先上报再触发保存文件
-      if (!hasLocal(downloadKey)) {
-        try {
-          await api(`/plugins/${props.articleId}/increment_download/${props.version.id}`, { method: 'POST' })
-          markLocal(downloadKey)
-        } catch (e) {
-          // 忽略计数失败
-        }
-      }
+      // 非公开下载已经在读取文件时由后端完成记数。
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url

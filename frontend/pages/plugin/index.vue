@@ -9,6 +9,7 @@ const tags = ref<PluginTag[]>([])
 const rows = ref<any[]>([])
 const total = ref(0)
 const page = ref(1)
+const sortMode = ref('smart')
 const loading = ref(true)
 const errorText = ref('')
 const filters = reactive({
@@ -36,7 +37,11 @@ async function load() {
   loading.value = true
   errorText.value = ''
   try {
-    const query: Record<string, string | number | boolean> = { page: page.value, page_size: 20 }
+    const query: Record<string, string | number | boolean> = {
+      page: page.value,
+      page_size: 20,
+      sort: sortMode.value,
+    }
     if (filters.tag_id) query.tag_id = filters.tag_id
     if (filters.request_level !== '') query.request_level = filters.request_level
     if (filters.runtime_mode) query.runtime_mode = filters.runtime_mode
@@ -55,6 +60,11 @@ async function load() {
 }
 
 function applyFilters() {
+  page.value = 1
+  void load()
+}
+
+function applySort() {
   page.value = 1
   void load()
 }
@@ -183,7 +193,15 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
             <h2>{{ activeTagName }}</h2>
             <span v-if="!loading">{{ total }} 个插件</span>
           </div>
-          <span class="sort-label">按最近更新排列</span>
+          <label class="sort-control">
+            <span>排序</span>
+            <select v-model="sortMode" @change="applySort">
+              <option value="smart">智能排序</option>
+              <option value="latest">最近更新</option>
+              <option value="usage">近期使用最多</option>
+              <option value="verified">最近验证</option>
+            </select>
+          </label>
         </header>
 
         <LoadingPanel v-if="loading" title="loading……" text="" />
@@ -209,7 +227,7 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
               </span>
               <span class="meta-item">{{ runtimeMode(row.runtime_mode) }}</span>
               <span class="meta-item">更新于 {{ format(row.updated_at) }}</span>
-              <span class="meta-item" v-if="row.total_usage !== undefined">使用次数 {{ row.total_usage }}</span>
+              <span class="meta-item">近 30 天 {{ row.usage_30d || 0 }} 次有效使用</span>
             </div>
 
             <footer class="row-footer">
@@ -266,7 +284,8 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
 .results-heading > div { display: flex; align-items: baseline; gap: 10px; }
 .results-heading h2 { margin: 0; font-size: 21px; }
 .results-heading span { color: var(--text-muted); font-size: 13px; }
-.sort-label { white-space: nowrap; }
+.sort-control { display: flex; align-items: center; gap: 8px; white-space: nowrap; color: var(--text-muted); font-size: 13px; }
+.sort-control select { border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); padding: 7px 30px 7px 9px; font: inherit; }
 .plugin-list { display: grid; gap: 12px; }
 .plugin-row { display: grid; gap: 11px; min-width: 0; padding: 18px 20px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); transition: border-color .15s, box-shadow .15s; }
 .plugin-row:hover { border-color: color-mix(in srgb, var(--link) 48%, var(--border)); box-shadow: 0 3px 12px color-mix(in srgb, var(--text) 6%, transparent); }
@@ -320,7 +339,7 @@ useHead({ title: '插件广场 - 洛谷档案馆' })
   .row-footer { align-items: flex-start; flex-direction: column; }
   .detail-link { align-self: flex-end; }
   .results-heading { align-items: flex-start; }
-  .sort-label { display: none; }
+  .sort-control > span { display: none; }
 }
 @media (max-width: 390px) {
   .tag-options, .filter-fields { grid-template-columns: 1fr; }

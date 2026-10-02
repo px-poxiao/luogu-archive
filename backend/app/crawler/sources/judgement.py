@@ -13,6 +13,7 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import db_session
+from app.core.crawl_policy import crawl_trigger_allowed
 from app.core.exceptions import CrawlerError
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
@@ -33,6 +34,9 @@ log = get_logger(__name__)
 
 async def crawl_all(*, trigger: str = "scheduled") -> None:
     """爬全站陶片 500 条，全局单次锁（无参数）。"""
+    if not crawl_trigger_allowed(trigger):
+        log.info("crawl_judgement.skipped_by_policy", trigger=trigger)
+        return
     async with task_lock("judgement", "all", ttl_sec=60) as got:
         if not got:
             log.info("crawl_judgement.skip_locked")

@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core.db import db_session
+from app.core.crawl_policy import crawl_trigger_allowed, proactive_crawling_enabled
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.crawler.http import fetch_anon
@@ -103,6 +104,9 @@ async def _discover(
 
 
 async def from_discuss(*, trigger: str = "scheduled") -> None:
+    if not crawl_trigger_allowed(trigger):
+        log.info("discovery.discuss_skipped_by_policy", trigger=trigger)
+        return
     uids, _body, root = await _discover(
         "https://www.luogu.com.cn/discuss",
         "discovery_discuss",
@@ -116,12 +120,17 @@ async def from_discuss(*, trigger: str = "scheduled") -> None:
         rows = post_page.get("result") if isinstance(post_page, dict) else None
         if isinstance(rows, list):
             posts = [row for row in rows if isinstance(row, dict)]
-    await _schedule_discussion_crawl(posts)
+    await _schedule_discussion_crawl(posts, trigger=trigger)
     log.info("discovery.discuss", users=len(uids), posts=len(posts))
-    await _schedule_user_crawl(uids)
+    # 手动刷新讨论目录只处理目录中的讨论，不把作者扩散成用户主页任务。
+    if proactive_crawling_enabled():
+        await _schedule_user_crawl(uids)
 
 
 async def from_article_list(*, trigger: str = "scheduled") -> None:
+    if not proactive_crawling_enabled():
+        log.info("discovery.article_skipped_by_policy", trigger=trigger)
+        return
     uids, body, _root = await _discover("/article", "discovery_article", trigger=trigger)
     article_ids = _article_ids_from_body(body)
     log.info("discovery.article", users=len(uids), articles=len(article_ids))
@@ -129,7 +138,11 @@ async def from_article_list(*, trigger: str = "scheduled") -> None:
     await _schedule_user_crawl(uids)
 
 
-async def _schedule_discussion_crawl(posts: list[dict[str, Any]]) -> None:
+async def _schedule_discussion_crawl(
+    posts: list[dict[str, Any]],
+    *,
+    trigger: str,
+) -> None:
     """新帖立即归档；旧帖比完整归档基线多 6 条回复时做增量归档。"""
     summaries: dict[int, int] = {}
     skipped_problem_forum = 0
@@ -182,7 +195,7 @@ async def _schedule_discussion_crawl(posts: list[dict[str, Any]]) -> None:
         task_id = await enqueue_discussion_crawl(
             discussion_id,
             page=start_page,
-            trigger="discovery",
+            trigger=trigger,
             enqueue_remaining=True,
             background=True,
         )

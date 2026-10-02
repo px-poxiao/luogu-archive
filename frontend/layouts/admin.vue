@@ -1,6 +1,7 @@
 <!-- 管理后台专用布局，比前台简洁 -->
 <script setup lang="ts">
 const admin = useAdminStore()
+const runtimeConfig = useRuntimeConfig()
 function logout() {
   admin.clear()
   navigateTo('/admin/login')
@@ -17,8 +18,10 @@ function logout() {
           <NuxtLink to="/admin/announcements">站点公告</NuxtLink>
           <NuxtLink to="/admin/takedowns">删除申请</NuxtLink>
           <NuxtLink to="/admin/accounts">爬取账号</NuxtLink>
-          <NuxtLink to="/admin/problems">题库刷新</NuxtLink>
-          <NuxtLink to="/admin/contests">比赛归档</NuxtLink>
+          <template v-if="runtimeConfig.public.extendedArchiveModulesEnabled">
+            <NuxtLink to="/admin/problems">题库刷新</NuxtLink>
+            <NuxtLink to="/admin/contests">比赛归档</NuxtLink>
+          </template>
           <NuxtLink to="/admin/plugin-applications">插件申请</NuxtLink>
           <NuxtLink to="/admin/plugins">插件管理</NuxtLink>
           <NuxtLink to="/admin/plugin-tags">插件标签</NuxtLink>

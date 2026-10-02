@@ -16,6 +16,7 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import db_session
+from app.core.crawl_policy import crawl_trigger_allowed
 from app.core.exceptions import (
     CrawlerAccountInvalid,
     CrawlerBlockedError,
@@ -47,6 +48,9 @@ log = get_logger(__name__)
 
 async def crawl_user_page(uid: int, *, page: int = 1, trigger: str = "scheduled") -> set[int]:
     """爬某用户犇犇的一页。"""
+    if not crawl_trigger_allowed(trigger):
+        log.info("crawl_feed.skipped_by_policy", uid=uid, page=page, trigger=trigger)
+        return set()
     async with db_session() as session:
         if await find_active_suppression(session, "user", str(uid)):
             log.info("crawl_feed.skip_suppressed", uid=uid, page=page)

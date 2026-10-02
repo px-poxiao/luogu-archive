@@ -23,9 +23,6 @@ const { data, error, pending } = useLazyAsyncData(`article-${id}`, () =>
 
 const { render } = useMarkdown()
 const html = computed(() => (data.value ? render(data.value.content_md) : ''))
-const adminNoteHtml = computed(() =>
-  data.value?.admin_note ? render(data.value.admin_note) : '',
-)
 
 const contentRef = ref<HTMLElement | null>(null)
 useCopyCode(contentRef)
@@ -128,10 +125,7 @@ async function copyOriginalMarkdown() {
     </header>
 
     <!-- 与洛谷文章页保持一致：红色引用块 + 固定的“管理组提示：”标题。 -->
-    <blockquote v-if="data.admin_note" class="admin-public-comment">
-      <p class="admin-public-comment-title">管理组提示：</p>
-      <div class="lg-content admin-public-comment-content" v-html="adminNoteHtml" />
-    </blockquote>
+    <ArticleAdminNote :note="data.admin_note" />
 
     <article ref="contentRef" class="lg-content" v-html="html" />
   </div>
@@ -236,30 +230,6 @@ async function copyOriginalMarkdown() {
   width: 15px;
   height: 15px;
   flex: 0 0 auto;
-}
-
-/* 复刻洛谷文章页的管理员公开提示样式。 */
-.admin-public-comment {
-  margin: 0 0 20px;
-  padding: 10px 20px;
-  background: color-mix(in srgb, var(--lg-red) 12%, var(--surface));
-  border: 0;
-  border-left: 5px solid var(--lg-red);
-  color: var(--text);
-  white-space: pre-wrap;
-}
-.admin-public-comment-title {
-  margin: 0 0 0.3em;
-  font-weight: 700;
-}
-.admin-public-comment-content {
-  color: inherit;
-}
-.admin-public-comment-content :deep(> :first-child) {
-  margin-top: 0;
-}
-.admin-public-comment-content :deep(> :last-child) {
-  margin-bottom: 0;
 }
 
 .error-box {

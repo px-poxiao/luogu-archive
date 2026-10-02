@@ -15,6 +15,7 @@ const selectedType = ref<JumpType>('article')
 const showAllAnnouncements = ref(false)
 const expandedAnnouncementId = ref<number | null>(null)
 const api = useApi()
+const runtimeConfig = useRuntimeConfig()
 
 const { data: announcementData } = await useAsyncData<Announcement[]>(
   'home-announcements',
@@ -67,10 +68,11 @@ const jumpTypes: Array<{
   },
 ]
 
-const primaryLinks = [
+const allPrimaryLinks = [
   {
     to: '/feed',
     title: '伪全网犇',
+    extendedArchiveModule: true,
     meta: '“洛谷微博”',
     icon: 'M4 5h16v10H8l-4 4V5z',
   },
@@ -83,10 +85,15 @@ const primaryLinks = [
   {
     to: '/problem/list',
     title: '题目库',
+    extendedArchiveModule: true,
     meta: '题解开放状态',
     icon: 'M6 4h10l4 4v12H6V4zM9 14h6M9 18h6',
   },
 ]
+
+const primaryLinks = computed(() => allPrimaryLinks.filter(
+  link => !link.extendedArchiveModule || runtimeConfig.public.extendedArchiveModulesEnabled,
+))
 
 const activeType = computed(() => jumpTypes.find((item) => item.key === selectedType.value)!)
 
