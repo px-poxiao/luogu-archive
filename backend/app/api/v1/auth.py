@@ -48,6 +48,8 @@ from app.core.ratelimit import SlidingWindowLimiter, ratelimit_key
 from app.core.redis_client import get_redis
 from app.models._common import utcnow
 from app.models.site_user import SiteSession, SiteUser, SiteUserFollow
+from app.auth.totp import decrypt_secret, verify as verify_totp, generate_secret, encrypt_secret, provisioning_uri
+from app.auth.passwords import verify_password
 
 router = APIRouter(tags=["auth"])
 log = get_logger(__name__)
@@ -69,6 +71,7 @@ class RegisterReq(BaseModel):
 class LoginReq(BaseModel):
     email: EmailStr
     password: str
+    totp_code: str | None = Field(None, min_length=6, max_length=6)
 
 
 class AuthResp(BaseModel):
@@ -87,6 +90,7 @@ class MeResp(BaseModel):
     follow_count: int
     luogu_uid: int | None
     luogu_bound_at: datetime | None
+    totp_enabled: bool
 
 
 class LuoguBindChallengeResp(BaseModel):
@@ -321,6 +325,23 @@ async def login(
     if not user.email_verified:
         raise AuthError("请先验证邮箱")
 
+    # 如果用户启用了 TOTP，则校验 2FA 验证码
+    if user.totp_secret_encrypted:
+        if not req.totp_code:
+            raise AuthError("需要 2FA 验证码")
+        try:
+            secret = decrypt_secret(user.totp_secret_encrypted)
+        except Exception:
+            raise AuthError("2FA 配置异常")
+        if not verify_totp(secret, req.totp_code):
+            # 失败处理：计数并短期锁定策略与密码错误相同
+            user.failed_login_count += 1
+            if user.failed_login_count >= 5:
+                user.locked_until = utcnow() + timedelta(minutes=15)
+                user.failed_login_count = 0
+            await db.commit()
+            raise AuthError("2FA 验证码错误")
+
     # 登录成功
     user.failed_login_count = 0
     user.last_login_at = utcnow()
@@ -426,6 +447,7 @@ async def me(
         follow_count=cnt,
         luogu_uid=user.luogu_uid,
         luogu_bound_at=user.luogu_bound_at,
+        totp_enabled=bool(user.totp_secret_encrypted),
     )
 
 
@@ -460,6 +482,80 @@ async def verify_luogu_binding(
     user: SiteUser = Depends(get_current_site_user),
     db: AsyncSession = Depends(get_db),
 ) -> LuoguBindVerifyResp:
+    # existing function continues
+
+
+# ============================================================
+# TOTP 2FA for site users
+# ============================================================
+
+
+class TotpSetupResp(BaseModel):
+    provisioning_uri: str
+
+
+class TotpConfirmReq(BaseModel):
+    code: str = Field(..., min_length=6, max_length=6)
+
+
+class TotpDisableReq(BaseModel):
+    password: str
+    totp_code: str = Field(..., min_length=6, max_length=6)
+
+
+@router.post("/auth/2fa/setup", response_model=TotpSetupResp)
+async def totp_setup(user: SiteUser = Depends(get_current_site_user)) -> TotpSetupResp:
+    """生成临时 TOTP secret，并返回 provisioning_uri（前端应展示二维码）。
+
+    secret 存入 Redis 临时 key，需在确认接口里完成绑定。
+    """
+    secret = generate_secret()
+    uri = provisioning_uri(user.email, secret)
+    await get_redis().set(f"auth:totp_setup:{user.id}", secret, ex=600)
+    return TotpSetupResp(provisioning_uri=uri)
+
+
+@router.post("/auth/2fa/confirm", response_model=dict)
+async def totp_confirm(
+    req: TotpConfirmReq,
+    user: SiteUser = Depends(get_current_site_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    key = f"auth:totp_setup:{user.id}"
+    secret = await get_redis().get(key)
+    if not secret:
+        raise ValidationError("2FA setup 已过期，请重新生成二维码")
+    # redis returns bytes sometimes; ensure str
+    if isinstance(secret, bytes):
+        secret = secret.decode()
+    if not verify_totp(secret, req.code):
+        raise ValidationError("2FA 验证码错误")
+    # 保存加密后的 secret
+    user.totp_secret_encrypted = encrypt_secret(secret)
+    await db.commit()
+    await get_redis().delete(key)
+    return {"message": "已启用 2FA"}
+
+
+@router.post("/auth/2fa/disable", response_model=dict)
+async def totp_disable(
+    req: TotpDisableReq,
+    user: SiteUser = Depends(get_current_site_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if not user.totp_secret_encrypted:
+        raise ValidationError("2FA 未启用")
+    if not verify_password(req.password, user.password_hash):
+        raise AuthError("密码错误")
+    try:
+        secret = decrypt_secret(user.totp_secret_encrypted)
+    except Exception:
+        raise AuthError("2FA 配置异常")
+    if not verify_totp(secret, req.totp_code):
+        raise AuthError("2FA 验证码错误")
+    user.totp_secret_encrypted = None
+    await db.commit()
+    return {"message": "已禁用 2FA"}
     if user.luogu_uid is not None:
         raise ConflictError(f"本站账号已绑定洛谷 UID {user.luogu_uid}")
 
