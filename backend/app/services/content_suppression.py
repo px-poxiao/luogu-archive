@@ -12,7 +12,7 @@ from app.models.task import ContentSuppression, TakedownRequest
 from app.models._common import utcnow
 
 PUBLIC_MESSAGE = "该内容已根据删除申请停止公开展示。"
-SUPPORTED_TYPES = {"user", "article", "paste", "feed"}
+SUPPORTED_TYPES = {"user", "article", "paste", "feed", "discuss"}
 ALLOWED_HOSTS = {
     "luogu.com.cn", "www.luogu.com.cn", "luogu.com", "www.luogu.com",
     "luogu.ac.cn", "www.luogu.ac.cn", "lg.px-poxiao.cn",
@@ -23,6 +23,7 @@ PATHS = {
     "article": re.compile(r"^/article/([A-Za-z0-9]+)/?$"),
     "paste": re.compile(r"^/paste/([A-Za-z0-9]+)/?$"),
     "feed": re.compile(r"^/feed/(\d+)/?$"),
+    "discuss": re.compile(r"^/discuss/(\d+)/?$"),
 }
 
 
@@ -55,7 +56,7 @@ def detect_target_url(raw_url: str) -> tuple[str, str, str]:
         if matched is not None:
             target_id = matched.group(1)
             return target_type, f"https://www.luogu.com.cn/{target_type}/{target_id}", target_id
-    raise ValidationError("暂不支持该地址，仅支持用户主页、文章、剪贴板和犇犇")
+    raise ValidationError("暂不支持该地址，仅支持用户主页、文章、剪贴板、犇犇和讨论")
 
 
 async def find_active_suppression(

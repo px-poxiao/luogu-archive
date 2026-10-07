@@ -111,7 +111,9 @@ def _manual_user_resources(
 
 
 def _takedown_probe_resources(args: tuple, _kwargs: dict) -> TaskResources:
-    """犇犇探测需要账号，其余探测只使用匿名国际站资源。"""
+    """讨论使用国内站账号，犇犇使用国际站账号，其余使用匿名国际站。"""
+    if len(args) > 1 and args[1] == "discuss":
+        return AUTH_CN
     return AUTH_COM if len(args) > 1 and args[1] == "feed" else ANON_COM
 
 
@@ -124,7 +126,8 @@ def probe_takedown_target(token: str, target_type: str) -> None:
         (token, target_type),
         _run_domain_task(
             lambda: run_takedown_probe(token),
-            kind=NodeKind.AUTHED if target_type == "feed" else NodeKind.ANON,
+            cn=target_type == "discuss",
+            kind=NodeKind.AUTHED if target_type in {"feed", "discuss"} else NodeKind.ANON,
         ),
     )
 

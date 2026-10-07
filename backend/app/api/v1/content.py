@@ -434,7 +434,9 @@ async def list_discussions(
     db: AsyncSession = Depends(get_db),
 ) -> DiscussionListResponse:
     keyword = q.strip()
-    filters = [Discussion.current_version_id.is_not(None)]
+    # 列表、总数与板块数量都排除已下架主帖，不暴露标题或回复摘要。
+    filters = [Discussion.current_version_id.is_not(None),
+        visible_content_clause("discuss", Discussion.discussion_id, Discussion.author_uid)]
     if forum:
         filters.append(Discussion.forum_slug == forum.strip())
     if keyword:
@@ -468,6 +470,7 @@ async def list_discussions(
                 Discussion.current_version_id.is_not(None),
                 Discussion.forum_name.is_not(None),
                 Discussion.forum_slug.is_not(None),
+                visible_content_clause("discuss", Discussion.discussion_id, Discussion.author_uid),
             )
             .group_by(Discussion.forum_name, Discussion.forum_slug)
             .order_by(desc(func.count(Discussion.discussion_id)))
@@ -625,6 +628,7 @@ async def get_discussion(
     per_page: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> DiscussionDetail:
+    await ensure_content_visible(db, "discuss", str(discussion_id))
     discussion = await db.get(Discussion, discussion_id)
     if discussion is None:
         from app.crawler.sources.discussion import enqueue_discussion_crawl
@@ -637,6 +641,9 @@ async def get_discussion(
             background=False,
         )
         raise NotFoundError("讨论未被本站收录，已触发爬取，请稍后刷新")
+
+    # 隐藏检查先于正文、回复和修复任务，翻页不能绕过整帖下架。
+    await ensure_content_visible(db, "discuss", str(discussion_id), discussion.author_uid)
 
     version = (
         await db.get(DiscussionVersion, discussion.current_version_id)

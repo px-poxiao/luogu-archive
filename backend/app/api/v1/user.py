@@ -377,7 +377,8 @@ async def user_activity(
                 discussion_time.label("activity_time"),
             )
             .join(DiscussionVersion, DiscussionVersion.id == Discussion.current_version_id)
-            .where(Discussion.author_uid == uid)
+            .where(Discussion.author_uid == uid,
+                visible_content_clause("discuss", Discussion.discussion_id, Discussion.author_uid))
         )
         if before is not None:
             dq = dq.where(discussion_time < before)
@@ -408,6 +409,8 @@ async def user_activity(
             .join(DiscussionVersion, DiscussionVersion.id == Discussion.current_version_id)
             .where(
                 DiscussionReply.author_uid == uid,
+                # 整帖下架后，其他用户活动中的回复也不能继续展示。
+                visible_content_clause("discuss", Discussion.discussion_id, Discussion.author_uid),
                 func.length(func.trim(DiscussionReplyVersion.content_md)) > 0,
             )
         )

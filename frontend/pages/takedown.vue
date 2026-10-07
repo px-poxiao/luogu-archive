@@ -25,6 +25,7 @@ const typeNames: Record<string, string> = {
   article: '文章',
   paste: '剪贴板',
   feed: '犇犇',
+  discuss: '讨论',
 }
 
 async function runProbe() {
@@ -99,7 +100,7 @@ async function submit() {
       <label class="address-field">
         <span>内容地址</span>
         <input v-model.trim="form.target_url" type="url"
-          placeholder="粘贴用户主页、文章、剪贴板或犇犇的完整地址" maxlength="1024">
+          placeholder="粘贴用户主页、文章、剪贴板、犇犇或讨论的完整地址" maxlength="1024">
         <small>系统会自动识别内容类型</small>
         <span v-if="probe?.target_type && probe?.target_id" class="recognized">
           识别到：{{ typeNames[probe.target_type] || probe.target_type }}：{{ probe.target_id }}
@@ -108,9 +109,9 @@ async function submit() {
 
       <div v-if="probing" class="probe neutral">loading……</div>
       <div v-else-if="probe && probe.target_type !== 'user'"
-        class="probe" :class="probe.accessible ? 'blocked' : 'allowed'">
+        class="probe" :class="probe.accessible && !probe.is_owner ? 'blocked' : 'allowed'">
         <strong>{{ probe.accessible ? '可访问' : '不可访问' }}</strong>
-        <span>{{ probe.accessible ? '原内容仍可访问，暂不能提交申请。' : '可以提交删除申请。' }}</span>
+        <span>{{ probe.accessible ? (probe.is_owner ? '已匹配作者身份，可以申请停止公开展示。' : '原内容仍可访问，暂不能提交申请。') : '可以提交删除申请。' }}</span>
       </div>
       <div v-else-if="probe" class="probe allowed">
         <strong>地址有效</strong><span>用户主页申请无需检查原站访问状态。</span>

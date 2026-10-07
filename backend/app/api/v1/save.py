@@ -302,7 +302,7 @@ async def save(req: SaveReq, request: Request) -> SaveResp:
         ident = req.id
 
     # 已隐藏目标不能通过保存按钮重新进入爬取队列；feed 保存参数实际是作者 UID。
-    if req.content_type in {"article", "paste", "user", "feed"}:
+    if req.content_type in {"article", "paste", "user", "feed", "discuss"}:
         check_type = "user" if req.content_type == "feed" else req.content_type
         check_id = ident.split(":", 1)[0] if req.content_type == "feed" else ident
         async with db_session() as session:

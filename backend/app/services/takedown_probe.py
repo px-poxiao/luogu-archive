@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 
 from app.core.db import db_session
 from app.crawler.sources import article as article_crawler
+from app.crawler.sources import discussion as discussion_crawler
 from app.crawler.sources import feed as feed_crawler
 from app.crawler.sources import paste as paste_crawler
 from app.models._common import utcnow
@@ -33,6 +34,13 @@ async def run_takedown_probe(token: str) -> None:
                 item = await db.get(Paste, row.target_id)
                 row.accessible = item is not None and not item.is_deleted_on_source
                 row.author_uid = item.author_uid if item and item.author_uid else row.author_uid
+            elif row.target_type == "discuss":
+                # 只探测主帖第一页，不创建分页链或批量归档回复。
+                row.author_uid = (
+                    await discussion_crawler.probe_author(int(row.target_id))
+                    or row.author_uid
+                )
+                row.accessible = True
             else:
                 item = await db.get(Feed, int(row.target_id))
                 row.author_uid = item.author_uid if item and item.author_uid else row.author_uid

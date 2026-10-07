@@ -33,6 +33,7 @@ from app.models.luogu_content import (
     DiscussionReplyVersion,
     DiscussionVersion,
 )
+from app.services.content_suppression import find_active_suppression
 
 log = get_logger(__name__)
 
@@ -90,6 +91,9 @@ async def enqueue_discussion_crawl(
             trigger=trigger,
         )
         return None
+    async with db_session() as session:
+        if await _is_hidden(session, discussion_id):
+            return None
     redis = get_redis()
     lock = DistributedLock(redis)
     token = await lock.acquire(
@@ -276,6 +280,34 @@ def _discussion_fields(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
     return post, replies, list(unique.values())
 
 
+async def _is_hidden(session: AsyncSession, discussion_id: int) -> bool:
+    """同时检查整帖下架和作者级屏蔽，所有分页共用主帖的隐藏记录。"""
+    discussion = await session.get(Discussion, discussion_id)
+    return bool(await find_active_suppression(
+        session, "discuss", str(discussion_id),
+        discussion.author_uid if discussion else None,
+    ))
+
+
+async def probe_author(discussion_id: int) -> int | None:
+    """探测原站第一页并读取作者，不归档内容、不派发后续页面。"""
+    node = get_default_node(NodeKind.AUTHED, cn=True)
+    async with lease_account(cn=True) as account:
+        if account is None:
+            raise CrawlerError("没有可用的爬取账号")
+        result = await fetch_authed(
+            f"https://www.luogu.com.cn/discuss/{discussion_id}",
+            node=node, redis=get_redis(), cookies=account.as_cookie_dict(),
+            account_id=account.account_id, params={"page": 1}, parse="auto",
+        )
+    if result.data is None:
+        raise CrawlerError("讨论页无 lentille-context")
+    post, _replies, _rows = _discussion_fields(_discussion_data(result.data))
+    if str(post.get("content") or "").strip() == "已删除" and post.get("valid") is not True:
+        raise CrawlerNotFound("讨论已被源站删除或隐藏")
+    return _author_uid(post.get("author"))
+
+
 async def crawl_page(
     discussion_id: int,
     *,
@@ -287,6 +319,7 @@ async def crawl_page(
     """读取一页讨论；page=0 时从本地最后归档页的前一页开始。"""
     async with db_session() as session:
         existing = await session.get(Discussion, discussion_id)
+        hidden = await _is_hidden(session, discussion_id)
         paused = bool(
             existing is not None
             and existing.auto_crawl_paused
@@ -304,6 +337,12 @@ async def crawl_page(
         )
         return
     await _renew_chain(discussion_id, claimed_token)
+
+    # 已入队的旧任务也必须停止，并释放整条分页链，不能靠入口检查兜底。
+    if hidden:
+        log.info("crawl_discussion.skip_hidden", discussion_id=discussion_id)
+        await _release_chain(discussion_id, claimed_token, suppress_legacy=True)
+        return
 
     # 部署前已经进入 Redis 的发现任务也会到达这里。先释放整条分页链，
     # 再标记旧副本已处理，确保不会继续请求下一页。
@@ -381,6 +420,10 @@ async def _crawl_page_inner(
     )
     started = _t.monotonic()
     try:
+        async with db_session() as session:
+            if await _is_hidden(session, discussion_id):
+                await record_task_done(task_id, status=CrawlTaskStatus.skipped)
+                return True
         async with lease_account(cn=True) as account:
             if account is None:
                 raise CrawlerError("没有可用的爬取账号")
@@ -419,6 +462,10 @@ async def _crawl_page_inner(
         page_out_of_range = page > total_pages
 
         async with db_session() as session:
+            # 请求期间作者可能刚刚下架；返回的数据不得继续更新存档。
+            if await _is_hidden(session, discussion_id):
+                await record_task_done(task_id, status=CrawlTaskStatus.skipped)
+                return True
             discussion = await _upsert_discussion(
                 session,
                 discussion_id,

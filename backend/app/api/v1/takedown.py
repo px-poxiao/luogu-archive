@@ -17,7 +17,7 @@ from app.core.mail import send_takedown_admin_notice, send_takedown_result_email
 from app.core.ratelimit import SlidingWindowLimiter, ratelimit_key
 from app.core.redis_client import get_redis
 from app.models._common import TakedownStatus, utcnow
-from app.models.luogu_content import Article, Feed, Paste
+from app.models.luogu_content import Article, Discussion, Feed, Paste
 from app.models.site_user import SiteUser
 from app.models.task import TakedownProbe, TakedownRequest
 from app.services.admin_notifications import admin_notification_emails
@@ -52,6 +52,8 @@ async def probe_takedown(body: ProbeReq, request: Request,
         archived = await db.get(Paste, target_id)
     elif target_type == "feed":
         archived = await db.get(Feed, int(target_id))
+    elif target_type == "discuss":
+        archived = await db.get(Discussion, int(target_id))
     owner_uid = int(target_id) if target_type == "user" else (
         archived.author_uid if archived is not None else None
     )
@@ -89,7 +91,7 @@ async def takedown_probe_status(token: str,
     return {"token": row.token, "status": row.status, "target_type": row.target_type,
         "target_id": row.target_id,
         "accessible": row.accessible,
-        "can_submit": row.status == "completed" and row.accessible is not True,
+        "can_submit": row.status == "completed" and (is_owner or row.accessible is not True),
         "is_owner": is_owner, "expires_at": row.expires_at.isoformat()}
 
 
@@ -106,9 +108,10 @@ async def submit_takedown(body: SubmitReq, request: Request,
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if probe is None or expires_at is None or expires_at < utcnow() or probe.status != "completed":
         raise ValidationError("探测结果已失效，请重新检查地址")
-    if probe.accessible is True:
-        raise ConflictError("该内容目前仍可访问，不能提交删除申请")
     is_owner = bool(user and user.luogu_uid and user.luogu_uid == probe.author_uid)
+    # 作者主动下架不受原站可访问性限制，普通申请仍必须经过探测。
+    if probe.accessible is True and not is_owner:
+        raise ConflictError("该内容目前仍可访问，不能提交删除申请")
     reason = "绑定账号本人申请隐藏" if is_owner else (body.reason or "").strip()
     if not is_owner and len(reason) < 10:
         raise ValidationError("请填写至少 10 个字的申请理由")
