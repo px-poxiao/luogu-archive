@@ -8,7 +8,9 @@ export interface PluginTag {
 export interface PluginSnapshot {
   summary: string
   version: string
+  /** text 时是源码；base64 时是二进制文件的 base64。 */
   code: string
+  code_encoding: string
   download_filename: string
   user_request_level: number
   user_request_analysis: string
@@ -27,6 +29,7 @@ export interface PluginVersion {
   id: number
   version: string
   code: string
+  code_encoding: string
   code_bytes: number
   code_truncated: boolean
   code_sha256: string
@@ -79,6 +82,7 @@ export function emptyPluginSnapshot(): PluginSnapshot {
     summary: '',
     version: '',
     code: '',
+    code_encoding: 'text',
     download_filename: 'plugin.user.js',
     user_request_level: 0,
     user_request_analysis: '',
