@@ -12,8 +12,8 @@ importers:
         specifier: 1.1.1
         version: 1.1.1
       katex:
-        specifier: ^0.16.11
-        version: 0.16.47
+        specifier: ^0.18.2
+        version: 0.18.10
       markdown-it-footnote:
         specifier: ^4.0.0
         version: 4.0.0
@@ -600,6 +600,10 @@ packages:
   comma-separated-tokens@2.0.3:
     resolution: {integrity: sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg==}
 
+  commander@15.0.0:
+    resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
+    engines: {node: '>=22.12.0'}
+
   commander@8.3.0:
     resolution: {integrity: sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==}
     engines: {node: '>= 12'}
@@ -655,6 +659,10 @@ packages:
 
   katex@0.16.47:
     resolution: {integrity: sha512-Eeo8Ys1doU1z+x8AZsPpQu+p/QcZBI5PeOo7QGQdy2x2m0MU/hYagBbGOmXwr5KVbEfVuWv9LpnQWeehogurjg==}
+    hasBin: true
+
+  katex@0.18.10:
+    resolution: {integrity: sha512-/B6p9eY9DX7aHBfpkHdpirDTZ5QH9xTwL9y837PWuzuv41O5jFdqNQwVQEQsimY0/iVNkwBY4+4hMfhQ7d4Dbw==}
     hasBin: true
 
   magic-string@0.30.21:
@@ -1348,6 +1356,8 @@ snapshots:
 
   comma-separated-tokens@2.0.3: {}
 
+  commander@15.0.0: {}
+
   commander@8.3.0: {}
 
   copy-anything@4.1.5: {}
@@ -1424,6 +1434,10 @@ snapshots:
   katex@0.16.47:
     dependencies:
       commander: 8.3.0
+
+  katex@0.18.10:
+    dependencies:
+      commander: 15.0.0
 
   magic-string@0.30.21:
     dependencies:
