@@ -1,18 +1,76 @@
 <script setup lang="ts">
 import type { PluginSnapshot, PluginTag } from '~/types/plugin'
-import { PLUGIN_CODE_COPY_MAX_BYTES } from '~/utils/pluginCode'
+import {
+  PLUGIN_BINARY_ALLOWED_SUFFIXES,
+  PLUGIN_BINARY_MAX_BYTES,
+  PLUGIN_CODE_COPY_MAX_BYTES,
+  base64ByteLength,
+  fileToBase64,
+  formatBytes,
+  isBinaryCode,
+} from '~/utils/pluginCode'
 
 const model = defineModel<PluginSnapshot>({ required: true })
 const props = defineProps<{ tags: PluginTag[] }>()
 
-const codeBytes = computed(() => new TextEncoder().encode(model.value.code || '').length)
-const codeTooLarge = computed(() => codeBytes.value > 5 * 1024 * 1024)
-const copyRestricted = computed(() => codeBytes.value > PLUGIN_CODE_COPY_MAX_BYTES)
-const codeSizeText = computed(() => {
-  if (codeBytes.value < 1024) return `${codeBytes.value} B`
-  if (codeBytes.value < 1024 * 1024) return `${(codeBytes.value / 1024).toFixed(1)} KiB`
-  return `${(codeBytes.value / 1024 / 1024).toFixed(2)} MiB`
-})
+const binaryMode = computed(() => isBinaryCode(model.value.code_encoding))
+const pickedFileName = ref('')
+const fileError = ref('')
+const reading = ref(false)
+
+// 二进制模式下 code 是 base64，体积必须按解码后的字节算。
+const codeBytes = computed(() => (binaryMode.value
+  ? base64ByteLength(model.value.code || '')
+  : new TextEncoder().encode(model.value.code || '').length))
+const codeTooLarge = computed(() => codeBytes.value
+  > (binaryMode.value ? PLUGIN_BINARY_MAX_BYTES : 5 * 1024 * 1024))
+const copyRestricted = computed(() => !binaryMode.value && codeBytes.value > PLUGIN_CODE_COPY_MAX_BYTES)
+const codeSizeText = computed(() => formatBytes(codeBytes.value))
+const sizeLimitText = computed(() => (binaryMode.value ? formatBytes(PLUGIN_BINARY_MAX_BYTES) : '5 MiB'))
+
+function switchToText() {
+  model.value.code = ''
+  model.value.code_encoding = 'text'
+  pickedFileName.value = ''
+  fileError.value = ''
+}
+
+function switchToBinary() {
+  model.value.code = ''
+  model.value.code_encoding = 'base64'
+  pickedFileName.value = ''
+  fileError.value = ''
+}
+
+async function onFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  fileError.value = ''
+  const dot = file.name.lastIndexOf('.')
+  const suffix = dot >= 0 ? file.name.slice(dot).toLowerCase() : ''
+  if (!PLUGIN_BINARY_ALLOWED_SUFFIXES.includes(suffix)) {
+    fileError.value = `只支持 ${PLUGIN_BINARY_ALLOWED_SUFFIXES.join(' / ')} 格式`
+    input.value = ''
+    return
+  }
+  if (file.size > PLUGIN_BINARY_MAX_BYTES) {
+    fileError.value = `文件不能超过 ${formatBytes(PLUGIN_BINARY_MAX_BYTES)}`
+    input.value = ''
+    return
+  }
+  reading.value = true
+  try {
+    model.value.code = await fileToBase64(file)
+    model.value.code_encoding = 'base64'
+    model.value.download_filename = file.name
+    pickedFileName.value = file.name
+  } catch {
+    fileError.value = '读取文件失败，请重试'
+  } finally {
+    reading.value = false
+  }
+}
 
 function toggleTag(tagId: number, checked: boolean) {
   const values = new Set(model.value.tag_ids)
@@ -52,20 +110,54 @@ function toggleTag(tagId: number, checked: boolean) {
 
     <section class="form-section">
       <div class="section-heading">
-        <h2>代码</h2>
-        <span :class="{ danger: codeTooLarge }">{{ codeSizeText }} / 5 MiB</span>
+        <h2>插件内容</h2>
+        <span :class="{ danger: codeTooLarge }">{{ codeSizeText }} / {{ sizeLimitText }}</span>
       </div>
+      <fieldset>
+        <legend>内容形式</legend>
+        <div class="choice-row">
+          <label class="check-option">
+            <input type="radio" :checked="!binaryMode" @change="switchToText">
+            <span>文本代码</span>
+          </label>
+          <label class="check-option">
+            <input type="radio" :checked="binaryMode" @change="switchToBinary">
+            <span>二进制文件</span>
+          </label>
+        </div>
+      </fieldset>
       <label class="version-field">
-        <span>代码版本</span>
+        <span>版本号</span>
         <input v-model.trim="model.version" maxlength="64" placeholder="例如 1.0.0" required>
       </label>
-      <label>
-        <span>代码内容</span>
-        <textarea v-model="model.code" class="code-input" rows="18" spellcheck="false" required />
-      </label>
-      <p v-if="copyRestricted" class="copy-limit-note">
-        完整代码超过 100 KiB，发布后公开页面将禁用复制，只允许下载。
-      </p>
+
+      <template v-if="!binaryMode">
+        <label>
+          <span>代码内容</span>
+          <textarea v-model="model.code" class="code-input" rows="18" spellcheck="false" required />
+        </label>
+        <p v-if="copyRestricted" class="copy-limit-note">
+          完整代码超过 100 KiB，发布后公开页面将禁用复制，只允许下载。
+        </p>
+      </template>
+
+      <template v-else>
+        <label class="file-field">
+          <span>插件文件</span>
+          <input type="file" accept=".zip,.crx,.xpi" :disabled="reading" @change="onFileChange">
+        </label>
+        <p class="field-help">
+          支持 {{ PLUGIN_BINARY_ALLOWED_SUFFIXES.join(' / ') }}，单个文件不超过
+          {{ formatBytes(PLUGIN_BINARY_MAX_BYTES) }}。二进制内容无法在线预览，管理员审核时会下载检查。
+        </p>
+        <p v-if="reading" class="file-picked">正在读取文件……</p>
+        <p v-else-if="pickedFileName" class="file-picked">已选择：{{ pickedFileName }}（{{ codeSizeText }}）</p>
+        <p v-else-if="model.code" class="file-picked">
+          已载入当前版本文件：{{ model.download_filename }}（{{ codeSizeText }}），重新选择文件即可替换。
+        </p>
+        <p v-if="fileError" class="file-error">{{ fileError }}</p>
+      </template>
+
       <label>
         <span>下载文件名</span>
         <input v-model.trim="model.download_filename" maxlength="128" placeholder="plugin.user.js" required>
@@ -162,6 +254,9 @@ legend { margin-bottom: 8px; }
 .level-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-size: 14px; font-weight: 600; }
 .level-editor input[type="range"] { width: 100%; padding: 0; border: 0; accent-color: var(--level-color); cursor: pointer; }
 .level-ticks { display: flex; justify-content: space-between; padding: 0 2px; color: var(--text-muted); font-size: 11px; }
+.file-field input[type="file"] { padding: 8px 10px; cursor: pointer; }
+.file-picked { margin: -4px 0 0; color: var(--text-muted); font-size: 13px; }
+.file-error { margin: -4px 0 0; padding: 9px 11px; border-left: 4px solid var(--lg-red); background: color-mix(in srgb, var(--lg-red) 8%, var(--surface)); color: var(--lg-red); font-size: 13px; }
 @media (max-width: 700px) {
   .form-grid.two { grid-template-columns: 1fr; }
 }
